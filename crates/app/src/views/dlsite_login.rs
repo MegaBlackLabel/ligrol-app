@@ -12,7 +12,7 @@ use gpui_kit::{
     Render, StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
 use gpui_webview::WebView;
-use thundoku_core::dlsite::client::{DlsiteSession, LOGIN_HOST, SITE_HOST};
+use ligrol_core::dlsite::client::{DlsiteSession, LOGIN_HOST, SITE_HOST};
 
 /// セッション Cookie を集める起点（ストアとログイン）。
 const SESSION_ORIGINS: [&str; 2] = ["https://www.dlsite.com", "https://login.dlsite.com"];

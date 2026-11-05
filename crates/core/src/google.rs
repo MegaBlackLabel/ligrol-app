@@ -18,7 +18,7 @@ pub const DEFAULT_REDIRECT_PORT: u16 = 38387;
 /// `drive.file` のみ（アプリが作成・利用者が選択したファイルだけ）。
 ///
 /// 以前は `drive.readonly`（Drive 全体の閲覧・ダウンロード）も要求していたが、
-/// 本アプリが触るのは自分で作った `thundoku-shelf/` フォルダとその中の
+/// 本アプリが触るのは自分で作った `ligrol/` フォルダとその中の
 /// バックアップファイルだけなので、`drive.file` で足りる。トークンが漏れた場合の
 /// 影響を「アプリが作成したファイル」に限定する。appdata は使わない。
 const OAUTH_SCOPE: &str = "openid email https://www.googleapis.com/auth/drive.file";
@@ -47,8 +47,8 @@ pub struct GoogleProfile {
 ///
 /// v3 の pack の鍵は乱数のルート鍵（PRK）で、`sub` は PRK のラップを解く材料
 /// （`KEK_sub` と `owner_id`）なので実質の復号秘密である。ログに書くと pack と
-/// `thundoku-keys.json` を入手した第三者へ復号材料を渡すことになる（Windows は
-/// `%TEMP%/thundoku-shelf/thundoku.log` に既定 debug レベルで残る）。有無だけを伝える。
+/// `ligrol-keys.json` を入手した第三者へ復号材料を渡すことになる（Windows は
+/// `%TEMP%/ligrol/ligrol.log` に既定 debug レベルで残る）。有無だけを伝える。
 pub fn profile_log_label(profile: Option<&GoogleProfile>) -> &'static str {
     if profile.is_some() {
         "あり"

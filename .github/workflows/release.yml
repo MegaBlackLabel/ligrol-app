@@ -80,7 +80,7 @@ jobs:
       # `--locked`: 配布物が Cargo.lock のとおりにビルドされたことを保証する
       # （手元と配布物で依存が違う事故を防ぐ）。
       - name: Build (release)
-        run: cargo build --release --locked --target ${{ matrix.target }} -p thundoku-shelf
+        run: cargo build --release --locked --target ${{ matrix.target }} -p ligrol
 
       # PDFium (BSD-3-Clause / Apache-2.0) は mupdf (AGPL-3.0) の代替として
       # macOS でも使う。静的リンクはしない — 実行時に dylib をロードする方式なら
@@ -199,10 +199,10 @@ jobs:
         run: |
           set -euo pipefail
           KC="$RUNNER_TEMP/build.keychain-db"
-          APP="target/${{ matrix.target }}/release/ThundokuShelf.app"
+          APP="target/${{ matrix.target }}/release/Ligrol.app"
           rm -rf "$APP"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-          cp "target/${{ matrix.target }}/release/thundoku-shelf" "$APP/Contents/MacOS/thundoku-shelf"
+          cp "target/${{ matrix.target }}/release/ligrol" "$APP/Contents/MacOS/ligrol"
           cp crates/app/assets/app-icon/icon.icns "$APP/Contents/Resources/icon.icns"
           cat > "$APP/Contents/Info.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
@@ -210,13 +210,13 @@ jobs:
           <plist version="1.0">
           <dict>
             <key>CFBundleName</key>
-            <string>Thundoku Shelf</string>
+            <string>Ligrol</string>
             <key>CFBundleDisplayName</key>
-            <string>Thundoku Shelf</string>
+            <string>Ligrol</string>
             <key>CFBundleIdentifier</key>
-            <string>com.megablacklabel.thundoku-shelf</string>
+            <string>com.megablacklabel.ligrol</string>
             <key>CFBundleExecutable</key>
-            <string>thundoku-shelf</string>
+            <string>ligrol</string>
             <key>CFBundleIconFile</key>
             <string>icon</string>
             <key>CFBundlePackageType</key>
@@ -259,7 +259,7 @@ jobs:
           # zip には直接 staple できない（Apple のドキュメント）。notarytool に出すのは
           # 提出用の zip で、staple は .app に当て、配布用の zip は staple 後に作り直す。
           # パスワードはキーチェーンのプロファイルに入れて、以降のコマンドラインに残さない。
-          xcrun notarytool store-credentials "thundoku-notary" \
+          xcrun notarytool store-credentials "ligrol-notary" \
             --keychain "$KC" \
             --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
           ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/notarize.zip"
@@ -267,7 +267,7 @@ jobs:
           # "The Internet connection appears to be offline" で即座に失敗し、処理中なのか
           # 却下なのか分からなくなる（実際に 4 時間待った末にこれで落ちた）。
           # ID だけ取って info でポーリングし、通信エラーはリトライする。
-          NOTARY_ARGS=(--keychain-profile "thundoku-notary" --keychain "$KC")
+          NOTARY_ARGS=(--keychain-profile "ligrol-notary" --keychain "$KC")
           NOTARY_OUT="$(xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" "${NOTARY_ARGS[@]}" 2>&1 || true)"
           printf '%s\n' "$NOTARY_OUT"
           NOTARY_ID="$(printf '%s' "$NOTARY_OUT" | sed -n 's/^ *id: *//p' | head -1)"
@@ -311,7 +311,7 @@ jobs:
           STAGE="target/${{ matrix.target }}/release/dist"
           rm -rf "$STAGE"
           mkdir -p "$STAGE"
-          cp -R "$APP" "$STAGE/ThundokuShelf.app"
+          cp -R "$APP" "$STAGE/Ligrol.app"
           cp packaging/macos/はじめにお読みください.txt "$STAGE/"
           # ライセンス表記も配布物へ同梱する（MIT の notice と、同梱アセットの全文。
           # アプリ内の「ライセンスについて」と同じ内容が zip にも入る）。
@@ -322,7 +322,7 @@ jobs:
           cp crates/app/assets/third-party/pdfium-LICENSE.txt "$STAGE/"
           # ditto でバンドル構造（権限・リソース）を保ったまま zip 化する
           # --keepParent は付けない = zip 直下に .app と txt が並ぶ
-          ditto -c -k "$STAGE" "thundoku-shelf-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip"
+          ditto -c -k "$STAGE" "ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -347,12 +347,12 @@ jobs:
           # Rust 依存クレートの一覧はアプリ内に埋め込んである（配布物の肥大を避けるため、
           # 規約上必要な同梱アセットの全文だけをテキストで置く）。
           Compress-Archive -Path @(
-            "target/${{ matrix.target }}/release/thundoku-shelf.exe",
+            "target/${{ matrix.target }}/release/ligrol.exe",
             "target/${{ matrix.target }}/release/pdfium.dll",
             "LICENSE",
             "crates/app/assets/third-party/lucide-LICENSE.txt",
             "crates/app/assets/third-party/pdfium-LICENSE.txt"
-          ) -DestinationPath "thundoku-shelf-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip"
+          ) -DestinationPath "ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip"
 
       # 配布物の部品表（CycloneDX JSON）を作る。`Cargo.lock` と `cargo metadata` の両方から
       # 作るので、対象 triple と有効 feature に合った依存が入る（Rust の依存だけ。同梱する
@@ -367,10 +367,10 @@ jobs:
           fi
           cargo cyclonedx --manifest-path crates/app/Cargo.toml -q \
             --format json --target "${{ matrix.target }}"
-          sbom="thundoku-shelf-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.cdx.json"
+          sbom="ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.cdx.json"
           # 生成物はワークスペースの各メンバーの隣に出る。配布物にはアプリの分だけ入れる。
-          mv crates/app/thundoku-shelf.cdx.json "$sbom"
-          rm -f crates/core/thundoku-core.cdx.json crates/opfspack/opfspack.cdx.json
+          mv crates/app/ligrol.cdx.json "$sbom"
+          rm -f crates/core/ligrol-core.cdx.json crates/nartik/nartik.cdx.json
           test -s "$sbom"
           echo "$sbom を作成した（$(wc -c < "$sbom") bytes）"
 
@@ -379,7 +379,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          zip="thundoku-shelf-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip"
+          zip="ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip"
           if command -v sha256sum > /dev/null 2>&1; then
             sha256sum "$zip" > "$zip.sha256"
           else
@@ -389,32 +389,32 @@ jobs:
 
       # 「どのワークフローが・どのコミットで・この zip を作ったか」を署名つきで証明する。
       # 署名は Sigstore の鍵レス（OIDC の短期証明書）。利用者は次のように検証できる:
-      #   gh attestation verify <zip> --repo MegaBlackLabel/thundoku-shelf-app
+      #   gh attestation verify <zip> --repo MegaBlackLabel/ligrol-app
       # ※ `gh` 2.6x 以降が必要（古い gh は Sigstore の Ed25519 tlog 鍵を検証できない）
       # SHA256SUMS と違い、zip を差し替えてもハッシュも一緒に差し替えれば通ってしまう、
       # という弱点が無い（証明はリポジトリ側に保存される）。
       - name: Attest build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: 'thundoku-shelf-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip'
+          subject-path: 'ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip'
 
       # SBOM 自体も同じ配布物に結び付けて署名する。検証:
-      #   gh attestation verify <zip> --repo MegaBlackLabel/thundoku-shelf-app \
+      #   gh attestation verify <zip> --repo MegaBlackLabel/ligrol-app \
       #     --predicate-type https://cyclonedx.org/bom
       # （subject は zip。SBOM は predicate として入る）
       - name: Attest SBOM
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: 'thundoku-shelf-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip'
-          sbom-path: 'thundoku-shelf-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.cdx.json'
+          subject-path: 'ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip'
+          sbom-path: 'ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.cdx.json'
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: thundoku-shelf-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}
+          name: ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}
           path: |
-            thundoku-shelf-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip
-            thundoku-shelf-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip.sha256
-            thundoku-shelf-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.cdx.json
+            ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip
+            ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip.sha256
+            ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.cdx.json
           if-no-files-found: error
 
       # 署名済み .app を退避する。公証の判定が遅れて時間切れになった場合でも、あとから
@@ -424,7 +424,7 @@ jobs:
         if: always() && runner.os == 'macOS'
         shell: bash
         run: |
-          APP="target/${{ matrix.target }}/release/ThundokuShelf.app"
+          APP="target/${{ matrix.target }}/release/Ligrol.app"
           if [ ! -d "$APP" ]; then
             echo "署名済み .app が無いので退避しない（署名より前で失敗した）"
             exit 0
@@ -484,7 +484,7 @@ jobs:
           path: artifacts
           # 配布する zip だけを落とす。退避用の signed-app-* はリリースに添付しない
           # （files: artifacts/**/*.zip が両方にマッチしてしまうため）
-          pattern: thundoku-shelf-*
+          pattern: ligrol-*
 
       # 全プラットフォーム分を 1 ファイルにまとめる（リリース本文から参照しやすくする）。
       - name: Combine checksums

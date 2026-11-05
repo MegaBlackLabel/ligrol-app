@@ -5,12 +5,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use opfspack::{BACKUP_LABEL, PackBuilder, PackRootKey, SealedEnvelope};
-use thundoku_core::db;
-use thundoku_core::drive::sync::{
+use nartik::{BACKUP_LABEL, PackBuilder, PackRootKey, SealedEnvelope};
+use ligrol_core::db;
+use ligrol_core::drive::sync::{
     BACKUP_BASELINE_KEY, SyncError, SyncPhase, SyncProgress, sync, sync_with_progress,
 };
-use thundoku_core::drive::{DriveApi, DriveError, DriveFile};
+use ligrol_core::drive::{DriveApi, DriveError, DriveFile};
 
 struct FakeDrive {
     files: HashMap<String, FakeFile>,
@@ -139,18 +139,18 @@ impl DriveApi for FakeDrive {
 
 struct TestEnv {
     root: PathBuf,
-    pool: thundoku_core::db::SqlitePool,
+    pool: ligrol_core::db::SqlitePool,
 }
 
 impl TestEnv {
     fn new(tag: &str) -> Self {
         let root =
-            std::env::temp_dir().join(format!("thundoku-sync-test-{}-{tag}", std::process::id()));
+            std::env::temp_dir().join(format!("ligrol-sync-test-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("packs")).unwrap();
         std::fs::create_dir_all(root.join("downloads")).unwrap();
-        let pool = thundoku_core::db::test_pool();
-        thundoku_core::db::migrate(&pool).unwrap();
+        let pool = ligrol_core::db::test_pool();
+        ligrol_core::db::migrate(&pool).unwrap();
         Self { root, pool }
     }
 
@@ -170,7 +170,7 @@ impl Drop for TestEnv {
 }
 
 /// CRC-32 (IEEE)。v2 の pack を組み立てるためにテスト側で計算する
-/// （`opfspack` は v2 を書き出さないため）。
+/// （`nartik` は v2 を書き出さないため）。
 fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = 0xffff_ffffu32;
     for byte in bytes {
@@ -229,7 +229,7 @@ fn encrypted_pack(root: &PackRootKey, pack_id: &str, content: &[u8]) -> Vec<u8> 
 fn sync_env(
     env: &mut TestEnv,
     drive: &mut dyn DriveApi,
-) -> Result<thundoku_core::drive::sync::SyncOutcome, SyncError> {
+) -> Result<ligrol_core::drive::sync::SyncOutcome, SyncError> {
     sync_env_with_progress(env, drive, &mut |_| true)
 }
 
@@ -237,9 +237,9 @@ fn sync_env_with_progress(
     env: &mut TestEnv,
     drive: &mut dyn DriveApi,
     on_progress: &mut dyn FnMut(&SyncProgress) -> bool,
-) -> Result<thundoku_core::drive::sync::SyncOutcome, SyncError> {
+) -> Result<ligrol_core::drive::sync::SyncOutcome, SyncError> {
     sync_with_progress(
-        thundoku_core::drive::sync::SyncRequest {
+        ligrol_core::drive::sync::SyncRequest {
             pool: &env.pool,
             drive,
             packs_dir: &env.packs(),
@@ -261,8 +261,8 @@ fn sync_env_with_books(
     env: &mut TestEnv,
     drive: &mut dyn DriveApi,
     sync_books: bool,
-) -> Result<thundoku_core::drive::sync::SyncOutcome, SyncError> {
-    sync(thundoku_core::drive::sync::SyncRequest {
+) -> Result<ligrol_core::drive::sync::SyncOutcome, SyncError> {
+    sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive,
         packs_dir: &env.packs(),
@@ -282,7 +282,7 @@ fn downloads_new_pack_and_imports_book_with_metadata() {
     let mut env = TestEnv::new("new-pack");
     let mut drive = FakeDrive::new();
     let bytes = metadata_pack("メタ本", "著者X", "サークルY", "2026-08-21");
-    drive.seed("pack-1.opfspack", &bytes);
+    drive.seed("pack-1.nartik", &bytes);
     drive.seed("notes.txt", b"not a pack");
 
     let outcome = sync_env(&mut env, &mut drive).unwrap();
@@ -291,7 +291,7 @@ fn downloads_new_pack_and_imports_book_with_metadata() {
     assert_eq!(drive.download_count(), 1);
 
     // pack stored locally
-    let local = env.packs().join("pack-1.opfspack");
+    let local = env.packs().join("pack-1.nartik");
     assert_eq!(std::fs::read(&local).unwrap(), bytes);
     // book row from metadata
     let book = db::books::get(&env.pool, "pack-1").unwrap().unwrap();
@@ -331,15 +331,15 @@ fn pack_rebuild_is_idempotent_and_skips_existing_rows() {
     let mut env = TestEnv::new("pack-rebuild");
     let mut drive = FakeDrive::new();
     let bytes = metadata_pack("本", "", "", "2026-08-21");
-    drive.seed("pack-1.opfspack", &bytes);
+    drive.seed("pack-1.nartik", &bytes);
     // sync（pack 復元）で book + 取り込み状態が作られる
     sync_env(&mut env, &mut drive).unwrap();
 
     // 2 回目の再構築は何もしない（既存の取り込みを壊さない）
     assert!(
         {
-            let reader = opfspack::PackReader::open(&bytes).unwrap();
-            !thundoku_core::import::rebuild_from_pack(&env.pool, "pack-1", &reader, None).unwrap()
+            let reader = nartik::PackReader::open(&bytes).unwrap();
+            !ligrol_core::import::rebuild_from_pack(&env.pool, "pack-1", &reader, None).unwrap()
         },
         "既に行があれば何もしない"
     );
@@ -386,7 +386,7 @@ fn pack_restore_restores_source_from_metadata() {
     let mut env = TestEnv::new("pack-source");
     let mut drive = FakeDrive::new();
     let bytes = metadata_pack_with_source("source 付き", "fanza", "d_777");
-    drive.seed("pack-src.opfspack", &bytes);
+    drive.seed("pack-src.nartik", &bytes);
     sync_env(&mut env, &mut drive).unwrap();
 
     let book = db::books::get(&env.pool, "pack-src").unwrap().unwrap();
@@ -404,7 +404,7 @@ fn pack_restore_ignores_unknown_site_id() {
     let mut env = TestEnv::new("pack-unknown-site");
     let mut drive = FakeDrive::new();
     let bytes = metadata_pack_with_source("知らないサイト", "unknown-site", "d_1");
-    drive.seed("pack-unknown.opfspack", &bytes);
+    drive.seed("pack-unknown.nartik", &bytes);
     sync_env(&mut env, &mut drive).unwrap();
 
     let book = db::books::get(&env.pool, "pack-unknown").unwrap().unwrap();
@@ -425,7 +425,7 @@ fn pack_restore_without_source_leaves_it_unset() {
     let mut env = TestEnv::new("pack-no-source");
     let mut drive = FakeDrive::new();
     let bytes = metadata_pack("メタ本", "", "", "2026-08-21");
-    drive.seed("pack-old.opfspack", &bytes);
+    drive.seed("pack-old.nartik", &bytes);
     sync_env(&mut env, &mut drive).unwrap();
 
     let book = db::books::get(&env.pool, "pack-old").unwrap().unwrap();
@@ -445,7 +445,7 @@ fn skips_unchanged_md5() {
     let mut env = TestEnv::new("skip");
     let mut drive = FakeDrive::new();
     let bytes = plain_pack("pages/page_0001.webp", b"data");
-    drive.seed("pack-1.opfspack", &bytes);
+    drive.seed("pack-1.nartik", &bytes);
 
     sync_env(&mut env, &mut drive).unwrap();
     assert_eq!(drive.download_count(), 1);
@@ -466,8 +466,8 @@ fn sync_with_progress_reports_each_pack_download() {
     let mut drive = FakeDrive::new();
     let pack_1 = plain_pack("pages/page_0001.webp", b"AAAA");
     let pack_2 = plain_pack("pages/page_0001.webp", b"BBBBBBBB");
-    drive.seed("pack-1.opfspack", &pack_1);
-    drive.seed("pack-2.opfspack", &pack_2);
+    drive.seed("pack-1.nartik", &pack_1);
+    drive.seed("pack-2.nartik", &pack_2);
 
     let mut events: Vec<SyncProgress> = Vec::new();
     let outcome = sync_env_with_progress(&mut env, &mut drive, &mut |progress| {
@@ -491,7 +491,7 @@ fn sync_with_progress_reports_each_pack_download() {
     );
     let event = events
         .iter()
-        .find(|e| e.name == "pack-1.opfspack")
+        .find(|e| e.name == "pack-1.nartik")
         .expect("ファイル名を報告する");
     assert_eq!(event.bytes, pack_1.len() as u64);
     assert_eq!(event.total_bytes, Some(pack_1.len() as u64));
@@ -504,11 +504,11 @@ fn sync_with_progress_stops_when_the_callback_asks_to_cancel() {
     let mut env = TestEnv::new("cancel");
     let mut drive = FakeDrive::new();
     drive.seed(
-        "pack-1.opfspack",
+        "pack-1.nartik",
         &metadata_pack("中止される本", "", "", "2026-08-21"),
     );
     drive.seed(
-        "pack-2.opfspack",
+        "pack-2.nartik",
         &metadata_pack("まだ進まない本", "", "", "2026-08-21"),
     );
 
@@ -526,7 +526,7 @@ fn sync_with_progress_stops_when_the_callback_asks_to_cancel() {
     assert_eq!(seen, 1, "最初の進捗で止める");
     assert_eq!(drive.download_count(), 1, "次の pack を取りに行かない");
     assert!(
-        !env.packs().join("pack-1.opfspack").exists(),
+        !env.packs().join("pack-1.nartik").exists(),
         "中止した pack を保存しない"
     );
     assert!(
@@ -539,7 +539,7 @@ fn sync_with_progress_stops_when_the_callback_asks_to_cancel() {
 /// 戻り値は所有者列の暗号鍵。
 fn seed_owned_local_pack(env: &TestEnv, pack_id: &str, bytes: &[u8]) -> [u8; 32] {
     let key = [11u8; 32];
-    std::fs::write(env.packs().join(format!("{pack_id}.opfspack")), bytes).unwrap();
+    std::fs::write(env.packs().join(format!("{pack_id}.nartik")), bytes).unwrap();
     db::books::insert(
         &env.pool,
         &db::books::Book {
@@ -548,9 +548,9 @@ fn seed_owned_local_pack(env: &TestEnv, pack_id: &str, bytes: &[u8]) -> [u8; 32]
             author: String::new(),
             circle_name: String::new(),
             purchase_date: None,
-            file_name: format!("{pack_id}.opfspack"),
+            file_name: format!("{pack_id}.nartik"),
             file_size: bytes.len() as i64,
-            opfs_path: format!("{pack_id}.opfspack"),
+            opfs_path: format!("{pack_id}.nartik"),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -576,7 +576,7 @@ fn seed_owned_local_pack(env: &TestEnv, pack_id: &str, bytes: &[u8]) -> [u8; 32]
     db::books::set_owner_sub(
         &env.pool,
         pack_id,
-        Some(thundoku_core::owner::encrypt(&key, "test-sub")),
+        Some(ligrol_core::owner::encrypt(&key, "test-sub")),
     )
     .unwrap();
     key
@@ -589,9 +589,9 @@ fn owned_sync_with_progress(
     key: &[u8; 32],
     db_path: Option<&std::path::Path>,
     on_progress: &mut dyn FnMut(&SyncProgress) -> bool,
-) -> Result<thundoku_core::drive::sync::SyncOutcome, SyncError> {
+) -> Result<ligrol_core::drive::sync::SyncOutcome, SyncError> {
     sync_with_progress(
-        thundoku_core::drive::sync::SyncRequest {
+        ligrol_core::drive::sync::SyncRequest {
             pool: &env.pool,
             drive,
             packs_dir: &env.packs(),
@@ -643,7 +643,7 @@ fn sync_with_progress_stops_before_backing_up_the_database() {
     let env = TestEnv::new("cancel-backup");
     let mut drive = FakeDrive::new();
     let key = [11u8; 32];
-    let db_path = env.root.join("thundoku-shelf.db");
+    let db_path = env.root.join("ligrol.db");
 
     let mut phases: Vec<SyncPhase> = Vec::new();
     let error = owned_sync_with_progress(
@@ -669,7 +669,7 @@ fn conflict_backs_up_local_and_takes_drive_version() {
     let mut drive = FakeDrive::new();
     // local pack v1 (imported earlier)
     let local_bytes_v1 = plain_pack("pages/page_0001.webp", b"LOCAL-V1");
-    std::fs::write(env.packs().join("pack-1.opfspack"), &local_bytes_v1).unwrap();
+    std::fs::write(env.packs().join("pack-1.nartik"), &local_bytes_v1).unwrap();
     db::books::insert(
         &env.pool,
         &db::books::Book {
@@ -678,9 +678,9 @@ fn conflict_backs_up_local_and_takes_drive_version() {
             author: String::new(),
             circle_name: String::new(),
             purchase_date: None,
-            file_name: "pack-1.opfspack".into(),
+            file_name: "pack-1.nartik".into(),
             file_size: local_bytes_v1.len() as i64,
-            opfs_path: "pack-1.opfspack".into(),
+            opfs_path: "pack-1.nartik".into(),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -708,7 +708,7 @@ fn conflict_backs_up_local_and_takes_drive_version() {
         &env.pool,
         &db::sync_state::DriveSyncState {
             pack_id: "pack-1".into(),
-            drive_file_id: "id-pack-1.opfspack".into(),
+            drive_file_id: "id-pack-1.nartik".into(),
             md5: format!("{:x}", md5::compute(&local_bytes_v1)),
             modified_time: None,
             last_synced_at: "2020-01-01 00:00:00".into(),
@@ -717,17 +717,17 @@ fn conflict_backs_up_local_and_takes_drive_version() {
     .unwrap();
     // drive now has v2 with different md5
     let drive_bytes_v2 = plain_pack("pages/page_0001.webp", b"DRIVE-V2");
-    drive.seed("pack-1.opfspack", &drive_bytes_v2);
+    drive.seed("pack-1.nartik", &drive_bytes_v2);
 
     let outcome = sync_env(&mut env, &mut drive).unwrap();
     assert_eq!(outcome.conflicts, vec!["pack-1"]);
     assert_eq!(outcome.downloaded, vec!["pack-1"]);
     // local backup
-    let backup = env.packs().join("pack-1.conflict-local.opfspack");
+    let backup = env.packs().join("pack-1.conflict-local.nartik");
     assert_eq!(std::fs::read(&backup).unwrap(), local_bytes_v1);
     // local replaced by drive version
     assert_eq!(
-        std::fs::read(env.packs().join("pack-1.opfspack")).unwrap(),
+        std::fs::read(env.packs().join("pack-1.nartik")).unwrap(),
         drive_bytes_v2
     );
 }
@@ -737,7 +737,7 @@ fn uploads_local_pack_without_state_row() {
     let env = TestEnv::new("upload-new");
     let mut drive = FakeDrive::new();
     let bytes = plain_pack("pages/page_0001.webp", b"LOCAL-ONLY");
-    std::fs::write(env.packs().join("pack-9.opfspack"), &bytes).unwrap();
+    std::fs::write(env.packs().join("pack-9.nartik"), &bytes).unwrap();
     db::books::insert(
         &env.pool,
         &db::books::Book {
@@ -746,9 +746,9 @@ fn uploads_local_pack_without_state_row() {
             author: String::new(),
             circle_name: String::new(),
             purchase_date: None,
-            file_name: "pack-9.opfspack".into(),
+            file_name: "pack-9.nartik".into(),
             file_size: bytes.len() as i64,
-            opfs_path: "pack-9.opfspack".into(),
+            opfs_path: "pack-9.nartik".into(),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -776,11 +776,11 @@ fn uploads_local_pack_without_state_row() {
     db::books::set_owner_sub(
         &env.pool,
         "pack-9",
-        Some(thundoku_core::owner::encrypt(&key, "test-sub")),
+        Some(ligrol_core::owner::encrypt(&key, "test-sub")),
     )
     .unwrap();
 
-    let outcome = sync(thundoku_core::drive::sync::SyncRequest {
+    let outcome = sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive: &mut drive,
         packs_dir: &env.packs(),
@@ -796,7 +796,7 @@ fn uploads_local_pack_without_state_row() {
     .unwrap();
     assert_eq!(outcome.uploaded, vec!["pack-9"]);
     assert_eq!(drive.upload_count(), 1);
-    assert!(drive.files.contains_key("id-pack-9.opfspack"));
+    assert!(drive.files.contains_key("id-pack-9.nartik"));
 }
 
 #[test]
@@ -804,27 +804,27 @@ fn reuploads_locally_modified_pack() {
     let mut env = TestEnv::new("reupload");
     let mut drive = FakeDrive::new();
     let bytes = plain_pack("pages/page_0001.webp", b"OLD");
-    drive.seed("pack-2.opfspack", &bytes);
+    drive.seed("pack-2.nartik", &bytes);
     sync_env(&mut env, &mut drive).unwrap();
     let key = [11u8; 32];
     // 新仕様: ダウンロードした本を「test-sub の所有」として扱い、再アップロードを確認する。
     db::books::set_owner_sub(
         &env.pool,
         "pack-2",
-        Some(thundoku_core::owner::encrypt(&key, "test-sub")),
+        Some(ligrol_core::owner::encrypt(&key, "test-sub")),
     )
     .unwrap();
     assert_eq!(drive.upload_count(), 0); // downloaded, not uploaded
 
     // modify local pack after sync
     let updated = plain_pack("pages/page_0001.webp", b"NEWER-CONTENT");
-    std::fs::write(env.packs().join("pack-2.opfspack"), &updated).unwrap();
+    std::fs::write(env.packs().join("pack-2.nartik"), &updated).unwrap();
     // push last_synced_at into the past → local mtime strictly newer
     db::sync_state::upsert(
         &env.pool,
         &db::sync_state::DriveSyncState {
             pack_id: "pack-2".into(),
-            drive_file_id: "id-pack-2.opfspack".into(),
+            drive_file_id: "id-pack-2.nartik".into(),
             md5: format!("{:x}", md5::compute(&bytes)),
             modified_time: None,
             last_synced_at: "2020-01-01 00:00:00".into(),
@@ -832,7 +832,7 @@ fn reuploads_locally_modified_pack() {
     )
     .unwrap();
     // last_synced_at in the past → mtime newer → re-upload
-    let outcome = sync(thundoku_core::drive::sync::SyncRequest {
+    let outcome = sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive: &mut drive,
         packs_dir: &env.packs(),
@@ -849,7 +849,7 @@ fn reuploads_locally_modified_pack() {
     assert_eq!(outcome.uploaded, vec!["pack-2"]);
     assert_eq!(drive.upload_count(), 1);
     // drive file replaced
-    let drive_file = drive.files.get("id-pack-2.opfspack").unwrap();
+    let drive_file = drive.files.get("id-pack-2.nartik").unwrap();
     assert_eq!(drive_file.bytes, updated);
 }
 
@@ -858,24 +858,24 @@ fn deletion_is_not_propagated_in_either_direction() {
     let mut env = TestEnv::new("deletion");
     let mut drive = FakeDrive::new();
     let bytes = plain_pack("pages/page_0001.webp", b"DATA");
-    drive.seed("pack-3.opfspack", &bytes);
+    drive.seed("pack-3.nartik", &bytes);
     sync_env(&mut env, &mut drive).unwrap();
 
     // drive-side deletion: local pack and state row remain untouched
-    drive.files.remove("id-pack-3.opfspack");
+    drive.files.remove("id-pack-3.nartik");
     let outcome = sync_env(&mut env, &mut drive).unwrap();
     assert!(outcome.downloaded.is_empty());
     assert!(outcome.uploaded.is_empty());
-    assert!(env.packs().join("pack-3.opfspack").exists());
+    assert!(env.packs().join("pack-3.nartik").exists());
     assert!(db::sync_state::get(&env.pool, "pack-3").unwrap().is_some());
 
     // local-side deletion: state row remains, nothing uploaded, drive file untouched
-    std::fs::remove_file(env.packs().join("pack-3.opfspack")).unwrap();
-    drive.seed("pack-3.opfspack", &bytes);
+    std::fs::remove_file(env.packs().join("pack-3.nartik")).unwrap();
+    drive.seed("pack-3.nartik", &bytes);
     // remove the just-added id key collision — seed() re-inserts with same id
     let outcome = sync_env(&mut env, &mut drive).unwrap();
     assert!(outcome.uploaded.is_empty());
-    assert!(drive.files.contains_key("id-pack-3.opfspack"));
+    assert!(drive.files.contains_key("id-pack-3.nartik"));
 }
 
 #[test]
@@ -884,20 +884,20 @@ fn malicious_drive_names_are_ignored() {
     let mut drive = FakeDrive::new();
     let bytes = plain_pack("pages/page_0001.webp", b"DATA");
     // traversal attempts must never escape packs_dir
-    drive.seed("..\\evil.opfspack", &bytes);
-    drive.seed("..\\..\\evil.opfspack", &bytes);
-    drive.seed("C:\\evil.opfspack", &bytes);
-    drive.seed("good-pack.opfspack", &bytes);
+    drive.seed("..\\evil.nartik", &bytes);
+    drive.seed("..\\..\\evil.nartik", &bytes);
+    drive.seed("C:\\evil.nartik", &bytes);
+    drive.seed("good-pack.nartik", &bytes);
 
     let outcome = sync_env(&mut env, &mut drive).unwrap();
     assert_eq!(outcome.downloaded, vec!["good-pack"]);
     // nothing written outside packs_dir
-    assert!(!env.root.join("..").join("evil.opfspack").exists());
+    assert!(!env.root.join("..").join("evil.nartik").exists());
     assert!(
         !env.root
             .join("..")
             .join("..")
-            .join("evil.opfspack")
+            .join("evil.nartik")
             .exists()
     );
     // traversal-named packs were not imported
@@ -912,7 +912,7 @@ fn encrypted_pack_without_key_is_rejected() {
     let mut drive = FakeDrive::new();
     let root = PackRootKey::generate();
     let bytes = encrypted_pack(&root, "pack-e", b"SECRET");
-    drive.seed("pack-e.opfspack", &bytes);
+    drive.seed("pack-e.nartik", &bytes);
 
     let err = sync_env(&mut env, &mut drive).unwrap_err();
     assert!(matches!(&err, SyncError::PackKeyRequired(id) if id == "pack-e"));
@@ -926,9 +926,9 @@ fn encrypted_pack_imports_with_the_root_key() {
     let mut drive = FakeDrive::new();
     let root = PackRootKey::generate();
     let bytes = encrypted_pack(&root, "pack-e", b"SECRET");
-    drive.seed("pack-e.opfspack", &bytes);
+    drive.seed("pack-e.nartik", &bytes);
 
-    let outcome = sync(thundoku_core::drive::sync::SyncRequest {
+    let outcome = sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive: &mut drive,
         packs_dir: &env.packs(),
@@ -945,10 +945,10 @@ fn encrypted_pack_imports_with_the_root_key() {
     assert_eq!(outcome.downloaded, vec!["pack-e"]);
     let book = db::books::get(&env.pool, "pack-e").unwrap().unwrap();
     assert_eq!(book.title, "pack-e"); // no metadata.json in encrypted fixture
-    // decryption round-trip via opfspack reader (鍵は PRK + pack id から導出)
+    // decryption round-trip via nartik reader (鍵は PRK + pack id から導出)
     let key = root.derive_pack_key("pack-e");
-    let local = std::fs::read(env.packs().join("pack-e.opfspack")).unwrap();
-    let reader = opfspack::PackReader::open(&local).unwrap();
+    let local = std::fs::read(env.packs().join("pack-e.nartik")).unwrap();
+    let reader = nartik::PackReader::open(&local).unwrap();
     assert_eq!(
         reader
             .read_entry("pages/page_0001.webp", Some(&key))
@@ -964,10 +964,10 @@ fn plaintext_pack_downloads_while_logged_in() {
     let env = TestEnv::new("plaintext-logged-in");
     let mut drive = FakeDrive::new();
     let bytes = metadata_pack("平文本", "著者X", "サークルY", "2026-08-21");
-    drive.seed("pack-plain.opfspack", &bytes);
+    drive.seed("pack-plain.nartik", &bytes);
     let root = PackRootKey::generate();
 
-    let outcome = sync(thundoku_core::drive::sync::SyncRequest {
+    let outcome = sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive: &mut drive,
         packs_dir: &env.packs(),
@@ -998,7 +998,7 @@ fn v2_pack_is_reported_as_unsupported() {
     bytes[4..8].copy_from_slice(&2u32.to_le_bytes());
     let crc = crc32(&bytes[..60]);
     bytes[60..64].copy_from_slice(&crc.to_le_bytes());
-    drive.seed("pack-v2.opfspack", &bytes);
+    drive.seed("pack-v2.nartik", &bytes);
 
     let err = sync_env(&mut env, &mut drive).unwrap_err();
     match &err {
@@ -1016,8 +1016,8 @@ fn v2_pack_is_reported_as_unsupported() {
 /// 鍵 bundle の未アップロード（初回作成時に失敗）は同期の最後に再試行される。
 #[test]
 fn sync_retries_pending_key_bundle_upload() {
-    use thundoku_core::pack_keys::{KEY_BUNDLE_NAME, PENDING_UPLOAD_KEY};
-    use thundoku_core::secrets::SecretStore;
+    use ligrol_core::pack_keys::{KEY_BUNDLE_NAME, PENDING_UPLOAD_KEY};
+    use ligrol_core::secrets::SecretStore;
 
     let env = TestEnv::new("pending-keys");
     let mut drive = FakeDrive::new();
@@ -1025,16 +1025,16 @@ fn sync_retries_pending_key_bundle_upload() {
     let root = PackRootKey::generate();
     SecretStore::use_memory_backend();
     SecretStore::new()
-        .save_pack_root_key(&opfspack::derive_owner_id(sub), &root.to_base64())
+        .save_pack_root_key(&nartik::derive_owner_id(sub), &root.to_base64())
         .unwrap();
     db::settings::set(
         &env.pool,
         PENDING_UPLOAD_KEY,
-        &opfspack::derive_owner_id(sub),
+        &nartik::derive_owner_id(sub),
     )
     .unwrap();
 
-    let outcome = sync(thundoku_core::drive::sync::SyncRequest {
+    let outcome = sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive: &mut drive,
         packs_dir: &env.packs(),
@@ -1062,7 +1062,7 @@ fn sync_retries_pending_key_bundle_upload() {
         .get(&format!("id-{KEY_BUNDLE_NAME}"))
         .unwrap()
         .bytes;
-    let bundle = opfspack::PackKeyBundle::from_json(bytes).unwrap();
+    let bundle = nartik::PackKeyBundle::from_json(bytes).unwrap();
     assert_eq!(
         bundle.unwrap_with_sub(sub).unwrap().as_bytes(),
         root.as_bytes()
@@ -1077,10 +1077,10 @@ fn db_backup_is_not_replaced_when_owner_filter_is_unavailable() {
     let env = TestEnv::new("backup-guard");
     let mut drive = FakeDrive::new();
     let original = br#"{"books":[{"id":"keep-me"}]}"#.to_vec();
-    let file_id = drive.seed("thundoku-backup.json", &original);
-    let db_path = env.packs().join("thundoku-shelf.db");
+    let file_id = drive.seed("ligrol-backup.json", &original);
+    let db_path = env.packs().join("ligrol.db");
 
-    let outcome = sync(thundoku_core::drive::sync::SyncRequest {
+    let outcome = sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive: &mut drive,
         packs_dir: &env.packs(),
@@ -1115,9 +1115,9 @@ fn db_backup_is_uploaded_when_owner_filter_is_available() {
     let mut drive = FakeDrive::new();
     let key = [9u8; 32];
     // 現在の sub に所有される本を 1 冊用意する
-    thundoku_core::db::books::insert(
+    ligrol_core::db::books::insert(
         &env.pool,
-        &thundoku_core::db::books::Book {
+        &ligrol_core::db::books::Book {
             id: "b1".into(),
             title: "自分の本".into(),
             author: String::new(),
@@ -1125,7 +1125,7 @@ fn db_backup_is_uploaded_when_owner_filter_is_available() {
             purchase_date: None,
             file_name: "b1.pdf".into(),
             file_size: 1,
-            opfs_path: "b1.opfspack".into(),
+            opfs_path: "b1.nartik".into(),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -1148,15 +1148,15 @@ fn db_backup_is_uploaded_when_owner_filter_is_available() {
         },
     )
     .unwrap();
-    thundoku_core::db::books::set_owner_sub(
+    ligrol_core::db::books::set_owner_sub(
         &env.pool,
         "b1",
-        Some(thundoku_core::owner::encrypt(&key, "sub-1")),
+        Some(ligrol_core::owner::encrypt(&key, "sub-1")),
     )
     .unwrap();
-    let db_path = env.packs().join("thundoku-shelf.db");
+    let db_path = env.packs().join("ligrol.db");
 
-    let outcome = sync(thundoku_core::drive::sync::SyncRequest {
+    let outcome = sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive: &mut drive,
         packs_dir: &env.packs(),
@@ -1177,7 +1177,7 @@ fn db_backup_is_uploaded_when_owner_filter_is_available() {
     );
     let uploaded = drive
         .files
-        .get("id-thundoku-backup.json")
+        .get("id-ligrol-backup.json")
         .expect("バックアップが存在すること");
     let json = String::from_utf8(uploaded.bytes.clone()).unwrap();
     assert!(json.contains("自分の本"), "所有する本が含まれること");
@@ -1190,9 +1190,9 @@ fn db_backup_upload_records_the_baseline_for_the_next_check() {
     let env = TestEnv::new("backup-baseline");
     let mut drive = FakeDrive::new();
     let key = [21u8; 32];
-    thundoku_core::db::books::insert(
+    ligrol_core::db::books::insert(
         &env.pool,
-        &thundoku_core::db::books::Book {
+        &ligrol_core::db::books::Book {
             id: "b1".into(),
             title: "自分の本".into(),
             author: String::new(),
@@ -1200,7 +1200,7 @@ fn db_backup_upload_records_the_baseline_for_the_next_check() {
             purchase_date: None,
             file_name: "b1.pdf".into(),
             file_size: 1,
-            opfs_path: "b1.opfspack".into(),
+            opfs_path: "b1.nartik".into(),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -1223,15 +1223,15 @@ fn db_backup_upload_records_the_baseline_for_the_next_check() {
         },
     )
     .unwrap();
-    thundoku_core::db::books::set_owner_sub(
+    ligrol_core::db::books::set_owner_sub(
         &env.pool,
         "b1",
-        Some(thundoku_core::owner::encrypt(&key, "sub-1")),
+        Some(ligrol_core::owner::encrypt(&key, "sub-1")),
     )
     .unwrap();
-    let db_path = env.packs().join("thundoku-shelf.db");
+    let db_path = env.packs().join("ligrol.db");
 
-    let outcome = sync(thundoku_core::drive::sync::SyncRequest {
+    let outcome = sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive: &mut drive,
         packs_dir: &env.packs(),
@@ -1247,17 +1247,17 @@ fn db_backup_upload_records_the_baseline_for_the_next_check() {
     .unwrap();
     assert!(outcome.database_backed_up);
 
-    let baseline = thundoku_core::db::settings::get(
+    let baseline = ligrol_core::db::settings::get(
         &env.pool,
-        thundoku_core::drive::sync::BACKUP_BASELINE_KEY,
+        ligrol_core::drive::sync::BACKUP_BASELINE_KEY,
     )
     .unwrap();
-    let owned = thundoku_core::db::books::owned_book_ids(&env.pool, &key, Some("sub-1")).unwrap();
-    let owner_filter = thundoku_core::db::backup::OwnerFilter {
+    let owned = ligrol_core::db::books::owned_book_ids(&env.pool, &key, Some("sub-1")).unwrap();
+    let owner_filter = ligrol_core::db::backup::OwnerFilter {
         key: &key,
         sub: Some("sub-1"),
     };
-    let status = thundoku_core::drive::sync::inspect_drive_backup(
+    let status = ligrol_core::drive::sync::inspect_drive_backup(
         &env.pool,
         &mut drive,
         "folder-1",
@@ -1278,22 +1278,22 @@ fn db_backup_upload_records_the_baseline_for_the_next_check() {
 
 /// keyring（テストではメモリ）に PRK を保存する。
 fn save_root_key(sub: &str, root: &PackRootKey) {
-    thundoku_core::secrets::SecretStore::use_memory_backend();
-    thundoku_core::secrets::SecretStore::new()
-        .save_pack_root_key(&opfspack::derive_owner_id(sub), &root.to_base64())
+    ligrol_core::secrets::SecretStore::use_memory_backend();
+    ligrol_core::secrets::SecretStore::new()
+        .save_pack_root_key(&nartik::derive_owner_id(sub), &root.to_base64())
         .unwrap();
 }
 
 /// keyring から PRK を消す（鍵の無い端末を再現する）。
 fn delete_root_key(sub: &str) {
-    thundoku_core::secrets::SecretStore::use_memory_backend();
-    let _ = thundoku_core::secrets::SecretStore::new()
-        .delete_pack_root_key(&opfspack::derive_owner_id(sub));
+    ligrol_core::secrets::SecretStore::use_memory_backend();
+    let _ = ligrol_core::secrets::SecretStore::new()
+        .delete_pack_root_key(&nartik::derive_owner_id(sub));
 }
 
 /// 現在の sub が所有する本を 1 冊入れる（DB バックアップの対象）。
 fn insert_owned_book(
-    pool: &thundoku_core::db::SqlitePool,
+    pool: &ligrol_core::db::SqlitePool,
     id: &str,
     title: &str,
     sub: &str,
@@ -1307,9 +1307,9 @@ fn insert_owned_book(
             author: String::new(),
             circle_name: String::new(),
             purchase_date: None,
-            file_name: format!("{id}.opfspack"),
+            file_name: format!("{id}.nartik"),
             file_size: 1,
-            opfs_path: format!("{id}.opfspack"),
+            opfs_path: format!("{id}.nartik"),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -1332,7 +1332,7 @@ fn insert_owned_book(
         },
     )
     .unwrap();
-    db::books::set_owner_sub(pool, id, Some(thundoku_core::owner::encrypt(key, sub))).unwrap();
+    db::books::set_owner_sub(pool, id, Some(ligrol_core::owner::encrypt(key, sub))).unwrap();
 }
 
 /// DB バックアップ付きの同期（所有者と鍵を明示する）。
@@ -1343,8 +1343,8 @@ fn sync_with_backup(
     root: Option<&PackRootKey>,
     owner_key: &[u8; 32],
     db_path: &std::path::Path,
-) -> Result<thundoku_core::drive::sync::SyncOutcome, SyncError> {
-    sync(thundoku_core::drive::sync::SyncRequest {
+) -> Result<ligrol_core::drive::sync::SyncOutcome, SyncError> {
+    sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive,
         packs_dir: &env.packs(),
@@ -1366,13 +1366,13 @@ fn inspect_owned(
     sub: &str,
     owner_key: &[u8; 32],
     baseline: Option<&str>,
-) -> Option<thundoku_core::drive::sync::BackupStatus> {
+) -> Option<ligrol_core::drive::sync::BackupStatus> {
     let owned = db::books::owned_book_ids(&env.pool, owner_key, Some(sub)).unwrap();
-    let filter = thundoku_core::db::backup::OwnerFilter {
+    let filter = ligrol_core::db::backup::OwnerFilter {
         key: owner_key,
         sub: Some(sub),
     };
-    thundoku_core::drive::sync::inspect_drive_backup(
+    ligrol_core::drive::sync::inspect_drive_backup(
         &env.pool,
         drive,
         "folder-1",
@@ -1387,17 +1387,17 @@ fn inspect_owned(
 fn uploaded_backup(drive: &FakeDrive) -> Vec<u8> {
     drive
         .files
-        .get("id-thundoku-backup.json")
+        .get("id-ligrol-backup.json")
         .expect("バックアップが存在すること")
         .bytes
         .clone()
 }
 
-fn baseline_of(pool: &thundoku_core::db::SqlitePool) -> Option<String> {
+fn baseline_of(pool: &ligrol_core::db::SqlitePool) -> Option<String> {
     db::settings::get(pool, BACKUP_BASELINE_KEY).unwrap()
 }
 
-/// PRK があれば `thundoku-backup.json` は**暗号化された封筒（v3）**として上がる。
+/// PRK があれば `ligrol-backup.json` は**暗号化された封筒（v3）**として上がる。
 #[test]
 fn db_backup_is_encrypted_when_the_root_key_is_available() {
     let env = TestEnv::new("backup-v3");
@@ -1407,7 +1407,7 @@ fn db_backup_is_encrypted_when_the_root_key_is_available() {
     let root = PackRootKey::generate();
     save_root_key(sub, &root);
     insert_owned_book(&env.pool, "b1", "自分の本", sub, &owner_key);
-    let db_path = env.packs().join("thundoku-shelf.db");
+    let db_path = env.packs().join("ligrol.db");
 
     let outcome =
         sync_with_backup(&env, &mut drive, sub, Some(&root), &owner_key, &db_path).unwrap();
@@ -1419,7 +1419,7 @@ fn db_backup_is_encrypted_when_the_root_key_is_available() {
         !raw.contains("自分の本"),
         "平文（本のタイトル）が Drive のファイルに残っている"
     );
-    let owner_id = opfspack::derive_owner_id(sub);
+    let owner_id = nartik::derive_owner_id(sub);
     let envelope =
         SealedEnvelope::from_json(&BACKUP_LABEL, &uploaded).expect("v3 の封筒として読める");
     assert_eq!(envelope.format_version(), 3);
@@ -1452,7 +1452,7 @@ fn db_backup_upload_is_blocked_when_local_user_data_is_empty() {
     let root = PackRootKey::generate();
     save_root_key(sub, &root);
     insert_owned_book(&env.pool, "b1", "自分の本", sub, &owner_key);
-    let db_path = env.packs().join("thundoku-shelf.db");
+    let db_path = env.packs().join("ligrol.db");
 
     // ① ユーザーデータがある状態で 1 回目 → アップロードされる
     let first =
@@ -1462,7 +1462,7 @@ fn db_backup_upload_is_blocked_when_local_user_data_is_empty() {
 
     // ② ローカルのユーザーデータを空にして（＝別端末の内容をまだ取り込んでいない状態）
     //    もう一度同期する → 門が働いて上書きしない
-    thundoku_core::db::block_on(async {
+    ligrol_core::db::block_on(async {
         sqlx::query("DELETE FROM favorite_tags").execute(&env.pool).await.unwrap();
         sqlx::query("UPDATE books SET owner_sub = NULL").execute(&env.pool).await.unwrap();
     });
@@ -1488,7 +1488,7 @@ fn db_backup_is_not_reuploaded_when_the_content_is_unchanged() {
     let root = PackRootKey::generate();
     save_root_key(sub, &root);
     insert_owned_book(&env.pool, "b1", "自分の本", sub, &owner_key);
-    let db_path = env.packs().join("thundoku-shelf.db");
+    let db_path = env.packs().join("ligrol.db");
 
     assert!(
         sync_with_backup(&env, &mut drive, sub, Some(&root), &owner_key, &db_path)
@@ -1507,7 +1507,7 @@ fn db_backup_is_not_reuploaded_when_the_content_is_unchanged() {
 
     // 参考: 同じ平文を封印し直すと暗号文（とファイルの md5）は変わるが、
     // 変更検知に使う content_hmac は同じ（＝暗号文 md5 を基準にしてはいけない理由）
-    let owner_id = opfspack::derive_owner_id(sub);
+    let owner_id = nartik::derive_owner_id(sub);
     let envelope = SealedEnvelope::from_json(&BACKUP_LABEL, &first).unwrap();
     let plaintext = envelope.open(&root, &owner_id).unwrap();
     let resealed = SealedEnvelope::seal(&BACKUP_LABEL, &plaintext, &root, &owner_id);
@@ -1528,7 +1528,7 @@ fn db_backup_stays_plaintext_without_the_root_key() {
     let owner_key = [44u8; 32];
     delete_root_key(sub);
     insert_owned_book(&env.pool, "b1", "自分の本", sub, &owner_key);
-    let db_path = env.packs().join("thundoku-shelf.db");
+    let db_path = env.packs().join("ligrol.db");
 
     let outcome =
         sync_with_backup(&env, &mut drive, sub, None, &owner_key, &db_path).unwrap();
@@ -1537,13 +1537,13 @@ fn db_backup_stays_plaintext_without_the_root_key() {
     let uploaded = uploaded_backup(&drive);
     let text = String::from_utf8(uploaded.clone()).expect("平文の JSON");
     assert!(text.contains("自分の本"), "平文なので内容が読める");
-    let backup = thundoku_core::db::backup::DriveBackup::parse(&uploaded).unwrap();
+    let backup = ligrol_core::db::backup::DriveBackup::parse(&uploaded).unwrap();
     assert!(!backup.is_encrypted(), "鍵が無いときは v2 の平文");
     assert_eq!(backup.plaintext(None).unwrap(), text);
     // 基準値は従来どおり正規形 md5（v2 の比較方法を変えない）
     assert_eq!(
         baseline_of(&env.pool),
-        Some(thundoku_core::db::backup::canonical_md5_str(&text, None).unwrap())
+        Some(ligrol_core::db::backup::canonical_md5_str(&text, None).unwrap())
     );
 
     // 2 回目は md5 一致でスキップ（従来動作）
@@ -1564,7 +1564,7 @@ fn inspect_drive_backup_handles_v3_envelopes() {
     let root = PackRootKey::generate();
     save_root_key(sub, &root);
     insert_owned_book(&env.pool, "b1", "自分の本", sub, &owner_key);
-    let db_path = env.packs().join("thundoku-shelf.db");
+    let db_path = env.packs().join("ligrol.db");
 
     sync_with_backup(&env, &mut drive, sub, Some(&root), &owner_key, &db_path).unwrap();
     let baseline = baseline_of(&env.pool);
@@ -1576,17 +1576,17 @@ fn inspect_drive_backup_handles_v3_envelopes() {
     assert!(!status.should_offer_restore());
 
     // 他端末（同じ PRK）が別の内容を上げた
-    let other = thundoku_core::db::test_pool();
+    let other = ligrol_core::db::test_pool();
     db::migrate(&other).unwrap();
     insert_owned_book(&other, "b9", "他端末の本", sub, &owner_key);
-    let other_json = thundoku_core::db::backup::export_json(&other, None, None, false).unwrap();
+    let other_json = ligrol_core::db::backup::export_json(&other, None, None, false).unwrap();
     let other_envelope = SealedEnvelope::seal(
         &BACKUP_LABEL,
         other_json.as_bytes(),
         &root,
-        &opfspack::derive_owner_id(sub),
+        &nartik::derive_owner_id(sub),
     );
-    drive.seed("thundoku-backup.json", &other_envelope.to_json().unwrap());
+    drive.seed("ligrol-backup.json", &other_envelope.to_json().unwrap());
 
     let status = inspect_owned(&env, &mut drive, sub, &owner_key, baseline.as_deref())
         .expect("バックアップが存在すること");
@@ -1603,12 +1603,12 @@ fn inspect_drive_backup_without_the_key_does_not_offer_a_restore() {
     let sub = "sub-backup-v3-nokey";
     let owner_key = [46u8; 32];
     let root = PackRootKey::generate();
-    let owner_id = opfspack::derive_owner_id(sub);
+    let owner_id = nartik::derive_owner_id(sub);
     insert_owned_book(&env.pool, "b1", "自分の本", sub, &owner_key);
 
-    let source = thundoku_core::db::backup::export_json(&env.pool, None, None, false).unwrap();
+    let source = ligrol_core::db::backup::export_json(&env.pool, None, None, false).unwrap();
     let envelope = SealedEnvelope::seal(&BACKUP_LABEL, source.as_bytes(), &root, &owner_id);
-    drive.seed("thundoku-backup.json", &envelope.to_json().unwrap());
+    drive.seed("ligrol-backup.json", &envelope.to_json().unwrap());
     delete_root_key(sub);
 
     let status = inspect_owned(&env, &mut drive, sub, &owner_key, Some("stale-baseline"))
@@ -1630,17 +1630,17 @@ fn restore_decrypts_a_v3_envelope() {
     let owner_key = [47u8; 32];
     let root = PackRootKey::generate();
     save_root_key(sub, &root);
-    let owner_id = opfspack::derive_owner_id(sub);
+    let owner_id = nartik::derive_owner_id(sub);
 
     // 別端末のバックアップ（同じアカウントの PRK）を Drive に置く
-    let source = thundoku_core::db::test_pool();
+    let source = ligrol_core::db::test_pool();
     db::migrate(&source).unwrap();
     insert_owned_book(&source, "b1", "復元される本", sub, &owner_key);
-    let json = thundoku_core::db::backup::export_json(&source, None, None, false).unwrap();
+    let json = ligrol_core::db::backup::export_json(&source, None, None, false).unwrap();
     let envelope = SealedEnvelope::seal(&BACKUP_LABEL, json.as_bytes(), &root, &owner_id);
-    drive.seed("thundoku-backup.json", &envelope.to_json().unwrap());
+    drive.seed("ligrol-backup.json", &envelope.to_json().unwrap());
 
-    thundoku_core::drive::sync::restore_drive_backup(&mut drive, "folder-1", &env.pool).unwrap();
+    ligrol_core::drive::sync::restore_drive_backup(&mut drive, "folder-1", &env.pool).unwrap();
 
     let book = db::books::get(&env.pool, "b1")
         .unwrap()
@@ -1670,17 +1670,17 @@ fn restore_without_the_key_is_rejected_and_imports_nothing() {
     let sub = "sub-backup-v3-restore-nokey";
     let owner_key = [48u8; 32];
     let root = PackRootKey::generate();
-    let owner_id = opfspack::derive_owner_id(sub);
+    let owner_id = nartik::derive_owner_id(sub);
 
-    let source = thundoku_core::db::test_pool();
+    let source = ligrol_core::db::test_pool();
     db::migrate(&source).unwrap();
     insert_owned_book(&source, "b1", "復元される本", sub, &owner_key);
-    let json = thundoku_core::db::backup::export_json(&source, None, None, false).unwrap();
+    let json = ligrol_core::db::backup::export_json(&source, None, None, false).unwrap();
     let envelope = SealedEnvelope::seal(&BACKUP_LABEL, json.as_bytes(), &root, &owner_id);
-    drive.seed("thundoku-backup.json", &envelope.to_json().unwrap());
+    drive.seed("ligrol-backup.json", &envelope.to_json().unwrap());
     delete_root_key(sub);
 
-    let error = thundoku_core::drive::sync::restore_drive_backup(&mut drive, "folder-1", &env.pool)
+    let error = ligrol_core::drive::sync::restore_drive_backup(&mut drive, "folder-1", &env.pool)
         .expect_err("鍵が無ければ復元しない");
     assert!(
         matches!(&error, SyncError::BackupKeyRequired(id) if id == &owner_id),
@@ -1702,20 +1702,20 @@ fn a_v3_envelope_from_another_account_is_not_restored() {
     let other_sub = "sub-backup-v3-other-account-2";
     let owner_key = [49u8; 32];
     let other_root = PackRootKey::generate();
-    let other_owner = opfspack::derive_owner_id(other_sub);
+    let other_owner = nartik::derive_owner_id(other_sub);
     // この端末の keyring には自分の鍵だけがある（別アカウントの鍵は無い）
     save_root_key(sub, &PackRootKey::generate());
     delete_root_key(other_sub);
 
-    let source = thundoku_core::db::test_pool();
+    let source = ligrol_core::db::test_pool();
     db::migrate(&source).unwrap();
     insert_owned_book(&source, "b1", "別アカウントの本", other_sub, &owner_key);
-    let json = thundoku_core::db::backup::export_json(&source, None, None, false).unwrap();
+    let json = ligrol_core::db::backup::export_json(&source, None, None, false).unwrap();
     let envelope = SealedEnvelope::seal(&BACKUP_LABEL, json.as_bytes(), &other_root, &other_owner);
-    drive.seed("thundoku-backup.json", &envelope.to_json().unwrap());
+    drive.seed("ligrol-backup.json", &envelope.to_json().unwrap());
 
     // 封筒の owner_id に対応する鍵が keyring に無い → 復号も取り込みもしない
-    let error = thundoku_core::drive::sync::restore_drive_backup(&mut drive, "folder-1", &env.pool)
+    let error = ligrol_core::drive::sync::restore_drive_backup(&mut drive, "folder-1", &env.pool)
         .expect_err("鍵が無ければ復元しない");
     assert!(
         matches!(&error, SyncError::BackupKeyRequired(id) if id == &other_owner),
@@ -1726,7 +1726,7 @@ fn a_v3_envelope_from_another_account_is_not_restored() {
     // 鍵を持っていても、AAD の `owner_id` が違えば復号できない（封筒の差し替え検知）
     assert!(
         envelope
-            .open(&other_root, &opfspack::derive_owner_id(sub))
+            .open(&other_root, &nartik::derive_owner_id(sub))
             .is_err(),
         "owner_id が違えば AAD が合わず開けない"
     );
@@ -1741,7 +1741,7 @@ fn upload_progress_reports_sent_bytes() {
     let env = TestEnv::new("upload-progress");
     let mut drive = FakeDrive::new();
     let bytes = plain_pack("pages/page_0001.webp", b"PROGRESS");
-    std::fs::write(env.packs().join("pack-7.opfspack"), &bytes).unwrap();
+    std::fs::write(env.packs().join("pack-7.nartik"), &bytes).unwrap();
     db::books::insert(
         &env.pool,
         &db::books::Book {
@@ -1750,9 +1750,9 @@ fn upload_progress_reports_sent_bytes() {
             author: String::new(),
             circle_name: String::new(),
             purchase_date: None,
-            file_name: "pack-7.opfspack".into(),
+            file_name: "pack-7.nartik".into(),
             file_size: bytes.len() as i64,
-            opfs_path: "pack-7.opfspack".into(),
+            opfs_path: "pack-7.nartik".into(),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -1779,13 +1779,13 @@ fn upload_progress_reports_sent_bytes() {
     db::books::set_owner_sub(
         &env.pool,
         "pack-7",
-        Some(thundoku_core::owner::encrypt(&key, "test-sub")),
+        Some(ligrol_core::owner::encrypt(&key, "test-sub")),
     )
     .unwrap();
 
     let mut uploads: Vec<SyncProgress> = Vec::new();
     let outcome = sync_with_progress(
-        thundoku_core::drive::sync::SyncRequest {
+        ligrol_core::drive::sync::SyncRequest {
             pool: &env.pool,
             drive: &mut drive,
             packs_dir: &env.packs(),
@@ -1813,7 +1813,7 @@ fn upload_progress_reports_sent_bytes() {
         .rfind(|progress| progress.bytes == total)
         .unwrap_or_else(|| panic!("100% の進捗が無い: {uploads:?}"));
     assert_eq!(last.total_bytes, Some(total));
-    assert_eq!(last.name, "pack-7.opfspack");
+    assert_eq!(last.name, "pack-7.nartik");
     // 途中の経過も報告される（半分の位置）
     assert!(
         uploads.iter().any(|progress| progress.bytes == total / 2),
@@ -1829,7 +1829,7 @@ fn excluded_book_is_not_uploaded() {
     let env = TestEnv::new("upload-excluded");
     let mut drive = FakeDrive::new();
     let bytes = plain_pack("pages/page_0001.webp", b"EXCLUDED");
-    std::fs::write(env.packs().join("pack-8.opfspack"), &bytes).unwrap();
+    std::fs::write(env.packs().join("pack-8.nartik"), &bytes).unwrap();
     db::books::insert(
         &env.pool,
         &db::books::Book {
@@ -1838,9 +1838,9 @@ fn excluded_book_is_not_uploaded() {
             author: String::new(),
             circle_name: String::new(),
             purchase_date: None,
-            file_name: "pack-8.opfspack".into(),
+            file_name: "pack-8.nartik".into(),
             file_size: bytes.len() as i64,
-            opfs_path: "pack-8.opfspack".into(),
+            opfs_path: "pack-8.nartik".into(),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -1867,7 +1867,7 @@ fn excluded_book_is_not_uploaded() {
     db::books::set_owner_sub(
         &env.pool,
         "pack-8",
-        Some(thundoku_core::owner::encrypt(&key, "test-sub")),
+        Some(ligrol_core::owner::encrypt(&key, "test-sub")),
     )
     .unwrap();
     // バックアップ対象外にする（右クリックメニューの「バックアップ対象外」と同じ）
@@ -1879,7 +1879,7 @@ fn excluded_book_is_not_uploaded() {
             .contains("pack-8")
     );
 
-    let outcome = sync(thundoku_core::drive::sync::SyncRequest {
+    let outcome = sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive: &mut drive,
         packs_dir: &env.packs(),
@@ -1896,11 +1896,11 @@ fn excluded_book_is_not_uploaded() {
     assert_eq!(drive.upload_count(), 0, "対象外なのに上げている");
     assert!(outcome.uploaded.is_empty(), "{:?}", outcome.uploaded);
     assert!(outcome.skipped.contains(&"pack-8".to_string()), "{:?}", outcome.skipped);
-    assert!(!drive.files.contains_key("id-pack-8.opfspack"));
+    assert!(!drive.files.contains_key("id-pack-8.nartik"));
 
     // 戻せば上げられる（ON/OFF が効く）
     db::books::set_backup_excluded(&env.pool, "pack-8", false).unwrap();
-    sync(thundoku_core::drive::sync::SyncRequest {
+    sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive: &mut drive,
         packs_dir: &env.packs(),
@@ -1926,14 +1926,14 @@ fn pack_can_be_deleted_from_drive_keeping_the_local_file() {
     let env = TestEnv::new("drive-delete");
     let mut drive = FakeDrive::new();
     let bytes = plain_pack("pages/page_0001.webp", b"TO-DELETE");
-    std::fs::write(env.packs().join("pack-5.opfspack"), &bytes).unwrap();
+    std::fs::write(env.packs().join("pack-5.nartik"), &bytes).unwrap();
     // Drive に上がっていて、同期の状態行もある状態を作る
-    drive.seed("pack-5.opfspack", &bytes);
+    drive.seed("pack-5.nartik", &bytes);
     db::sync_state::upsert(
         &env.pool,
         &db::sync_state::DriveSyncState {
             pack_id: "pack-5".into(),
-            drive_file_id: "id-pack-5.opfspack".into(),
+            drive_file_id: "id-pack-5.nartik".into(),
             md5: format!("{:x}", md5::compute(&bytes)),
             modified_time: None,
             last_synced_at: "2026-08-21 00:00:00".into(),
@@ -1941,7 +1941,7 @@ fn pack_can_be_deleted_from_drive_keeping_the_local_file() {
     )
     .unwrap();
 
-    let deleted = thundoku_core::drive::sync::delete_pack_from_drive(
+    let deleted = ligrol_core::drive::sync::delete_pack_from_drive(
         &env.pool,
         &mut drive,
         "folder-1",
@@ -1949,9 +1949,9 @@ fn pack_can_be_deleted_from_drive_keeping_the_local_file() {
     )
     .unwrap();
     assert!(deleted, "Drive から消せていない");
-    assert!(!drive.files.contains_key("id-pack-5.opfspack"), "Drive に残っている");
+    assert!(!drive.files.contains_key("id-pack-5.nartik"), "Drive に残っている");
     assert!(
-        env.packs().join("pack-5.opfspack").exists(),
+        env.packs().join("pack-5.nartik").exists(),
         "ローカルの pack まで消している"
     );
     assert!(
@@ -1960,7 +1960,7 @@ fn pack_can_be_deleted_from_drive_keeping_the_local_file() {
     );
 
     // 2 回目は消すものが無い（false）
-    let again = thundoku_core::drive::sync::delete_pack_from_drive(
+    let again = ligrol_core::drive::sync::delete_pack_from_drive(
         &env.pool,
         &mut drive,
         "folder-1",
@@ -1972,8 +1972,8 @@ fn pack_can_be_deleted_from_drive_keeping_the_local_file() {
 
 // ---- 書籍のバックアップ ON/OFF（`drive.sync.books`） ----
 //
-// OFF は pack（本のファイル）だけを止める。DB バックアップ（`thundoku-backup.json`）と
-// pack 鍵 bundle（`thundoku-keys.json`）は役割が別なので、これまでどおり同期する。
+// OFF は pack（本のファイル）だけを止める。DB バックアップ（`ligrol-backup.json`）と
+// pack 鍵 bundle（`ligrol-keys.json`）は役割が別なので、これまでどおり同期する。
 
 /// OFF では pack を**上げない**。ON に戻せば同じ経路で上がる。
 #[test]
@@ -1983,7 +1983,7 @@ fn sync_books_off_does_not_upload_packs() {
     let bytes = plain_pack("pages/page_0001.webp", b"BOOKS-OFF");
     let key = seed_owned_local_pack(&env, "pack-11", &bytes);
 
-    let outcome = sync(thundoku_core::drive::sync::SyncRequest {
+    let outcome = sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive: &mut drive,
         packs_dir: &env.packs(),
@@ -2000,14 +2000,14 @@ fn sync_books_off_does_not_upload_packs() {
 
     assert_eq!(drive.upload_count(), 0, "OFF なのに pack を上げている");
     assert!(outcome.uploaded.is_empty(), "{:?}", outcome.uploaded);
-    assert!(!drive.files.contains_key("id-pack-11.opfspack"));
+    assert!(!drive.files.contains_key("id-pack-11.nartik"));
     assert!(
         db::sync_state::get(&env.pool, "pack-11").unwrap().is_none(),
         "上げていないのに同期の状態行を書いている"
     );
 
     // ON なら上がる（フラグが効いている = OFF だから止まった）
-    let outcome = sync(thundoku_core::drive::sync::SyncRequest {
+    let outcome = sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive: &mut drive,
         packs_dir: &env.packs(),
@@ -2031,14 +2031,14 @@ fn sync_books_off_does_not_download_packs() {
     let mut env = TestEnv::new("books-off-download");
     let mut drive = FakeDrive::new();
     let bytes = metadata_pack("メタ本", "著者X", "サークルY", "2026-08-21");
-    drive.seed("pack-12.opfspack", &bytes);
+    drive.seed("pack-12.nartik", &bytes);
 
     let outcome = sync_env_with_books(&mut env, &mut drive, false).unwrap();
 
     assert_eq!(drive.download_count(), 0, "OFF なのに pack を取得している");
     assert!(outcome.downloaded.is_empty(), "{:?}", outcome.downloaded);
     assert!(
-        !env.packs().join("pack-12.opfspack").exists(),
+        !env.packs().join("pack-12.nartik").exists(),
         "OFF なのに置き場へ書いている"
     );
     assert!(
@@ -2050,10 +2050,10 @@ fn sync_books_off_does_not_download_packs() {
     let outcome = sync_env_with_books(&mut env, &mut drive, true).unwrap();
     assert_eq!(outcome.downloaded, vec!["pack-12"]);
     assert_eq!(drive.download_count(), 1);
-    assert!(env.packs().join("pack-12.opfspack").exists());
+    assert!(env.packs().join("pack-12.nartik").exists());
 }
 
-/// OFF でも DB バックアップ（`thundoku-backup.json`）は今までどおり上がる。
+/// OFF でも DB バックアップ（`ligrol-backup.json`）は今までどおり上がる。
 ///
 /// 所有フィルタを空にしてしまうと Drive 上の控えを「本を含まない内容」で
 /// 置き換えてしまうため、中身に所有する本が入っていることまで確かめる。
@@ -2063,16 +2063,16 @@ fn sync_books_off_still_uploads_the_database_backup() {
     let mut drive = FakeDrive::new();
     let sub = "sub-books-off";
     let owner_key = [7u8; 32];
-    let db_path = env.root.join("thundoku-shelf.db");
+    let db_path = env.root.join("ligrol.db");
     insert_owned_book(&env.pool, "book-1", "自分の本", sub, &owner_key);
     // ローカルに pack も置く（OFF なので上げてはいけない）
     std::fs::write(
-        env.packs().join("book-1.opfspack"),
+        env.packs().join("book-1.nartik"),
         plain_pack("pages/page_0001.webp", b"LOCAL-ONLY"),
     )
     .unwrap();
 
-    let outcome = sync(thundoku_core::drive::sync::SyncRequest {
+    let outcome = sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive: &mut drive,
         packs_dir: &env.packs(),
@@ -2094,33 +2094,33 @@ fn sync_books_off_still_uploads_the_database_backup() {
     let json = String::from_utf8(uploaded_backup(&drive)).unwrap();
     assert!(json.contains("自分の本"), "所有する本が含まれること");
     assert!(outcome.uploaded.is_empty(), "pack を上げてはいけない");
-    assert!(!drive.files.contains_key("id-book-1.opfspack"));
+    assert!(!drive.files.contains_key("id-book-1.nartik"));
     assert_eq!(drive.upload_count(), 1, "上がったのは DB バックアップだけ");
 }
 
 /// 設定キー `drive.sync.books` は**行が無ければ ON**（既定で本をバックアップする）。
 #[test]
 fn books_backup_is_on_without_a_setting_row() {
-    let pool = thundoku_core::db::test_pool();
-    thundoku_core::db::migrate(&pool).unwrap();
+    let pool = ligrol_core::db::test_pool();
+    ligrol_core::db::migrate(&pool).unwrap();
 
     assert!(
-        thundoku_core::drive::sync::books_backup_enabled(&pool),
+        ligrol_core::drive::sync::books_backup_enabled(&pool),
         "未設定は ON（既定）"
     );
-    thundoku_core::db::settings::set(&pool, "drive.sync.books", "false").unwrap();
+    ligrol_core::db::settings::set(&pool, "drive.sync.books", "false").unwrap();
     assert!(
-        !thundoku_core::drive::sync::books_backup_enabled(&pool),
+        !ligrol_core::drive::sync::books_backup_enabled(&pool),
         "\"false\" は OFF"
     );
-    thundoku_core::db::settings::set(&pool, "drive.sync.books", "true").unwrap();
+    ligrol_core::db::settings::set(&pool, "drive.sync.books", "true").unwrap();
     assert!(
-        thundoku_core::drive::sync::books_backup_enabled(&pool),
+        ligrol_core::drive::sync::books_backup_enabled(&pool),
         "\"true\" は ON"
     );
 }
 
-// ---- 表紙バンドル（`thundoku-thumbs.json`、仕様 §11.8）-----------------------
+// ---- 表紙バンドル（`ligrol-thumbs.json`、仕様 §11.8）-----------------------
 
 /// 表紙バンドル（と必要なら DB バックアップ）を上げる同期。
 #[allow(clippy::too_many_arguments)]
@@ -2132,8 +2132,8 @@ fn sync_thumbnails(
     owner_key: Option<&[u8; 32]>,
     db_path: Option<&std::path::Path>,
     thumbnails_dir: Option<&std::path::Path>,
-) -> Result<thundoku_core::drive::sync::SyncOutcome, SyncError> {
-    sync(thundoku_core::drive::sync::SyncRequest {
+) -> Result<ligrol_core::drive::sync::SyncOutcome, SyncError> {
+    sync(ligrol_core::drive::sync::SyncRequest {
         pool: &env.pool,
         drive,
         packs_dir: &env.packs(),
@@ -2157,14 +2157,14 @@ fn seed_owned_shelf_cover(
     database_id: &str,
     thumbnails_dir: &std::path::Path,
 ) {
-    thundoku_core::db::block_on(async {
+    ligrol_core::db::block_on(async {
         sqlx::query(
             "INSERT INTO bookshelf_items (site_id, database_id, title, owner_sub) \
              VALUES (?1, ?2, '本', ?3)",
         )
         .bind(site_id)
         .bind(database_id)
-        .bind(thundoku_core::owner::encrypt(owner_key, sub))
+        .bind(ligrol_core::owner::encrypt(owner_key, sub))
         .execute(&env.pool)
         .await
         .unwrap();
@@ -2181,13 +2181,13 @@ fn seed_owned_shelf_cover(
 fn uploaded_thumbnails(drive: &FakeDrive) -> Vec<u8> {
     drive
         .files
-        .get("id-thundoku-thumbs.json")
+        .get("id-ligrol-thumbs.json")
         .expect("表紙バンドルが存在すること")
         .bytes
         .clone()
 }
 
-/// 表紙バンドルは PRK で封をして `thundoku-thumbs.json` として上がる。
+/// 表紙バンドルは PRK で封をして `ligrol-thumbs.json` として上がる。
 #[test]
 fn thumbnail_bundle_is_uploaded_as_an_encrypted_envelope() {
     let env = TestEnv::new("thumbs-v3");
@@ -2217,8 +2217,8 @@ fn thumbnail_bundle_is_uploaded_as_an_encrypted_envelope() {
         !raw.contains("database_id") && !raw.contains("dlsite"),
         "平文（表紙のキー）が Drive のファイルに残っている"
     );
-    let owner_id = opfspack::derive_owner_id(sub);
-    let envelope = SealedEnvelope::from_json(&opfspack::THUMBS_LABEL, &uploaded)
+    let owner_id = nartik::derive_owner_id(sub);
+    let envelope = SealedEnvelope::from_json(&nartik::THUMBS_LABEL, &uploaded)
         .expect("表紙バンドルの封筒として読める");
     assert_eq!(
         envelope.format_version(),
@@ -2320,7 +2320,7 @@ fn thumbnail_bundle_is_not_uploaded_without_the_root_key() {
 
     assert!(!outcome.thumbnails_backed_up);
     assert!(
-        !drive.files.contains_key("id-thundoku-thumbs.json"),
+        !drive.files.contains_key("id-ligrol-thumbs.json"),
         "鍵が無いときは平文でも上げない"
     );
     assert_eq!(drive.upload_count(), 0);
@@ -2341,7 +2341,7 @@ fn an_empty_bundle_never_replaces_the_existing_one() {
     seed_owned_shelf_cover(&env, sub, &owner_key, "dlsite", "RJ1", &dir);
     std::fs::remove_file(dir.join("dlsite_RJ1_448.png")).unwrap();
     let existing = b"{\"entries\":[{\"keep\":true}]}".to_vec();
-    let file_id = drive.seed("thundoku-thumbs.json", &existing);
+    let file_id = drive.seed("ligrol-thumbs.json", &existing);
 
     let outcome = sync_thumbnails(
         &env,
@@ -2376,9 +2376,9 @@ fn a_broken_thumbnail_store_does_not_fail_the_sync() {
     let dir = env.root.join("thumbnails");
     seed_owned_shelf_cover(&env, sub, &owner_key, "dlsite", "RJ1", &dir);
     insert_owned_book(&env.pool, "b1", "自分の本", sub, &owner_key);
-    let db_path = env.packs().join("thundoku-shelf.db");
+    let db_path = env.packs().join("ligrol.db");
     // 派生キャッシュのテーブルを壊す（バンドルの組み立てだけが失敗する）
-    thundoku_core::db::block_on(async {
+    ligrol_core::db::block_on(async {
         sqlx::query("DROP TABLE thumbnail_share")
             .execute(&env.pool)
             .await
@@ -2398,7 +2398,7 @@ fn a_broken_thumbnail_store_does_not_fail_the_sync() {
 
     assert!(outcome.database_backed_up, "DB バックアップは上がること");
     assert!(!outcome.thumbnails_backed_up);
-    assert!(!drive.files.contains_key("id-thundoku-thumbs.json"));
+    assert!(!drive.files.contains_key("id-ligrol-thumbs.json"));
     assert_eq!(
         db::settings::get(&env.pool, "drive.thumbs.failed")
             .unwrap()
@@ -2418,7 +2418,7 @@ fn pending_backup_changes(
     root: Option<&PackRootKey>,
     sync_books: bool,
 ) -> bool {
-    thundoku_core::drive::sync::pending_backup_changes(
+    ligrol_core::drive::sync::pending_backup_changes(
         &env.pool,
         &env.packs(),
         sub,
@@ -2449,8 +2449,8 @@ fn pending_backup_changes_is_false_right_after_a_sync() {
     let root = PackRootKey::generate();
     save_root_key(sub, &root);
     insert_owned_book(&env.pool, "b1", "自分の本", sub, &owner_key);
-    std::fs::write(env.packs().join("b1.opfspack"), b"PACK").unwrap();
-    let db_path = env.packs().join("thundoku-shelf.db");
+    std::fs::write(env.packs().join("b1.nartik"), b"PACK").unwrap();
+    let db_path = env.packs().join("ligrol.db");
 
     let outcome =
         sync_with_backup(&env, &mut drive, sub, Some(&root), &owner_key, &db_path).unwrap();
@@ -2476,12 +2476,12 @@ fn pending_backup_changes_is_true_for_a_new_book() {
     let root = PackRootKey::generate();
     save_root_key(sub, &root);
     insert_owned_book(&env.pool, "b1", "自分の本", sub, &owner_key);
-    std::fs::write(env.packs().join("b1.opfspack"), b"PACK").unwrap();
-    let db_path = env.packs().join("thundoku-shelf.db");
+    std::fs::write(env.packs().join("b1.nartik"), b"PACK").unwrap();
+    let db_path = env.packs().join("ligrol.db");
     sync_with_backup(&env, &mut drive, sub, Some(&root), &owner_key, &db_path).unwrap();
 
     insert_owned_book(&env.pool, "b2", "新しい本", sub, &owner_key);
-    std::fs::write(env.packs().join("b2.opfspack"), b"PACK2").unwrap();
+    std::fs::write(env.packs().join("b2.nartik"), b"PACK2").unwrap();
 
     assert!(
         pending_backup_changes(&env, Some(sub), Some(&owner_key), Some(&root), true),
@@ -2499,8 +2499,8 @@ fn pending_backup_changes_is_true_when_user_data_changed() {
     let root = PackRootKey::generate();
     save_root_key(sub, &root);
     insert_owned_book(&env.pool, "b1", "自分の本", sub, &owner_key);
-    std::fs::write(env.packs().join("b1.opfspack"), b"PACK").unwrap();
-    let db_path = env.packs().join("thundoku-shelf.db");
+    std::fs::write(env.packs().join("b1.nartik"), b"PACK").unwrap();
+    let db_path = env.packs().join("ligrol.db");
     sync_with_backup(&env, &mut drive, sub, Some(&root), &owner_key, &db_path).unwrap();
 
     db::books::set_favorite(&env.pool, "b1", true).unwrap();
@@ -2522,8 +2522,8 @@ fn pending_backup_changes_notices_a_pack_newer_than_the_last_sync() {
     let root = PackRootKey::generate();
     save_root_key(sub, &root);
     insert_owned_book(&env.pool, "b1", "自分の本", sub, &owner_key);
-    std::fs::write(env.packs().join("b1.opfspack"), b"PACK").unwrap();
-    let db_path = env.packs().join("thundoku-shelf.db");
+    std::fs::write(env.packs().join("b1.nartik"), b"PACK").unwrap();
+    let db_path = env.packs().join("ligrol.db");
     sync_with_backup(&env, &mut drive, sub, Some(&root), &owner_key, &db_path).unwrap();
 
     // 同期の記帳を過去に倒す（mtime の比較だけで判定できる決定的な状態にする）

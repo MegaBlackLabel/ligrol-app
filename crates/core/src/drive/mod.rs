@@ -13,7 +13,7 @@ use std::io::Write as _;
 const DRIVE_FILES_URL: &str = "https://www.googleapis.com/drive/v3/files";
 const DRIVE_UPLOAD_URL: &str = "https://www.googleapis.com/upload/drive/v3/files";
 const FIELDS: &str = "nextPageToken,files(id,name,size,md5Checksum,modifiedTime)";
-const MULTIPART_BOUNDARY: &str = "thundoku_shelf_boundary";
+const MULTIPART_BOUNDARY: &str = "ligrol_boundary";
 
 /// resumable upload の 1 チャンクの大きさ（8 MiB）。
 ///
@@ -23,7 +23,7 @@ const MULTIPART_BOUNDARY: &str = "thundoku_shelf_boundary";
 pub const RESUMABLE_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
 
 /// My Drive 直下に作る同期フォルダの名前（`drive.sync.folder_id` に id を保存する）。
-pub const SYNC_FOLDER_NAME: &str = "thundoku-shelf";
+pub const SYNC_FOLDER_NAME: &str = "ligrol";
 
 /// Drive API の size フィールドをパースする（number と string の両対応）。
 fn parse_size(value: &serde_json::Value) -> Option<i64> {
@@ -218,12 +218,12 @@ pub fn ensure_folder(drive: &mut dyn DriveApi, name: &str) -> Result<String, Dri
 
 /// multipart アップロードの前後の境界（メタデータ部分と本体の間に挟む）。
 fn multipart_wrapper(name: &str, folder_id: &str) -> (Vec<u8>, Vec<u8>) {
-    let pack_id = name.strip_suffix(".opfspack").unwrap_or(name);
+    let pack_id = name.strip_suffix(".nartik").unwrap_or(name);
     let metadata = json!({
         "name": name,
         "parents": [folder_id],
         "mimeType": "application/octet-stream",
-        "appProperties": { "app": "thundoku-shelf", "packId": pack_id },
+        "appProperties": { "app": "ligrol", "packId": pack_id },
     });
     let prefix = format!(
         "--{MULTIPART_BOUNDARY}\r\nContent-Type: application/json\r\n\r\n{}\r\n--{MULTIPART_BOUNDARY}\r\nContent-Type: application/octet-stream\r\n\r\n",
@@ -610,12 +610,12 @@ impl DriveApi for DriveClient {
         let size_header = size.to_string();
         // 1) セッション開始（メタデータだけ送る）。
         let session = {
-            let pack_id = name.strip_suffix(".opfspack").unwrap_or(name);
+            let pack_id = name.strip_suffix(".nartik").unwrap_or(name);
             let metadata = json!({
                 "name": name,
                 "parents": [folder_id],
                 "mimeType": "application/octet-stream",
-                "appProperties": { "app": "thundoku-shelf", "packId": pack_id },
+                "appProperties": { "app": "ligrol", "packId": pack_id },
             });
             let response = self.request(
                 "POST",
@@ -791,7 +791,7 @@ mod tests {
     }
 
     /// 手元で **時間とピークメモリ**を測るための計測（CI では走らせない）。
-    /// 実行: `cargo test -p thundoku-core --lib -- --ignored --nocapture measure_stream_upload`
+    /// 実行: `cargo test -p ligrol-core --lib -- --ignored --nocapture measure_stream_upload`
     #[test]
     #[ignore]
     fn measure_stream_upload_memory_and_time() {
@@ -831,9 +831,9 @@ mod tests {
         }
 
         let size = 256 * 1024 * 1024u64; // 256MiB
-        let dir = std::env::temp_dir().join("thundoku-upload-measure");
+        let dir = std::env::temp_dir().join("ligrol-upload-measure");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("big.opfspack");
+        let path = dir.join("big.nartik");
         {
             let mut file = std::fs::File::create(&path).unwrap();
             let chunk = vec![9u8; 1024 * 1024];
@@ -851,7 +851,7 @@ mod tests {
         );
         let started = std::time::Instant::now();
         client
-            .upload_multipart_from_file("big.opfspack", "folder", &path)
+            .upload_multipart_from_file("big.nartik", "folder", &path)
             .expect("stream");
         let stream_time = started.elapsed();
 
@@ -864,7 +864,7 @@ mod tests {
         let payload = std::fs::read(&path).unwrap();
         let started = std::time::Instant::now();
         client2
-            .upload_multipart("big.opfspack", "folder", &payload)
+            .upload_multipart("big.nartik", "folder", &payload)
             .expect("memory");
         let memory_time = started.elapsed();
 
@@ -959,10 +959,10 @@ mod tests {
             (0, end.parse().unwrap())
         }
 
-        let dir = std::env::temp_dir().join("thundoku-resumable-upload-test");
+        let dir = std::env::temp_dir().join("ligrol-resumable-upload-test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("big.opfspack");
+        let path = dir.join("big.nartik");
         // 2.5 チャンク = 3 回の PUT（最後だけ端数）。
         let size = RESUMABLE_CHUNK_BYTES * 5 / 2;
         let payload: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
@@ -982,7 +982,7 @@ mod tests {
         let progress_for_callback = Arc::clone(&progress);
         let id = client
             .upload_resumable_from_file_with_progress(
-                "big.opfspack",
+                "big.nartik",
                 "folder-1",
                 &path,
                 &mut |sent, total| {
@@ -1060,10 +1060,10 @@ mod tests {
             }
         }
 
-        let dir = std::env::temp_dir().join("thundoku-resumable-stalled-test");
+        let dir = std::env::temp_dir().join("ligrol-resumable-stalled-test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("stalled.opfspack");
+        let path = dir.join("stalled.nartik");
         std::fs::write(&path, vec![5u8; 1024]).unwrap();
 
         let puts = Arc::new(Mutex::new(0usize));
@@ -1074,7 +1074,7 @@ mod tests {
             "token",
         );
         let error = client
-            .upload_resumable_from_file("stalled.opfspack", "folder-1", &path)
+            .upload_resumable_from_file("stalled.nartik", "folder-1", &path)
             .expect_err("進まない応答はエラーにする");
         assert!(error.to_string().contains("no progress"), "{error}");
         assert!(*puts.lock() <= 2, "2 回で止まる（{} 回）", puts.lock());
@@ -1118,9 +1118,9 @@ mod tests {
 
         // **2GiB 級の本体を載せない**ことが目的なので、ここでは小さなファイルで
         // 「流した本文がメモリ版と同一」を確かめる。
-        let dir = std::env::temp_dir().join("thundoku-drive-stream-upload-test");
+        let dir = std::env::temp_dir().join("ligrol-drive-stream-upload-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("sample.opfspack");
+        let path = dir.join("sample.nartik");
         let payload: Vec<u8> = (0..64 * 1024u32).map(|i| (i % 251) as u8).collect();
         std::fs::write(&path, &payload).unwrap();
 
@@ -1134,15 +1134,15 @@ mod tests {
         };
         let mut client = DriveClient::new(Box::new(transport), "token");
         let id = client
-            .upload_multipart_from_file("book.opfspack", "folder-1", &path)
+            .upload_multipart_from_file("book.nartik", "folder-1", &path)
             .expect("upload");
         assert_eq!(id, "file-1");
         assert_eq!(*api_calls.lock(), 0, "send は使わない");
 
-        let (prefix, suffix) = multipart_wrapper("book.opfspack", "folder-1");
+        let (prefix, suffix) = multipart_wrapper("book.nartik", "folder-1");
         // multipart のメタデータ（名前・親・appProperties の packId）が入っている
         let prefix_text = String::from_utf8_lossy(&prefix);
-        assert!(prefix_text.contains("\"name\":\"book.opfspack\""), "{prefix_text}");
+        assert!(prefix_text.contains("\"name\":\"book.nartik\""), "{prefix_text}");
         assert!(prefix_text.contains("\"packId\":\"book\""), "{prefix_text}");
 
         // **流した本文がメモリ版の組み立てとバイト一致**し、長さも申告どおり
@@ -1259,10 +1259,10 @@ mod tests {
             }
         }
 
-        let dir = std::env::temp_dir().join("thundoku-drive-file-test");
+        let dir = std::env::temp_dir().join("ligrol-drive-file-test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("テンポラリを作れる");
-        let path = dir.join("pack.opfspack");
+        let path = dir.join("pack.nartik");
 
         // 1) 正常: チャンクが順に書かれ、進捗が出る
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -1362,7 +1362,7 @@ mod tests {
                         "nextPageToken": "page-2",
                         "files": [{
                             "id": "old",
-                            "name": "thundoku-shelf",
+                            "name": "ligrol",
                             "modifiedTime": "2024-01-01T00:00:00.000Z",
                         }],
                     })
@@ -1370,7 +1370,7 @@ mod tests {
                     json!({
                         "files": [{
                             "id": "new",
-                            "name": "thundoku-shelf",
+                            "name": "ligrol",
                             "modifiedTime": "2025-01-01T00:00:00.000Z",
                         }],
                     })
@@ -1391,7 +1391,7 @@ mod tests {
             "token",
         );
         let folders = client
-            .find_root_folders("thundoku-shelf")
+            .find_root_folders("ligrol")
             .expect("探せるはず");
         assert_eq!(
             folders
@@ -1416,7 +1416,7 @@ mod tests {
             .expect("utf-8");
         assert_eq!(
             query,
-            "mimeType='application/vnd.google-apps.folder' and name='thundoku-shelf' and 'root' in parents and trashed=false"
+            "mimeType='application/vnd.google-apps.folder' and name='ligrol' and 'root' in parents and trashed=false"
         );
         assert!(
             urls[1].contains("pageToken=page%2D2"),
@@ -1443,7 +1443,7 @@ mod tests {
     fn root_folder(id: &str, modified_time: Option<&str>) -> DriveFile {
         DriveFile {
             id: id.to_string(),
-            name: "thundoku-shelf".to_string(),
+            name: "ligrol".to_string(),
             size: None,
             md5_checksum: None,
             modified_time: modified_time.map(String::from),
@@ -1493,7 +1493,7 @@ mod tests {
             "existing",
             Some("2025-05-01T00:00:00.000Z"),
         )]);
-        let id = ensure_folder(&mut drive, "thundoku-shelf").expect("既存を使える");
+        let id = ensure_folder(&mut drive, "ligrol").expect("既存を使える");
         assert_eq!(id, "existing");
         assert!(
             drive.created.is_empty(),
@@ -1506,9 +1506,9 @@ mod tests {
     #[test]
     fn ensure_folder_creates_when_none_exists() {
         let mut drive = FolderDrive::with_roots(Vec::new());
-        let id = ensure_folder(&mut drive, "thundoku-shelf").expect("作れる");
+        let id = ensure_folder(&mut drive, "ligrol").expect("作れる");
         assert_eq!(id, "created-folder");
-        assert_eq!(drive.created, vec!["thundoku-shelf".to_string()]);
+        assert_eq!(drive.created, vec!["ligrol".to_string()]);
     }
 
     /// 複数あるときの選択は決定的: `modifiedTime` 降順 → 同値・欠落は `id` 昇順。
@@ -1526,7 +1526,7 @@ mod tests {
         ];
         let mut drive = FolderDrive::with_roots(roots.clone());
         assert_eq!(
-            ensure_folder(&mut drive, "thundoku-shelf").expect("選べる"),
+            ensure_folder(&mut drive, "ligrol").expect("選べる"),
             "a",
             "新しい順 → 同時刻は id 昇順"
         );
@@ -1535,7 +1535,7 @@ mod tests {
         reversed.reverse();
         let mut drive = FolderDrive::with_roots(reversed);
         assert_eq!(
-            ensure_folder(&mut drive, "thundoku-shelf").expect("選べる"),
+            ensure_folder(&mut drive, "ligrol").expect("選べる"),
             "a"
         );
         assert!(drive.created.is_empty(), "既存があるので作らない");

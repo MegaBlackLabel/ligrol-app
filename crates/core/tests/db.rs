@@ -1,11 +1,11 @@
 //! Storage/DB tests: verbatim schema migration + repository CRUD.
 
-use thundoku_core::db::{
+use ligrol_core::db::{
     books, bookshelf, checklist, contents, favorites, progress, settings, sync_state, tags,
 };
 
-fn memory_db() -> thundoku_core::db::SqlitePool {
-    thundoku_core::db::test_pool()
+fn memory_db() -> ligrol_core::db::SqlitePool {
+    ligrol_core::db::test_pool()
 }
 
 /// `is_drm` の既定値は「不明（2）」であること。
@@ -17,7 +17,7 @@ fn memory_db() -> thundoku_core::db::SqlitePool {
 fn is_drm_defaults_to_unknown() {
     let pool = memory_db();
     for table in ["bookshelf_items", "books"] {
-        let default: Option<String> = thundoku_core::db::block_on(async {
+        let default: Option<String> = ligrol_core::db::block_on(async {
             sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
                 "SELECT dflt_value FROM pragma_table_info('{table}') WHERE name = 'is_drm'",
             )))
@@ -33,7 +33,7 @@ fn is_drm_defaults_to_unknown() {
     }
 
     // 列を指定しない INSERT が「不明」になる（既定が実際に効いている）
-    thundoku_core::db::block_on(async {
+    ligrol_core::db::block_on(async {
         sqlx::query(
             "INSERT INTO bookshelf_items (site_id, database_id, title) \
              VALUES ('techbookfest', 'y', 'z')",
@@ -42,7 +42,7 @@ fn is_drm_defaults_to_unknown() {
         .await
     })
     .unwrap();
-    let is_drm: i64 = thundoku_core::db::block_on(async {
+    let is_drm: i64 = ligrol_core::db::block_on(async {
         sqlx::query_scalar("SELECT is_drm FROM bookshelf_items WHERE database_id = 'y'")
             .fetch_one(&pool)
             .await
@@ -54,7 +54,7 @@ fn is_drm_defaults_to_unknown() {
 #[test]
 fn migrate_creates_all_schema_tables() {
     let pool = memory_db();
-    let names: Vec<String> = thundoku_core::db::block_on(async {
+    let names: Vec<String> = ligrol_core::db::block_on(async {
         sqlx::query_scalar(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
         )
@@ -95,7 +95,7 @@ fn migrate_creates_all_schema_tables() {
         ]
     );
     // techbookfest seed present
-    let count: i64 = thundoku_core::db::block_on(async {
+    let count: i64 = ligrol_core::db::block_on(async {
         sqlx::query_scalar("SELECT COUNT(*) FROM sites WHERE id = 'techbookfest'")
             .fetch_one(&pool)
             .await
@@ -103,7 +103,7 @@ fn migrate_creates_all_schema_tables() {
     .unwrap();
     assert_eq!(count, 1);
     // booth seed present
-    let count: i64 = thundoku_core::db::block_on(async {
+    let count: i64 = ligrol_core::db::block_on(async {
         sqlx::query_scalar("SELECT COUNT(*) FROM sites WHERE id = 'booth'")
             .fetch_one(&pool)
             .await
@@ -146,10 +146,10 @@ fn favorite_entities_roundtrip() {
 
 #[test]
 fn migrate_is_idempotent() {
-    let pool = thundoku_core::db::test_pool();
-    thundoku_core::db::migrate(&pool).unwrap();
-    thundoku_core::db::migrate(&pool).unwrap();
-    let count: i64 = thundoku_core::db::block_on(async {
+    let pool = ligrol_core::db::test_pool();
+    ligrol_core::db::migrate(&pool).unwrap();
+    ligrol_core::db::migrate(&pool).unwrap();
+    let count: i64 = ligrol_core::db::block_on(async {
         sqlx::query_scalar("SELECT COUNT(*) FROM sites")
             .fetch_one(&pool)
             .await
@@ -177,7 +177,7 @@ fn legacy_books_get_the_page_turn_column() {
             purchase_date: None,
             file_name: "t.zip".into(),
             file_size: 1,
-            opfs_path: "b1.opfspack".into(),
+            opfs_path: "b1.nartik".into(),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -202,7 +202,7 @@ fn legacy_books_get_the_page_turn_column() {
     .unwrap();
 
     // page_turn 列の無い状態に戻して「後発列を持たない既存 DB」を再現する
-    thundoku_core::db::block_on(async {
+    ligrol_core::db::block_on(async {
         sqlx::query("ALTER TABLE books DROP COLUMN page_turn")
             .execute(&pool)
             .await
@@ -216,7 +216,7 @@ fn legacy_books_get_the_page_turn_column() {
         assert_eq!(has, 0, "前提: page_turn 列が無い状態にできていない");
     });
 
-    thundoku_core::db::migrate(&pool).unwrap();
+    ligrol_core::db::migrate(&pool).unwrap();
 
     assert_eq!(
         books::get(&pool, "b1").unwrap().unwrap().title,
@@ -268,7 +268,7 @@ fn book_insert_get_list_delete() {
         purchase_date: Some("2026-08-21".into()),
         file_name: "book.pdf".into(),
         file_size: 12345,
-        opfs_path: "book-1.opfspack".into(),
+        opfs_path: "book-1.nartik".into(),
         cover_thumbnail: None,
         tbf_product_id: None,
         site_id: None,
@@ -309,7 +309,7 @@ fn set_tbf_product_id_links_downloaded_book_to_shelf() {
         purchase_date: Some("2026-08-21".into()),
         file_name: "book.pdf".into(),
         file_size: 12345,
-        opfs_path: "book-1.opfspack".into(),
+        opfs_path: "book-1.nartik".into(),
         cover_thumbnail: None,
         tbf_product_id: None,
         site_id: None,
@@ -350,7 +350,7 @@ fn owner_sub_roundtrip() {
         purchase_date: None,
         file_name: "book.pdf".into(),
         file_size: 12345,
-        opfs_path: "book-1.opfspack".into(),
+        opfs_path: "book-1.nartik".into(),
         cover_thumbnail: None,
         tbf_product_id: None,
         site_id: None,
@@ -402,7 +402,7 @@ fn resolve_reuse_id_returns_owned_match_only() {
         purchase_date: None,
         file_name: "f.pdf".into(),
         file_size: 1,
-        opfs_path: format!("{id}.opfspack"),
+        opfs_path: format!("{id}.nartik"),
         cover_thumbnail: None,
         tbf_product_id: Some("db-1".into()),
         site_id: Some("techbookfest".into()),
@@ -429,7 +429,7 @@ fn resolve_reuse_id_returns_owned_match_only() {
     books::set_owner_sub(
         &pool,
         "book-1",
-        Some(thundoku_core::owner::encrypt(&key, "sub-A")),
+        Some(ligrol_core::owner::encrypt(&key, "sub-A")),
     )
     .unwrap();
     // 同一 source + sub-A → book-1 を再利用
@@ -466,7 +466,7 @@ fn owned_book_ids_filters_by_owner() {
         purchase_date: None,
         file_name: "f.pdf".into(),
         file_size: 1,
-        opfs_path: format!("{id}.opfspack"),
+        opfs_path: format!("{id}.nartik"),
         cover_thumbnail: None,
         tbf_product_id: None,
         site_id: None,
@@ -494,13 +494,13 @@ fn owned_book_ids_filters_by_owner() {
     books::set_owner_sub(
         &pool,
         "book-1",
-        Some(thundoku_core::owner::encrypt(&key, "A")),
+        Some(ligrol_core::owner::encrypt(&key, "A")),
     )
     .unwrap();
     books::set_owner_sub(
         &pool,
         "book-3",
-        Some(thundoku_core::owner::encrypt(&key, "B")),
+        Some(ligrol_core::owner::encrypt(&key, "B")),
     )
     .unwrap();
 
@@ -523,13 +523,13 @@ fn owned_book_ids_filters_by_owner() {
 #[test]
 fn clear_owner_model_first_run_wipes_and_sets_flag() {
     let pool = memory_db();
-    let packs = std::env::temp_dir().join("thundoku-owner-packs");
-    let thumbs = std::env::temp_dir().join("thundoku-owner-thumbs");
+    let packs = std::env::temp_dir().join("ligrol-owner-packs");
+    let thumbs = std::env::temp_dir().join("ligrol-owner-thumbs");
     let _ = std::fs::remove_dir_all(&packs);
     let _ = std::fs::remove_dir_all(&thumbs);
     std::fs::create_dir_all(&packs).unwrap();
     std::fs::create_dir_all(&thumbs).unwrap();
-    std::fs::write(packs.join("b1.opfspack"), b"data").unwrap();
+    std::fs::write(packs.join("b1.nartik"), b"data").unwrap();
     let book = books::Book {
         id: "book-1".into(),
         title: "t".into(),
@@ -538,7 +538,7 @@ fn clear_owner_model_first_run_wipes_and_sets_flag() {
         purchase_date: None,
         file_name: "f.pdf".into(),
         file_size: 1,
-        opfs_path: "book-1.opfspack".into(),
+        opfs_path: "book-1.nartik".into(),
         cover_thumbnail: None,
         tbf_product_id: None,
         site_id: None,
@@ -561,15 +561,15 @@ fn clear_owner_model_first_run_wipes_and_sets_flag() {
     };
     books::insert(&pool, &book).unwrap();
     // 初回 → クリア & フラグセット
-    assert!(thundoku_core::db::clear_owner_model_if_first_run(&pool, &packs, &thumbs).unwrap());
+    assert!(ligrol_core::db::clear_owner_model_if_first_run(&pool, &packs, &thumbs).unwrap());
     assert_eq!(books::list(&pool).unwrap().len(), 0);
-    assert!(!packs.join("b1.opfspack").exists());
+    assert!(!packs.join("b1.nartik").exists());
     assert_eq!(
         settings::get(&pool, "owner_sub_model.initialized").unwrap(),
         Some("1".into())
     );
     // 2 回目 → no-op（クリアしない）
-    assert!(!thundoku_core::db::clear_owner_model_if_first_run(&pool, &packs, &thumbs).unwrap());
+    assert!(!ligrol_core::db::clear_owner_model_if_first_run(&pool, &packs, &thumbs).unwrap());
 }
 
 #[test]
@@ -1084,7 +1084,7 @@ fn reading_progress_roundtrip() {
         purchase_date: None,
         file_name: "t.pdf".into(),
         file_size: 1,
-        opfs_path: "book-1.opfspack".into(),
+        opfs_path: "book-1.nartik".into(),
         cover_thumbnail: None,
         tbf_product_id: None,
         site_id: None,
@@ -1130,7 +1130,7 @@ fn tags_set_list_and_favorites() {
         purchase_date: None,
         file_name: "t.pdf".into(),
         file_size: 1,
-        opfs_path: "book-1.opfspack".into(),
+        opfs_path: "book-1.nartik".into(),
         cover_thumbnail: None,
         tbf_product_id: None,
         site_id: None,
@@ -1197,8 +1197,8 @@ fn drive_sync_state_crud() {
     assert!(sync_state::get(&pool, "pack-1").unwrap().is_none());
 }
 
-fn column_exists(pool: &thundoku_core::db::SqlitePool, table: &str, column: &str) -> bool {
-    thundoku_core::db::block_on(async {
+fn column_exists(pool: &ligrol_core::db::SqlitePool, table: &str, column: &str) -> bool {
+    ligrol_core::db::block_on(async {
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pragma_table_info(?1) WHERE name = ?2")
             .bind(table)
             .bind(column)
@@ -1234,7 +1234,7 @@ fn source_metadata_columns_and_sites_exist() {
         );
         assert!(column_exists(&pool, "books", c), "books.{c} is missing");
     }
-    let sites: Vec<String> = thundoku_core::db::block_on(async {
+    let sites: Vec<String> = ligrol_core::db::block_on(async {
         sqlx::query_scalar("SELECT id FROM sites ORDER BY id")
             .fetch_all(&pool)
             .await
@@ -1263,7 +1263,7 @@ fn book_metadata_roundtrip() {
         purchase_date: Some("2026-09-01".into()),
         file_name: "b.zip".into(),
         file_size: 100,
-        opfs_path: "book-meta.opfspack".into(),
+        opfs_path: "book-meta.nartik".into(),
         cover_thumbnail: None,
         tbf_product_id: Some("RJ00000001".into()),
         site_id: Some("dlsite".into()),
@@ -1296,7 +1296,7 @@ fn book_metadata_roundtrip() {
 /// （アプリ側は `let _ =` で握り潰すため無言で失敗する）。
 #[test]
 fn books_delete_removes_dependent_rows() {
-    use thundoku_core::db::documents;
+    use ligrol_core::db::documents;
     let pool = memory_db();
     let stamp = "2026-09-12 00:00:00";
     books::insert(
@@ -1309,7 +1309,7 @@ fn books_delete_removes_dependent_rows() {
             purchase_date: None,
             file_name: "b.zip".into(),
             file_size: 100,
-            opfs_path: "book-del.opfspack".into(),
+            opfs_path: "book-del.nartik".into(),
             cover_thumbnail: None,
             tbf_product_id: Some("7825209".into()),
             site_id: Some("booth".into()),
@@ -1358,7 +1358,7 @@ fn books_delete_removes_dependent_rows() {
             format_id: None,
             page_number: 1,
             image_type: "page".into(),
-            opfs_path: "book-del.opfspack".into(),
+            opfs_path: "book-del.nartik".into(),
             width: 10,
             height: 10,
             mime_type: "image/webp".into(),
@@ -1423,7 +1423,7 @@ fn books_delete_removes_dependent_rows() {
 /// ページが出る（実データで 1 ページが 3 行になっていた）。
 #[test]
 fn migrate_prunes_stale_documents_for_the_same_book() {
-    use thundoku_core::db::documents;
+    use ligrol_core::db::documents;
     let pool = memory_db();
     let stamp = "2026-09-12 00:00:00";
     books::insert(
@@ -1436,7 +1436,7 @@ fn migrate_prunes_stale_documents_for_the_same_book() {
             purchase_date: None,
             file_name: "b.zip".into(),
             file_size: 100,
-            opfs_path: "book-dup.opfspack".into(),
+            opfs_path: "book-dup.nartik".into(),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: Some("fanza".into()),
@@ -1477,7 +1477,7 @@ fn migrate_prunes_stale_documents_for_the_same_book() {
         format_id: None,
         page_number: 1,
         image_type: "page".into(),
-        opfs_path: "book-dup.opfspack".into(),
+        opfs_path: "book-dup.nartik".into(),
         width: 10,
         height: 10,
         mime_type: "image/webp".into(),
@@ -1492,7 +1492,7 @@ fn migrate_prunes_stale_documents_for_the_same_book() {
     documents::insert_images_batch(&pool, &[image("img-new", "doc-new")]).unwrap();
 
     // 起動時と同じ手順（マイグレーションは適用済みなので掃除だけが効く）
-    thundoku_core::db::migrate(&pool).unwrap();
+    ligrol_core::db::migrate(&pool).unwrap();
 
     let images = documents::images_for_selection(&pool, "book-dup", None, None).unwrap();
     assert_eq!(
@@ -1567,7 +1567,7 @@ fn legacy_progress_is_migrated_to_content_scope() {
         purchase_date: None,
         file_name: "t.zip".into(),
         file_size: 1,
-        opfs_path: format!("{id}.opfspack"),
+        opfs_path: format!("{id}.nartik"),
         cover_thumbnail: None,
         tbf_product_id: None,
         site_id: None,
@@ -1616,7 +1616,7 @@ fn legacy_progress_is_migrated_to_content_scope() {
     .unwrap();
 
     // 旧スキーマ（content_id 無し）を再現して旧行を入れる
-    thundoku_core::db::block_on(async {
+    ligrol_core::db::block_on(async {
         sqlx::query("DROP TABLE reading_progress")
             .execute(&pool)
             .await
@@ -1658,7 +1658,7 @@ fn legacy_progress_is_migrated_to_content_scope() {
         .unwrap();
     });
 
-    let moved = thundoku_core::db::run_progress_content_migration(&pool).unwrap();
+    let moved = ligrol_core::db::run_progress_content_migration(&pool).unwrap();
     assert_eq!(moved, 2, "進捗 1 行 + ページ毎記録 1 行が移行される");
 
     // 優先コンテンツ（c1）の行として引き継がれる
@@ -1668,14 +1668,14 @@ fn legacy_progress_is_migrated_to_content_scope() {
         progress::get(&pool, "book-p").unwrap().unwrap().content_id,
         "c1"
     );
-    let views = thundoku_core::db::page_views::for_book(&pool, "book-p").unwrap();
+    let views = ligrol_core::db::page_views::for_book(&pool, "book-p").unwrap();
     assert_eq!(views.len(), 1);
     assert_eq!(views[0].content_id, "c1");
     assert_eq!(views[0].view_count, 4);
 
     // 2 回目は対象が無い（冪等）
     assert_eq!(
-        thundoku_core::db::run_progress_content_migration(&pool).unwrap(),
+        ligrol_core::db::run_progress_content_migration(&pool).unwrap(),
         0
     );
 }
@@ -1693,7 +1693,7 @@ fn progress_is_scoped_per_content() {
         purchase_date: None,
         file_name: "s.zip".into(),
         file_size: 1,
-        opfs_path: "book-s.opfspack".into(),
+        opfs_path: "book-s.nartik".into(),
         cover_thumbnail: None,
         tbf_product_id: None,
         site_id: None,
@@ -1802,7 +1802,7 @@ fn legacy_content_labels_are_migrated() {
         purchase_date: None,
         file_name: file_name.into(),
         file_size: 1,
-        opfs_path: format!("{id}.opfspack"),
+        opfs_path: format!("{id}.nartik"),
         cover_thumbnail: None,
         tbf_product_id: None,
         site_id: None,
@@ -1926,7 +1926,7 @@ fn book_contents_and_formats_roundtrip() {
         purchase_date: None,
         file_name: "multi.zip".into(),
         file_size: 10,
-        opfs_path: "book-c.opfspack".into(),
+        opfs_path: "book-c.nartik".into(),
         cover_thumbnail: None,
         tbf_product_id: None,
         site_id: None,
@@ -2055,9 +2055,9 @@ fn book_contents_and_formats_roundtrip() {
 }
 
 /// `is_drm` 列を直接入れるための最小行（移行のテスト用。FK があるので sites を先に作る）。
-fn seed_site(pool: &thundoku_core::db::SqlitePool, id: &str) {
+fn seed_site(pool: &ligrol_core::db::SqlitePool, id: &str) {
     let url = format!("https://{id}.example");
-    thundoku_core::db::block_on(async {
+    ligrol_core::db::block_on(async {
         sqlx::query("INSERT OR IGNORE INTO sites (id, name, url) VALUES (?1, ?2, ?3)")
             .bind(id)
             .bind(id)
@@ -2068,8 +2068,8 @@ fn seed_site(pool: &thundoku_core::db::SqlitePool, id: &str) {
     .unwrap();
 }
 
-fn seed_shelf_item(pool: &thundoku_core::db::SqlitePool, site: &str, id: &str, is_drm: i64) {
-    thundoku_core::db::block_on(async {
+fn seed_shelf_item(pool: &ligrol_core::db::SqlitePool, site: &str, id: &str, is_drm: i64) {
+    ligrol_core::db::block_on(async {
         sqlx::query(
             "INSERT INTO bookshelf_items (site_id, database_id, title, is_drm) VALUES (?1, ?2, ?3, ?4)",
         )
@@ -2083,15 +2083,15 @@ fn seed_shelf_item(pool: &thundoku_core::db::SqlitePool, site: &str, id: &str, i
     .unwrap();
 }
 
-fn seed_book(pool: &thundoku_core::db::SqlitePool, id: &str, is_drm: i64) {
-    thundoku_core::db::block_on(async {
+fn seed_book(pool: &ligrol_core::db::SqlitePool, id: &str, is_drm: i64) {
+    ligrol_core::db::block_on(async {
         sqlx::query(
             "INSERT INTO books (id, title, file_name, file_size, opfs_path, is_drm) \
              VALUES (?1, ?2, 'book.pdf', 1, ?3, ?4)",
         )
         .bind(id)
         .bind(format!("本 {id}"))
-        .bind(format!("{id}.opfspack"))
+        .bind(format!("{id}.nartik"))
         .bind(is_drm)
         .execute(pool)
         .await
@@ -2099,8 +2099,8 @@ fn seed_book(pool: &thundoku_core::db::SqlitePool, id: &str, is_drm: i64) {
     .unwrap();
 }
 
-fn shelf_is_drm(pool: &thundoku_core::db::SqlitePool, id: &str) -> i64 {
-    thundoku_core::db::block_on(async {
+fn shelf_is_drm(pool: &ligrol_core::db::SqlitePool, id: &str) -> i64 {
+    ligrol_core::db::block_on(async {
         sqlx::query_scalar("SELECT is_drm FROM bookshelf_items WHERE database_id = ?1")
             .bind(id)
             .fetch_one(pool)
@@ -2109,8 +2109,8 @@ fn shelf_is_drm(pool: &thundoku_core::db::SqlitePool, id: &str) -> i64 {
     .unwrap()
 }
 
-fn book_is_drm(pool: &thundoku_core::db::SqlitePool, id: &str) -> i64 {
-    thundoku_core::db::block_on(async {
+fn book_is_drm(pool: &ligrol_core::db::SqlitePool, id: &str) -> i64 {
+    ligrol_core::db::block_on(async {
         sqlx::query_scalar("SELECT is_drm FROM books WHERE id = ?1")
             .bind(id)
             .fetch_one(pool)
@@ -2131,7 +2131,7 @@ fn drm_status_migration_moves_legacy_zeros_to_unknown_once() {
     seed_book(&pool, "book-1", 0);
 
     assert!(
-        thundoku_core::db::migrate_drm_status_once(&pool).unwrap(),
+        ligrol_core::db::migrate_drm_status_once(&pool).unwrap(),
         "初回は移行する"
     );
     assert_eq!(
@@ -2146,7 +2146,7 @@ fn drm_status_migration_moves_legacy_zeros_to_unknown_once() {
     seed_site(&pool, "fanza");
     seed_shelf_item(&pool, "fanza", "RJ3", 0);
     assert!(
-        !thundoku_core::db::migrate_drm_status_once(&pool).unwrap(),
+        !ligrol_core::db::migrate_drm_status_once(&pool).unwrap(),
         "2 回目は移行しない"
     );
     assert_eq!(
@@ -2164,13 +2164,13 @@ fn set_drm_status_records_the_verified_result() {
     seed_site(&pool, "fanza");
     seed_shelf_item(&pool, "fanza", "RJ4", 2);
 
-    bookshelf::set_drm_status(&pool, "fanza", "RJ4", thundoku_core::drm::DrmStatus::NoDrm).unwrap();
+    bookshelf::set_drm_status(&pool, "fanza", "RJ4", ligrol_core::drm::DrmStatus::NoDrm).unwrap();
     assert_eq!(shelf_is_drm(&pool, "RJ4"), 0);
     bookshelf::set_drm_status(
         &pool,
         "fanza",
         "RJ4",
-        thundoku_core::drm::DrmStatus::Protected,
+        ligrol_core::drm::DrmStatus::Protected,
     )
     .unwrap();
     assert_eq!(shelf_is_drm(&pool, "RJ4"), 1);
@@ -2178,7 +2178,7 @@ fn set_drm_status_records_the_verified_result() {
         &pool,
         "fanza",
         "missing",
-        thundoku_core::drm::DrmStatus::NoDrm,
+        ligrol_core::drm::DrmStatus::NoDrm,
     )
     .unwrap();
 }
@@ -2190,7 +2190,7 @@ fn set_drm_status_records_the_verified_result() {
 /// 既知の値を持ってきたときだけ上書きする（`author` / `tags_json` と同じ扱い）。
 #[test]
 fn sync_does_not_clobber_a_verified_drm_status() {
-    use thundoku_core::drm::DrmStatus;
+    use ligrol_core::drm::DrmStatus;
 
     let pool = memory_db();
     seed_site(&pool, "fanza");
@@ -2233,7 +2233,7 @@ fn sync_does_not_clobber_a_verified_drm_status() {
 // 付箋メモ（`page_notes.memo`）は平文で保存しない。**生 SQL** で保存値そのものを
 // 確かめ（平文が残っていないこと）、復号した値が元に戻ることも確かめる。
 
-fn seed_crypto_book(pool: &thundoku_core::db::SqlitePool, id: &str) {
+fn seed_crypto_book(pool: &ligrol_core::db::SqlitePool, id: &str) {
     books::insert(
         pool,
         &books::Book {
@@ -2244,7 +2244,7 @@ fn seed_crypto_book(pool: &thundoku_core::db::SqlitePool, id: &str) {
             purchase_date: None,
             file_name: "t.pdf".into(),
             file_size: 1,
-            opfs_path: format!("{id}.opfspack"),
+            opfs_path: format!("{id}.nartik"),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -2270,8 +2270,8 @@ fn seed_crypto_book(pool: &thundoku_core::db::SqlitePool, id: &str) {
 }
 
 /// `document_text` / `token_analysis` の親（`books` → `imported_documents`）を用意する。
-fn seed_crypto_document(pool: &thundoku_core::db::SqlitePool, book_id: &str, document_id: &str) {
-    use thundoku_core::db::documents;
+fn seed_crypto_document(pool: &ligrol_core::db::SqlitePool, book_id: &str, document_id: &str) {
+    use ligrol_core::db::documents;
 
     seed_crypto_book(pool, book_id);
     documents::insert_document(
@@ -2292,22 +2292,22 @@ fn seed_crypto_document(pool: &thundoku_core::db::SqlitePool, book_id: &str, doc
 }
 
 /// 生 SQL で 1 つの文字列列を読む（保存値そのものを見る）。
-fn raw_column(pool: &thundoku_core::db::SqlitePool, sql: &'static str) -> String {
-    thundoku_core::db::block_on(async {
+fn raw_column(pool: &ligrol_core::db::SqlitePool, sql: &'static str) -> String {
+    ligrol_core::db::block_on(async {
         sqlx::query_scalar::<_, String>(sql).fetch_one(pool).await
     })
     .unwrap()
 }
 
-fn raw_exec(pool: &thundoku_core::db::SqlitePool, sql: &'static str) {
-    thundoku_core::db::block_on(async { sqlx::query(sql).execute(pool).await }).unwrap();
+fn raw_exec(pool: &ligrol_core::db::SqlitePool, sql: &'static str) {
+    ligrol_core::db::block_on(async { sqlx::query(sql).execute(pool).await }).unwrap();
 }
 
 /// ページ本文は平文で保存されない（鍵なしでは読めない）。
 #[test]
 fn document_text_is_encrypted_at_rest() {
-    use thundoku_core::db::column_crypto;
-    use thundoku_core::db::documents;
+    use ligrol_core::db::column_crypto;
+    use ligrol_core::db::documents;
 
     let pool = memory_db();
     seed_crypto_document(&pool, "b1", "doc-1");
@@ -2346,8 +2346,8 @@ fn document_text_is_encrypted_at_rest() {
 /// 形態素解析の 4 列も平文で保存されない。列ごとに AAD が違うので入れ替えを検知する。
 #[test]
 fn token_analysis_columns_are_encrypted_at_rest() {
-    use thundoku_core::db::column_crypto;
-    use thundoku_core::db::documents;
+    use ligrol_core::db::column_crypto;
+    use ligrol_core::db::documents;
 
     let pool = memory_db();
     seed_crypto_document(&pool, "b1", "doc-1");
@@ -2381,7 +2381,7 @@ fn token_analysis_columns_are_encrypted_at_rest() {
     .unwrap();
 
     let (token, pos, base_form, reading): (String, String, Option<String>, Option<String>) =
-        thundoku_core::db::block_on(async {
+        ligrol_core::db::block_on(async {
             sqlx::query_as(
                 "SELECT token, pos, base_form, reading FROM token_analysis WHERE id = 'tk-1'",
             )
@@ -2430,8 +2430,8 @@ fn token_analysis_columns_are_encrypted_at_rest() {
 /// 付箋メモも平文で保存されない。読み出し（表示経路）は復号される。
 #[test]
 fn page_notes_memo_is_encrypted_at_rest() {
-    use thundoku_core::db::column_crypto;
-    use thundoku_core::db::notes;
+    use ligrol_core::db::column_crypto;
+    use ligrol_core::db::notes;
 
     let pool = memory_db();
     seed_crypto_book(&pool, "b1");
@@ -2485,8 +2485,8 @@ fn page_notes_memo_is_encrypted_at_rest() {
 /// 復号できない値（改ざん）は**画面に出さない**（空として扱う）。行は消さない。
 #[test]
 fn tampered_note_memo_is_not_shown_as_ciphertext() {
-    use thundoku_core::db::column_crypto;
-    use thundoku_core::db::notes;
+    use ligrol_core::db::column_crypto;
+    use ligrol_core::db::notes;
 
     let pool = memory_db();
     seed_crypto_book(&pool, "b1");
@@ -2510,7 +2510,7 @@ fn tampered_note_memo_is_not_shown_as_ciphertext() {
     chars[index] = if chars[index] == 'A' { 'B' } else { 'A' };
     let tampered: String = chars.into_iter().collect();
     assert_ne!(tampered, stored);
-    thundoku_core::db::block_on(async {
+    ligrol_core::db::block_on(async {
         sqlx::query("UPDATE page_notes SET memo = ?1 WHERE id = 'note-b1--3'")
             .bind(&tampered)
             .execute(&pool)
@@ -2540,7 +2540,7 @@ fn tampered_note_memo_is_not_shown_as_ciphertext() {
 fn migrate_column_crypto_is_a_noop_without_plaintext() {
     let pool = memory_db();
     assert_eq!(
-        thundoku_core::db::migrate_column_crypto_once(&pool).unwrap(),
+        ligrol_core::db::migrate_column_crypto_once(&pool).unwrap(),
         0
     );
     assert_eq!(
@@ -2557,13 +2557,13 @@ fn migrate_column_crypto_is_a_noop_without_plaintext() {
 #[test]
 fn migrate_column_crypto_truncates_the_wal() {
     let root =
-        std::env::temp_dir().join(format!("thundoku-column-crypto-wal-{}", std::process::id()));
+        std::env::temp_dir().join(format!("ligrol-column-crypto-wal-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    let path = root.join("thundoku-shelf.db");
+    let path = root.join("ligrol.db");
 
     // 実際の起動と同じファイル DB（`db::connect` は WAL モードにする）
-    let pool = thundoku_core::db::connect(&path).unwrap();
+    let pool = ligrol_core::db::connect(&path).unwrap();
     seed_crypto_document(&pool, "b1", "doc-1");
     raw_exec(
         &pool,
@@ -2571,11 +2571,11 @@ fn migrate_column_crypto_truncates_the_wal() {
          VALUES ('dt-1', 'doc-1', 1, 'WAL に残したくない本文')",
     );
     assert_eq!(
-        thundoku_core::db::migrate_column_crypto_once(&pool).unwrap(),
+        ligrol_core::db::migrate_column_crypto_once(&pool).unwrap(),
         1
     );
 
-    let wal = std::fs::read(root.join("thundoku-shelf.db-wal")).unwrap_or_default();
+    let wal = std::fs::read(root.join("ligrol.db-wal")).unwrap_or_default();
     assert!(
         !String::from_utf8_lossy(&wal).contains("WAL に残したくない本文"),
         "平文が WAL に残っている"
@@ -2586,7 +2586,7 @@ fn migrate_column_crypto_truncates_the_wal() {
             &pool,
             "SELECT text_content FROM document_text WHERE id = 'dt-1'"
         )
-        .starts_with(thundoku_core::db::column_crypto::PREFIX)
+        .starts_with(ligrol_core::db::column_crypto::PREFIX)
     );
 
     drop(pool);
@@ -2596,9 +2596,9 @@ fn migrate_column_crypto_truncates_the_wal() {
 /// 旧バージョンが平文で書いた行は、起動時の移行（一度きり）で暗号化される。
 #[test]
 fn migrate_column_crypto_encrypts_plaintext_rows() {
-    use thundoku_core::db::column_crypto;
-    use thundoku_core::db::documents;
-    use thundoku_core::db::notes;
+    use ligrol_core::db::column_crypto;
+    use ligrol_core::db::documents;
+    use ligrol_core::db::notes;
 
     let pool = memory_db();
     seed_crypto_document(&pool, "b1", "doc-1");
@@ -2620,7 +2620,7 @@ fn migrate_column_crypto_encrypts_plaintext_rows() {
     );
 
     assert_eq!(
-        thundoku_core::db::migrate_column_crypto_once(&pool).unwrap(),
+        ligrol_core::db::migrate_column_crypto_once(&pool).unwrap(),
         3,
         "平文の 3 行を暗号化すること"
     );
@@ -2658,7 +2658,7 @@ fn migrate_column_crypto_encrypts_plaintext_rows() {
     // 2 回目は何もしない（フラグ。暗号文も置き換えない = 毎回 IV が変わらない）
     let before = raw_column(&pool, "SELECT memo FROM page_notes WHERE id = 'note-1'");
     assert_eq!(
-        thundoku_core::db::migrate_column_crypto_once(&pool).unwrap(),
+        ligrol_core::db::migrate_column_crypto_once(&pool).unwrap(),
         0
     );
     assert_eq!(
@@ -2686,7 +2686,7 @@ fn migrate_column_crypto_encrypts_plaintext_rows() {
 }
 
 /// テスト用の本（pack は別途ファイルとして置く）。
-fn book_with_pack(pool: &thundoku_core::db::SqlitePool, id: &str) {
+fn book_with_pack(pool: &ligrol_core::db::SqlitePool, id: &str) {
     books::insert(
         pool,
         &books::Book {
@@ -2697,7 +2697,7 @@ fn book_with_pack(pool: &thundoku_core::db::SqlitePool, id: &str) {
             purchase_date: None,
             file_name: format!("{id}.zip"),
             file_size: 1,
-            opfs_path: format!("{id}.opfspack"),
+            opfs_path: format!("{id}.nartik"),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -2728,16 +2728,16 @@ fn book_with_pack(pool: &thundoku_core::db::SqlitePool, id: &str) {
 #[test]
 fn auto_backup_exclusion_runs_once_and_spares_small_books() {
     let pool = memory_db();
-    let packs = std::env::temp_dir().join("thundoku-auto-exclude-test");
+    let packs = std::env::temp_dir().join("ligrol-auto-exclude-test");
     let _ = std::fs::remove_dir_all(&packs);
     std::fs::create_dir_all(&packs).unwrap();
     for id in ["small", "big"] {
         book_with_pack(&pool, id);
     }
     // 小さい pack（1 KiB）と大きい pack（sparse で 2 GiB。実体はディスクに書かない）
-    std::fs::write(packs.join("small.opfspack"), vec![0u8; 1024]).unwrap();
+    std::fs::write(packs.join("small.nartik"), vec![0u8; 1024]).unwrap();
     {
-        let file = std::fs::File::create(packs.join("big.opfspack")).unwrap();
+        let file = std::fs::File::create(packs.join("big.nartik")).unwrap();
         file.set_len(2 * 1024 * 1024 * 1024).unwrap();
     }
 

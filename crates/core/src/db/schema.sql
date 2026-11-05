@@ -288,7 +288,7 @@ CREATE TABLE IF NOT EXISTS product_sample_pages (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- 表紙バンドル（`thundoku-thumbs.json`）に載せる画像の派生キャッシュ（`db::thumbs`）。
+-- 表紙バンドル（`ligrol-thumbs.json`）に載せる画像の派生キャッシュ（`db::thumbs`）。
 -- DB バックアップの対象外（復元先で作り直せる）。kind = 'shelf' | 'checklist'、
 -- item_key = `{site_id}:{database_id}`（本棚）/ `checked_items.id`（チェックリスト）。
 CREATE TABLE IF NOT EXISTS thumbnail_share (

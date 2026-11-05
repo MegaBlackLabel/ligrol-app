@@ -1,7 +1,7 @@
 //! 機密列（ページ本文 / 形態素解析 / 付箋メモ）の暗号化。
 //!
 //! DB ファイル全体（SQLite）は暗号化しない方針（`docs/spec/10-pack-keys.md` §11.1 の
-//! 線引き）だが、`.opfspack` を暗号化しても**抽出した本文や付箋の中身**が平文で残れば、
+//! 線引き）だが、`.nartik` を暗号化しても**抽出した本文や付箋の中身**が平文で残れば、
 //! データディレクトリや WAL のコピーから読書内容が漏れる（セキュリティ評価 F02）。
 //! そこで**機密列だけ**を、`books.owner_sub` と同じ keyring の DB 鍵
 //! （[`crate::secrets::SecretStore::db_key`]）で AES-256-GCM にして保存する。
@@ -28,7 +28,7 @@ use crate::secrets::{SecretError, SecretStore};
 pub const PREFIX: &str = "enc:v1:";
 
 /// AAD の用途名（形式版込み）。用途や版が変われば別の暗号文として扱われる。
-const PURPOSE: &str = "thundoku-shelf/column/v1";
+const PURPOSE: &str = "ligrol/column/v1";
 
 /// 列の暗号化で起きたエラー。
 #[derive(Debug, thiserror::Error)]

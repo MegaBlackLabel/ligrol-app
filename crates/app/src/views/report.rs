@@ -39,12 +39,12 @@ use gpui_kit::{
     IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement as _,
     Styled as _, Window, div, px,
 };
-use thundoku_core::github::{
+use ligrol_core::github::{
     GithubError, IssueTemplate, TemplateField, TemplateFieldKind, issue_link,
 };
 // テンプレート取得のクライアント。取得はテストでは実行しない（`ensure_templates` を参照）。
 #[cfg(not(test))]
-use thundoku_core::github::GithubClient;
+use ligrol_core::github::GithubClient;
 
 use crate::app_state::{ToastKind, set_toast_kind};
 use crate::logging::LOG_FILE_NAME;
@@ -52,9 +52,9 @@ use crate::logging::LOG_FILE_NAME;
 /// 投稿先リポジトリの owner（**固定**）。
 const TARGET_REPO_OWNER: &str = "MegaBlackLabel";
 /// 投稿先リポジトリの名前（**固定**）。
-const TARGET_REPO_NAME: &str = "thundoku-shelf-app";
+const TARGET_REPO_NAME: &str = "ligrol-app";
 /// 画面に出す投稿先の表示。
-pub(crate) const TARGET_REPO: &str = "MegaBlackLabel/thundoku-shelf-app";
+pub(crate) const TARGET_REPO: &str = "MegaBlackLabel/ligrol-app";
 
 /// 本文入力の高さ。これより長い本文は入力欄の中でスクロールする。
 const BODY_HEIGHT: f32 = 280.0;
@@ -193,10 +193,10 @@ impl Default for ReportIo {
     fn default() -> Self {
         Self {
             open_browser: Arc::new(|url| {
-                thundoku_core::google::open_browser(url).map_err(|error| error.to_string())
+                ligrol_core::google::open_browser(url).map_err(|error| error.to_string())
             }),
             open_folder: Arc::new(|path| {
-                thundoku_core::shell::open_path(path).map_err(|error| error.to_string())
+                ligrol_core::shell::open_path(path).map_err(|error| error.to_string())
             }),
         }
     }
@@ -1189,7 +1189,7 @@ mod tests {
         cx.update(crate::app_state::AppState::init_test);
         cx.update(|cx| {
             let db = &crate::app_state::AppState::global(cx).db_pool;
-            let _ = thundoku_core::db::settings::set(db, "report.target_repo", "someone/elsewhere");
+            let _ = ligrol_core::db::settings::set(db, "report.target_repo", "someone/elsewhere");
         });
         let view = cx.new(ReportView::new);
         let window = cx.open_window(

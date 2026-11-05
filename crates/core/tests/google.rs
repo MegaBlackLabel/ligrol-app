@@ -5,18 +5,18 @@ use parking_lot::Mutex;
 use std::net::TcpListener;
 use std::sync::Arc;
 
-use thundoku_core::google::{
+use ligrol_core::google::{
     DEFAULT_REDIRECT_PORT, GoogleClient, OAuthTokens, build_authorize_url, build_challenge,
     receive_callback,
 };
-use thundoku_core::tbf::{RequestSpec, ResponseSpec, Transport};
+use ligrol_core::tbf::{RequestSpec, ResponseSpec, Transport};
 
 type MockFn =
-    Box<dyn FnMut(RequestSpec) -> Result<ResponseSpec, thundoku_core::tbf::TbfError> + Send>;
+    Box<dyn FnMut(RequestSpec) -> Result<ResponseSpec, ligrol_core::tbf::TbfError> + Send>;
 
 struct Mock(MockFn);
 impl Transport for Mock {
-    fn send(&mut self, spec: RequestSpec) -> Result<ResponseSpec, thundoku_core::tbf::TbfError> {
+    fn send(&mut self, spec: RequestSpec) -> Result<ResponseSpec, ligrol_core::tbf::TbfError> {
         (self.0)(spec)
     }
 }
@@ -137,7 +137,7 @@ fn access_token_without_tokens_is_not_authorized() {
         GoogleClient::with_transport(Box::new(Mock(Box::new(|_| panic!("no http")))), "c", None);
     assert!(matches!(
         client.access_token(),
-        Err(thundoku_core::google::GoogleError::NotAuthorized)
+        Err(ligrol_core::google::GoogleError::NotAuthorized)
     ));
 }
 
@@ -232,7 +232,7 @@ fn loopback_receives_code_and_rejects_state_mismatch() {
     .unwrap();
     assert!(matches!(
         handle.join().unwrap(),
-        Err(thundoku_core::google::GoogleError::Auth(_))
+        Err(ligrol_core::google::GoogleError::Auth(_))
     ));
 }
 
@@ -305,7 +305,7 @@ fn pending_cancel_returns_cancelled() {
     cancel.store(true, std::sync::atomic::Ordering::Relaxed);
     assert!(matches!(
         handle.join().unwrap(),
-        Err(thundoku_core::google::GoogleError::Cancelled)
+        Err(ligrol_core::google::GoogleError::Cancelled)
     ));
 }
 

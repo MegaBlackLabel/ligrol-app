@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        提案ありがとうございます。まず [既存の Issue を検索](https://github.com/MegaBlackLabel/thundoku-shelf-app/issues?q=is%3Aissue) して、同じ提案が無いか確認してください。
+        提案ありがとうございます。まず [既存の Issue を検索](https://github.com/MegaBlackLabel/ligrol-app/issues?q=is%3Aissue) して、同じ提案が無いか確認してください。
 
         アプリの「レポート」画面から送ると、この下書きが入力済みの状態で開きます。
   - type: textarea

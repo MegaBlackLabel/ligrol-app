@@ -1,5 +1,5 @@
 //! GraphQL operation strings copied verbatim from the Web API implementation
-//! (packages/thundoku-api/src/routes/{books,samples,events}.ts and
+//! (packages/ligrol-api/src/routes/{books,samples,events}.ts and
 //! src/lib/checklist-graphql.ts). Do not reformat the query text.
 
 /// books.ts:462 — verbatim.

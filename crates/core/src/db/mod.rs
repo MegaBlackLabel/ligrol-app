@@ -469,7 +469,7 @@ pub fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         ] {
             ensure_column(&mut conn, table, "owner_sub", "owner_sub TEXT").await?;
         }
-        // 表紙バンドル（`thundoku-thumbs.json`）に載せる画像の派生キャッシュ
+        // 表紙バンドル（`ligrol-thumbs.json`）に載せる画像の派生キャッシュ
         // （`db::thumbs`）。α版なのでマイグレーションファイルを足さず、
         // 上の runtime DDL と同様に冪等に作る（新規 DB も schema.sql が持つ）。
         // **`db::backup::TABLES` の許可リストには入れない**（復元先で作り直せる

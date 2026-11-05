@@ -14,17 +14,17 @@
 #
 # 使い方:
 #   scripts/sign-local-app.sh [署名する .app のパス]
-#     既定: target/debug/ThundokuShelf.app
+#     既定: target/debug/Ligrol.app
 #
-# 必要なもの（THUNDOKU_P12 / THUNDOKU_P12_PW_FILE で差し替え可）:
-#   ~/Documents/thundoku-ci/thundoku-ci.p12   … Developer ID の証明書 + 秘密鍵
-#   ~/Documents/thundoku-ci/password.txt      … そのパスワード
+# 必要なもの（LIGROL_P12 / LIGROL_P12_PW_FILE で差し替え可）:
+#   ~/Documents/ligrol-ci/ligrol-ci.p12   … Developer ID の証明書 + 秘密鍵
+#   ~/Documents/ligrol-ci/password.txt      … そのパスワード
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-APP="${1:-$REPO/target/debug/ThundokuShelf.app}"
-P12="${THUNDOKU_P12:-$HOME/Documents/thundoku-ci/thundoku-ci.p12}"
-PW_FILE="${THUNDOKU_P12_PW_FILE:-$HOME/Documents/thundoku-ci/password.txt}"
+APP="${1:-$REPO/target/debug/Ligrol.app}"
+P12="${LIGROL_P12:-$HOME/Documents/ligrol-ci/ligrol-ci.p12}"
+PW_FILE="${LIGROL_P12_PW_FILE:-$HOME/Documents/ligrol-ci/password.txt}"
 # Apple の Developer ID G2 中間証明書（これが無いと identity が有効にならない）
 G2_URL="https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer"
 G2_SHA="f16cd3c54c7f83cea4bf1a3e6a0819c8aaa8e4a1528fd144715f350643d2df3a"

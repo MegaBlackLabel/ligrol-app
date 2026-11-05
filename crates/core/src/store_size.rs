@@ -7,7 +7,7 @@
 
 /// ダウンロード前に確認を出す閾値（2 GiB）。
 ///
-/// pack の上限は 10 GiB（`opfspack::MAX_TOTAL_SIZE` / `MAX_DOWNLOAD_BODY_BYTES`）なので
+/// pack の上限は 10 GiB（`nartik::MAX_TOTAL_SIZE` / `MAX_DOWNLOAD_BODY_BYTES`）なので
 /// 「大きすぎて扱えない」線ではない。2 GiB を超える本は**転送に時間とディスクを使い、
 /// 取り込みにもメモリを使う**ことを先に伝えるための確認として出す。
 pub const LARGE_DOWNLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;

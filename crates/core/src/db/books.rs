@@ -591,7 +591,7 @@ mod tests {
                 purchase_date: None,
                 file_name: "t.pdf".into(),
                 file_size: 1,
-                opfs_path: format!("{id}.opfspack"),
+                opfs_path: format!("{id}.nartik"),
                 cover_thumbnail: None,
                 tbf_product_id: None,
                 site_id: None,

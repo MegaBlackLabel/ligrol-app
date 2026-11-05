@@ -166,26 +166,26 @@ pub struct BoothClient {
 
 /// ストアへ送る UA。**クライアントを名乗る**。以前は Mac の Chrome を名乗っていたが、
 /// 購入ライブラリ（`accounts.booth.pm/library`）が自認 UA でも 200 で返ることを実機で
-/// 確認した。弾かれるようになったら `THUNDOKU_BOOTH_UA` でブラウザ UA に戻せる
+/// 確認した。弾かれるようになったら `LIGROL_BOOTH_UA` でブラウザ UA に戻せる
 /// （`crate::ua`）。
 const USER_AGENT: &str = concat!(
-    "ThundokuShelf/",
+    "Ligrol/",
     env!("CARGO_PKG_VERSION"),
-    " (+https://github.com/MegaBlackLabel/thundoku-shelf-app)"
+    " (+https://github.com/MegaBlackLabel/ligrol-app)"
 );
 
-/// 送る UA。既定は上の定数（`THUNDOKU_BOOTH_UA` で差し替えられる → `crate::ua`）。
+/// 送る UA。既定は上の定数（`LIGROL_BOOTH_UA` で差し替えられる → `crate::ua`）。
 fn user_agent() -> String {
     crate::ua::for_store(USER_AGENT, crate::ua::ENV_BOOTH)
 }
 
 /// 診断用 HTML ダンプの有効化スイッチ。値が `1` のときだけ書き出す。
-const HTML_DUMP_ENV: &str = "THUNDOKU_BOOTH_HTML_DUMP";
+const HTML_DUMP_ENV: &str = "LIGROL_BOOTH_HTML_DUMP";
 
 /// ダンプを書き出すディレクトリ（一時領域直下を汚さないよう専用フォルダに置く）。
 fn html_dump_dir() -> std::path::PathBuf {
     std::env::temp_dir()
-        .join("thundoku-shelf")
+        .join("ligrol")
         .join("booth-dumps")
 }
 
@@ -193,7 +193,7 @@ fn html_dump_dir() -> std::path::PathBuf {
 ///
 /// 購入履歴・ライブラリの HTML には購入内容や個人情報が含まれるため、通常動作で
 /// 一時領域へ複製すると、一時ファイルの収集・共有を通じて漏れる。パーサー修正で
-/// 実物が必要なときだけ `THUNDOKU_BOOTH_HTML_DUMP=1` を明示して有効化する。
+/// 実物が必要なときだけ `LIGROL_BOOTH_HTML_DUMP=1` を明示して有効化する。
 fn dump_html_if_enabled(file_name: &str, html: &str) {
     if std::env::var(HTML_DUMP_ENV).as_deref() != Ok("1") {
         return;
@@ -410,7 +410,7 @@ impl BoothClient {
                 return Err(BoothError::NotLoggedIn);
             }
             // パーサー修正のための実物ダンプ（既定では書き出さない。
-            // `THUNDOKU_BOOTH_HTML_DUMP=1` を明示したときだけ保存する）。
+            // `LIGROL_BOOTH_HTML_DUMP=1` を明示したときだけ保存する）。
             dump_html_if_enabled(&format!("booth_library_page_{page}.html"), &html);
             let parsed = parse_library(&html);
             log::info!(

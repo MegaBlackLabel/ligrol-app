@@ -107,7 +107,7 @@ pub fn fetch_zenn_tags() -> Result<Vec<String>, ZennError> {
     );
     let mut response = agent
         .get(ZENN_TAGS_URL)
-        .header("User-Agent", "thundoku-shelf/0.1")
+        .header("User-Agent", "ligrol/0.1")
         .call()
         .map_err(|_| ZennError)?;
     if response.status().as_u16() != 200 {

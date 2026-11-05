@@ -1,24 +1,24 @@
 //! Bidirectional sync engine between the local library and the
-//! `thundoku-shelf/` folder in My Drive.
+//! `ligrol/` folder in My Drive.
 //!
 //! Rules (mirrors the plan):
-//! - Drive-side: `*.opfspack` files whose md5 differs from the recorded
+//! - Drive-side: `*.nartik` files whose md5 differs from the recorded
 //!   state are downloaded, validated and imported.
 //! - Local-side: packs with no state row (new) or a local mtime newer than
 //!   `last_synced_at` are uploaded.
 //! - Conflict (both changed, different content): Drive wins; the local pack
-//!   is backed up to `{packId}.conflict-local.opfspack`.
+//!   is backed up to `{packId}.conflict-local.nartik`.
 //! - Deletions are never propagated in either direction.
 //! - Pack sync (upload and download) can be switched off with the
 //!   `drive.sync.books` setting (`SyncRequest::sync_books`). The metadata
 //!   backup and the pack key bundle keep syncing: they cover a different loss
 //!   (the database / the keys), so turning the books off must not stop them.
-//! - The metadata backup (`thundoku-backup.json`) is uploaded as an encrypted
+//! - The metadata backup (`ligrol-backup.json`) is uploaded as an encrypted
 //!   envelope (v3) when the PRK is available, and as plaintext (v2) otherwise.
 //!   Change detection uses the envelope's `content_hmac` — never the ciphertext
 //!   md5, because the nonce is random on every upload
 //!   (`docs/spec/10-pack-keys.md` §11).
-//! - The cover bundle (`thundoku-thumbs.json`) shares that envelope shape with
+//! - The cover bundle (`ligrol-thumbs.json`) shares that envelope shape with
 //!   its own label (§11.8). It is **never** uploaded in plaintext: covers reveal
 //!   the whole library, and they can be re-fetched from the stores, so there is
 //!   nothing to gain by leaking them. A failure here never fails the sync.
@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use opfspack::{PackError, PackRootKey, pack_flags};
+use nartik::{PackError, PackRootKey, pack_flags};
 
 use crate::db::{SqlitePool, books, sync_state};
 use crate::drive::{DriveApi, DriveError, DriveFile};
@@ -41,15 +41,15 @@ pub struct SyncOutcome {
     pub uploaded: Vec<String>,
     pub skipped: Vec<String>,
     pub conflicts: Vec<String>,
-    /// Drive フォルダ内の同期対象（.opfspack）ファイル数
+    /// Drive フォルダ内の同期対象（.nartik）ファイル数
     pub file_count: usize,
     /// Drive フォルダ内の同期対象ファイルの合計サイズ（bytes）
     pub total_bytes: u64,
-    /// DB（thundoku-shelf.db）を Drive にバックアップしたか
+    /// DB（ligrol.db）を Drive にバックアップしたか
     pub database_backed_up: bool,
-    /// Drive の `thundoku-backup.json` から DB へ復元したか
+    /// Drive の `ligrol-backup.json` から DB へ復元したか
     pub database_restored: bool,
-    /// 表紙バンドル（`thundoku-thumbs.json`）を Drive にアップロードしたか
+    /// 表紙バンドル（`ligrol-thumbs.json`）を Drive にアップロードしたか
     pub thumbnails_backed_up: bool,
 }
 
@@ -174,7 +174,7 @@ fn local_newer_than(path: &Path, last_synced_at: &str) -> bool {
 /// Import a downloaded pack into `books`, preferring `metadata.json` fields.
 fn import_book(
     pool: &SqlitePool,
-    reader: &dyn opfspack::PackRead,
+    reader: &dyn nartik::PackRead,
     pack_id: &str,
     root_key: Option<&PackRootKey>,
     file_size: i64,
@@ -257,7 +257,7 @@ pub enum SyncPhase {
     Download,
     /// Drive へ pack をアップロード中（転送そのものに進捗 API が無いので、開始だけ報告する）
     Upload,
-    /// DB バックアップ（`thundoku-backup.json`）を書き出して上げる直前
+    /// DB バックアップ（`ligrol-backup.json`）を書き出して上げる直前
     Backup,
 }
 
@@ -269,7 +269,7 @@ pub enum SyncPhase {
 pub struct SyncProgress {
     /// 今どの段階か（表示の文言が変わる）
     pub phase: SyncPhase,
-    /// 転送中のファイル名（表示用。例: `pack-1.opfspack`）
+    /// 転送中のファイル名（表示用。例: `pack-1.nartik`）
     pub name: String,
     /// 何件目（1 始まり）/ 全件。分母は今回の同期で転送する総数（スキップは数えない）。
     /// 0 は「総数不明」。
@@ -303,12 +303,12 @@ pub struct SyncRequest<'a> {
     /// DB バックアップのローカルパス（None なら DB バックアップ／復元をしない）
     pub db_path: Option<&'a Path>,
     /// 表紙キャッシュ（`<data_dir>/thumbnails`）のディレクトリ。
-    /// `None` なら表紙バンドル（`thundoku-thumbs.json`）を上げない。
+    /// `None` なら表紙バンドル（`ligrol-thumbs.json`）を上げない。
     pub thumbnails_dir: Option<&'a Path>,
     /// 書籍 pack のバックアップ（設定 `drive.sync.books`。呼び出し側は
     /// [`books_backup_enabled`] で読む）。`false` なら pack のアップロードと
-    /// ダウンロードをどちらも行わない。**DB バックアップ（`thundoku-backup.json`）と
-    /// pack 鍵 bundle（`thundoku-keys.json`）は役割が別なので止めない**。
+    /// ダウンロードをどちらも行わない。**DB バックアップ（`ligrol-backup.json`）と
+    /// pack 鍵 bundle（`ligrol-keys.json`）は役割が別なので止めない**。
     pub sync_books: bool,
 }
 
@@ -361,7 +361,7 @@ pub fn sync_with_progress(
             drive_pack_by_id.entry(pack_id).or_insert(file);
         }
     }
-    // バックアップ対象（.opfspack + DB JSON）を含むフォルダ全体の集計
+    // バックアップ対象（.nartik + DB JSON）を含むフォルダ全体の集計
     outcome.file_count = files.len();
     outcome.total_bytes = files
         .iter()
@@ -435,7 +435,7 @@ pub fn sync_with_progress(
         // 検証も**ファイル裏打ち**で行う（全体を読まない）。失敗したら一時ファイルを消す
         // （壊れた pack を置き場に残さない）。
         {
-            let reader = match opfspack::PackFileReader::open(&temp) {
+            let reader = match nartik::PackFileReader::open(&temp) {
                 Ok(reader) => reader,
                 Err(error) => {
                     let _ = std::fs::remove_file(&temp);
@@ -469,7 +469,7 @@ pub fn sync_with_progress(
             return Err(SyncError::Io(error));
         }
         // 取り込みは最終パスから開き直す（この時点で開いているハンドルは無い）。
-        let reader = match opfspack::PackFileReader::open(&local_path) {
+        let reader = match nartik::PackFileReader::open(&local_path) {
             Ok(reader) => reader,
             Err(error) => return Err(pack_open_error(pack_id, error)),
         };
@@ -589,7 +589,7 @@ pub fn sync_with_progress(
 
     log::info!("drive sync: upload direction done, database backup start");
     // -- database backup ---------------------------------------------------
-    // DB のテキストデータを JSON にまとめて `thundoku-backup.json` として
+    // DB のテキストデータを JSON にまとめて `ligrol-backup.json` として
     // Drive にバックアップする。**PRK があれば封筒（v3）に暗号化して上げる**
     // （仕様 §11）。画像 base64 は含めず、内容が変わったときだけアップロードする。
     // 所有者フィルタ（identity_sub / owner_key）を構成できないときは DB バックアップを
@@ -635,11 +635,11 @@ pub fn sync_with_progress(
         // Drive 同期はログイン必須なので通常は鍵がある。鍵が用意できないだけで
         // バックアップを止める＝利用者の唯一の控えを失う方が危険、という判断。
         let envelope = match (pack_root_key, identity_sub) {
-            (Some(root), Some(sub)) => Some(opfspack::SealedEnvelope::seal(
-                &opfspack::BACKUP_LABEL,
+            (Some(root), Some(sub)) => Some(nartik::SealedEnvelope::seal(
+                &nartik::BACKUP_LABEL,
                 json.as_bytes(),
                 root,
-                &opfspack::derive_owner_id(sub),
+                &nartik::derive_owner_id(sub),
             )),
             _ => {
                 log::warn!(
@@ -686,7 +686,7 @@ pub fn sync_with_progress(
             // 封印（base64 化）は上げるときだけ行い、平文のコピーは作らない。
             let envelope_json = envelope
                 .as_ref()
-                .map(opfspack::SealedEnvelope::to_json)
+                .map(nartik::SealedEnvelope::to_json)
                 .transpose()?;
             let bytes: &[u8] = envelope_json.as_deref().unwrap_or(json.as_bytes());
             log::info!(
@@ -739,7 +739,7 @@ pub fn sync_with_progress(
         }
     }
 
-    // -- 表紙バンドル（`thundoku-thumbs.json`）-----------------------------
+    // -- 表紙バンドル（`ligrol-thumbs.json`）-----------------------------
     // Web 版が本棚の表紙を出すための画像を 1 ファイルにまとめて上げる
     // （仕様 §11.8）。**PRK があるときだけ**上げる: 表紙は「どの本を持っているか」
     // を丸ごと晒すので、鍵が無いときに平文で上げることはしない（DB バックアップの
@@ -790,10 +790,10 @@ pub fn sync_with_progress(
 }
 
 /// Drive 上の DB バックアップのファイル名。
-const DB_BACKUP_NAME: &str = "thundoku-backup.json";
+const DB_BACKUP_NAME: &str = "ligrol-backup.json";
 
 /// Drive 上の表紙バンドルのファイル名（仕様 §11.8）。
-const THUMBS_NAME: &str = "thundoku-thumbs.json";
+const THUMBS_NAME: &str = "ligrol-thumbs.json";
 
 /// 最後にアップロードした表紙バンドルの基準値（封筒の `content_hmac`）。
 pub const THUMBS_BASELINE_KEY: &str = "drive.thumbs.hash";
@@ -855,9 +855,9 @@ fn backup_thumbnails(
         return Ok(false);
     }
 
-    let owner_id = opfspack::derive_owner_id(sub);
+    let owner_id = nartik::derive_owner_id(sub);
     let envelope =
-        opfspack::SealedEnvelope::seal(&opfspack::THUMBS_LABEL, &built.plaintext, root, &owner_id);
+        nartik::SealedEnvelope::seal(&nartik::THUMBS_LABEL, &built.plaintext, root, &owner_id);
     let baseline = crate::db::settings::get(pool, THUMBS_BASELINE_KEY)?;
     let unchanged = existing.is_some() && baseline.as_deref() == Some(&envelope.content_hmac_hex());
     if !unchanged {
@@ -906,7 +906,7 @@ fn backup_thumbnails(
     Ok(!unchanged)
 }
 
-/// Drive 上の `thundoku-backup.json` の要約（復元確認ダイアログの表示に使う）。
+/// Drive 上の `ligrol-backup.json` の要約（復元確認ダイアログの表示に使う）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriveBackupInfo {
     pub file_id: String,
@@ -915,7 +915,7 @@ pub struct DriveBackupInfo {
     pub modified_time: Option<String>,
 }
 
-/// Drive の `thundoku-backup.json` が存在するか確認し、要約を返す。
+/// Drive の `ligrol-backup.json` が存在するか確認し、要約を返す。
 /// バックアップが無ければ `Ok(None)`。起動時の復元確認で使う。
 pub fn check_drive_backup(
     drive: &mut dyn DriveApi,
@@ -933,7 +933,7 @@ pub fn check_drive_backup(
         }))
 }
 
-/// Drive の `thundoku-backup.json` をダウンロードして DB に反映する。
+/// Drive の `ligrol-backup.json` をダウンロードして DB に反映する。
 /// UPSERT でマージするため既存のローカル行は残り、Drive 側の値が優先される。
 ///
 /// v3 の封筒は**この端末の keyring にある PRK** で復号する（鍵が無ければエラー。
@@ -971,7 +971,7 @@ pub fn restore_drive_backup(
     Ok(())
 }
 
-/// keyring にある PRK（`thundoku-shelf.pack-root-key:<owner_id>`）を読む。
+/// keyring にある PRK（`ligrol.pack-root-key:<owner_id>`）を読む。
 ///
 /// 起動時の差分判定と復元は「この端末が既に知っている鍵」でしか復号できない。
 /// core には UI が無いのでパスフレーズを尋ねられない（解錠はアプリの
@@ -1037,7 +1037,7 @@ impl BackupStatus {
     }
 }
 
-/// Drive の `thundoku-backup.json` とローカルを比較し、復元確認の判定材料を返す。
+/// Drive の `ligrol-backup.json` とローカルを比較し、復元確認の判定材料を返す。
 /// バックアップが無ければ `Ok(None)`。
 ///
 /// 比較はどちらも [`crate::db::backup::canonicalize_json`] の正規形で行う:
@@ -1134,11 +1134,11 @@ fn local_backup_changed(
     let json =
         crate::db::backup::export_json(pool, Some(&book_ids), Some(&owner), plaintext_user_data)?;
     let token = match pack_root_key {
-        Some(root) => opfspack::SealedEnvelope::seal(
-            &opfspack::BACKUP_LABEL,
+        Some(root) => nartik::SealedEnvelope::seal(
+            &nartik::BACKUP_LABEL,
             json.as_bytes(),
             root,
-            &opfspack::derive_owner_id(identity_sub),
+            &nartik::derive_owner_id(identity_sub),
         )
         .content_hmac_hex(),
         None => crate::db::backup::canonical_md5_str(&json, None)?,
@@ -1287,7 +1287,7 @@ mod tests {
         let mut drive = MockDrive {
             files: vec![crate::drive::DriveFile {
                 id: "backup-id".into(),
-                name: "thundoku-backup.json".into(),
+                name: "ligrol-backup.json".into(),
                 size: Some(123),
                 md5_checksum: Some("abc123".into()),
                 modified_time: Some("2026-08-23T00:00:00Z".into()),
@@ -1335,7 +1335,7 @@ mod tests {
                 purchase_date: None,
                 file_name: "b.pdf".into(),
                 file_size: 1,
-                opfs_path: "b.opfspack".into(),
+                opfs_path: "b.nartik".into(),
                 cover_thumbnail: None,
                 tbf_product_id: None,
                 site_id: None,
@@ -1375,7 +1375,7 @@ mod tests {
         let mut drive = MockDrive {
             files: vec![crate::drive::DriveFile {
                 id: "backup-id".into(),
-                name: "thundoku-backup.json".into(),
+                name: "ligrol-backup.json".into(),
                 size: Some(json.len() as i64),
                 md5_checksum: Some(format!("{:x}", md5::compute(json.as_bytes()))),
                 modified_time: None,
@@ -1418,7 +1418,7 @@ mod tests {
                 purchase_date: None,
                 file_name: "b.pdf".into(),
                 file_size: 1,
-                opfs_path: "b.opfspack".into(),
+                opfs_path: "b.nartik".into(),
                 cover_thumbnail: None,
                 tbf_product_id: None,
                 site_id: None,
@@ -1469,7 +1469,7 @@ mod tests {
                 purchase_date: None,
                 file_name: "b.pdf".into(),
                 file_size: 1,
-                opfs_path: "b.opfspack".into(),
+                opfs_path: "b.nartik".into(),
                 cover_thumbnail: None,
                 tbf_product_id: None,
                 site_id: None,
@@ -1507,7 +1507,7 @@ mod tests {
         let mut drive = MockDrive {
             files: vec![crate::drive::DriveFile {
                 id: "backup-id".into(),
-                name: "thundoku-backup.json".into(),
+                name: "ligrol-backup.json".into(),
                 size: Some(json.len() as i64),
                 md5_checksum: Some(json_md5.clone()),
                 modified_time: None,
@@ -1580,7 +1580,7 @@ mod tests {
                 purchase_date: None,
                 file_name: "b.pdf".into(),
                 file_size: 1,
-                opfs_path: "b.opfspack".into(),
+                opfs_path: "b.nartik".into(),
                 cover_thumbnail: None,
                 tbf_product_id: None,
                 site_id: None,
@@ -1628,7 +1628,7 @@ mod tests {
         let mut drive = MockDrive {
             files: vec![crate::drive::DriveFile {
                 id: "backup-id".into(),
-                name: "thundoku-backup.json".into(),
+                name: "ligrol-backup.json".into(),
                 size: Some(drive_bytes.len() as i64),
                 md5_checksum: None,
                 modified_time: None,
@@ -1729,7 +1729,7 @@ mod tests {
                 purchase_date: None,
                 file_name: "b.pdf".into(),
                 file_size: 1,
-                opfs_path: "b.opfspack".into(),
+                opfs_path: "b.nartik".into(),
                 cover_thumbnail: None,
                 tbf_product_id: None,
                 site_id: None,
@@ -1759,11 +1759,11 @@ mod tests {
             Some(crate::owner::encrypt(&key, "test-sub")),
         )
         .unwrap();
-        let packs = std::env::temp_dir().join("thundoku-sync-test-packs");
+        let packs = std::env::temp_dir().join("ligrol-sync-test-packs");
         std::fs::create_dir_all(&packs).unwrap();
-        let dl = std::env::temp_dir().join("thundoku-sync-test-dl");
+        let dl = std::env::temp_dir().join("ligrol-sync-test-dl");
         std::fs::create_dir_all(&dl).unwrap();
-        let db_path = std::env::temp_dir().join("thundoku-sync-test.db");
+        let db_path = std::env::temp_dir().join("ligrol-sync-test.db");
         let mut drive = MockDrive {
             files: Vec::new(),
             uploaded: Default::default(),
@@ -1791,7 +1791,7 @@ mod tests {
             "first sync must upload the backup"
         );
         assert_eq!(drive.uploaded.borrow().len(), 1);
-        assert_eq!(drive.uploaded.borrow()[0].0, "thundoku-backup.json");
+        assert_eq!(drive.uploaded.borrow()[0].0, "ligrol-backup.json");
 
         // 2 回目（同じデータ）: md5 一致でスキップ
         let outcome = super::sync(super::SyncRequest {
@@ -1828,7 +1828,7 @@ mod tests {
                 purchase_date: None,
                 file_name: "b2.pdf".into(),
                 file_size: 1,
-                opfs_path: "b2.opfspack".into(),
+                opfs_path: "b2.nartik".into(),
                 cover_thumbnail: None,
                 tbf_product_id: None,
                 site_id: None,
@@ -1892,7 +1892,7 @@ mod tests {
             purchase_date: None,
             file_name: format!("{id}.pdf"),
             file_size: 1,
-            opfs_path: format!("{id}.opfspack"),
+            opfs_path: format!("{id}.nartik"),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -1936,12 +1936,12 @@ mod tests {
         }
     }
 
-    /// `thundoku-backup.json` を 1 つ置いた Drive。
+    /// `ligrol-backup.json` を 1 つ置いた Drive。
     fn drive_with_backup(json: &str) -> MockDrive {
         let drive = MockDrive {
             files: vec![crate::drive::DriveFile {
                 id: "backup-id".into(),
-                name: "thundoku-backup.json".into(),
+                name: "ligrol-backup.json".into(),
                 size: Some(json.len() as i64),
                 md5_checksum: Some(format!("{:x}", md5::compute(json.as_bytes()))),
                 modified_time: None,

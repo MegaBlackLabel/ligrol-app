@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1254" height="1254" viewBox="0 0 1254 1254"
+     role="img" aria-label="ligrol icon K — badge">
+  <title>ligrol icon K — badge</title>
+  <rect width="1254" height="1254" fill="#ffffff"/>
+  <circle cx="627" cy="627" r="500" fill="none" stroke="#01214b" stroke-width="30"/>
+  <text x="627" y="520" text-anchor="middle"
+        font-family="'Arial Hebrew','Noto Sans Hebrew','David',Arial,sans-serif" font-size="110"
+        fill="#01214b" opacity="0.6" direction="rtl">לגלול</text>
+  <text x="627" y="740" text-anchor="middle"
+        font-family="'Helvetica Neue','Arial',sans-serif" font-size="230" font-weight="700" letter-spacing="-6"
+        fill="#01214b">ligrol</text>
+  <line x1="430" y1="820" x2="824" y2="820" stroke="#01214b" stroke-width="12" stroke-linecap="round"/>
+</svg>

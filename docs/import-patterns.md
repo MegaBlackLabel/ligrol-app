@@ -547,7 +547,7 @@ DB に入る**（実 DB に `âMâUÄòé┼é⌐éφéóéóùtÄqé│é±.pdf
       （`document_images.extracted_text` は 2026-09-22 に廃止。読み出し側が無いまま
       暗号化 pack の本文を平文で複製していたため、書き込みをやめた）。
       本文エントリを持たない pack（旧形式・Web 版が書いた pack）は**本文無しで復元**する
-  - 進捗（`reading_progress`）・タグ（`book_tags`）は DB バックアップ（`thundoku-backup.json`）から復元される
+  - 進捗（`reading_progress`）・タグ（`book_tags`）は DB バックアップ（`ligrol-backup.json`）から復元される
     （pack からは戻さない）
   - FANZA 作品は `folder-structures` API で構造を再取得できる（§0）が、**ページ画像は Pack が必要**
 - 旧 Pack（`contents` なし）は「全ページ = 単一コンテンツ」にフォールバック。本文エントリが無ければ本文も無し
@@ -672,7 +672,7 @@ DB に入る**（実 DB に `âMâUÄòé┼é⌐éφéóéóùtÄqé│é±.pdf
 
 | # | 論点 | 決定 | 根拠 |
 |---|---|---|---|
-| **D1** | 総集編（1 ファイルに複数冊）の扱い | **1 冊に畳む**（1 商品 = 1 book = N コンテンツ）。分冊しない | `books.opfs_path` は UNIQUE、`books::find_by_source` / `resolve_reuse_id` は `(site_id, tbf_product_id) → 1 book` 前提。分冊すると再ダウンロードの重複抑止・`owner_sub` 紐付け・Drive の `{pack_id}.opfspack` 命名を作り直す必要がある |
+| **D1** | 総集編（1 ファイルに複数冊）の扱い | **1 冊に畳む**（1 商品 = 1 book = N コンテンツ）。分冊しない | `books.opfs_path` は UNIQUE、`books::find_by_source` / `resolve_reuse_id` は `(site_id, tbf_product_id) → 1 book` 前提。分冊すると再ダウンロードの重複抑止・`owner_sub` 紐付け・Drive の `{pack_id}.nartik` 命名を作り直す必要がある |
 | **D2** | 表紙 / 本文 / 別冊 | **切替コンテンツ**（1 ページ列に統合しない） | 総集編・別冊が実在。統合するとページ番号と進捗の基準が崩れる（§7） |
 | **D3** | 「文字あり/なし」「モザイク/黒棒修正」「SEあり/なし」 | **レンディションとして畳む**（1 コンテンツ + 切替） | `d_297236` は MP3/WAV × SEあり/なし の **4 レンディションが 1 作品**に同居。文字あり/なしはページ数も同一。進捗・読了を共有するのが正しい（§3.3） |
 | **D4** | 表紙・裏表紙 | **カバー画像のみ。コンテンツにしない** | 既存の `thumbnail.webp` → `cover.webp` の流儀と一致（`bookshelf.rs` がこの順で読む）。ページ一覧が短くなる（§7.4） |

@@ -2,13 +2,13 @@
 
 > **AI 向けの詳細設計仕様書は `docs/spec/README.md`（索引）**を参照。実装を別言語へ移植する／Web 版に戻すための、数値・定数・アルゴリズムまで書いたリファレンス。
 
-Thundoku Shelf Desktop は、技術書典・BOOTH・FANZA同人・DLsite で購入した本の閲覧を目的とした
+Ligrol Desktop は、技術書典・BOOTH・FANZA同人・DLsite で購入した本の閲覧を目的とした
 デスクトップアプリケーション（macOS / Windows）です。Web 版
-（https://thundoku-shelf-staging.megablacklabel.workers.dev/）の機能をローカルで
+（https://ligrol-staging.megablacklabel.workers.dev/）の機能をローカルで
 再現し、追加でデスクトップ固有の機能を備えています。
 
 - 技術: Rust + GPUI（zed の GUI フレームワーク）+ gpui-kit
-- ストレージ: SQLite（ローカルファイル）+ .opfspack（画像アーカイブ）
+- ストレージ: SQLite（ローカルファイル）+ .nartik（画像アーカイブ）
 - 依存: `mise` でツールチェーン管理（`mise run <task>`）
 
 ## 使用ライブラリ
@@ -29,7 +29,7 @@ Thundoku Shelf Desktop は、技術書典・BOOTH・FANZA同人・DLsite で購�
 |---|---|
 | `sqlx` | SQLite への非同期アクセス（sqlite / runtime-tokio / migrate） |
 | `tokio` | 非同期ランタイム（sqlx 用） |
-| `opfspack`（自作 crate） | .opfspack アーカイブの読み書き（バイト互換で Web 版と互換） |
+| `nartik`（自作 crate） | .nartik アーカイブの読み書き（バイト互換で Web 版と互換） |
 | `uuid` | 書籍 ID・セッション ID の生成 |
 | `dirs` | OS ごとのデータ保存先の解決（macOS / Windows） |
 
@@ -52,7 +52,7 @@ Thundoku Shelf Desktop は、技術書典・BOOTH・FANZA同人・DLsite で購�
 | `url` | URL 処理（リダイレクト先など） |
 | `percent-encoding` | API パラメータのエンコード |
 
-### 暗号化・アーカイブ（opfspack）
+### 暗号化・アーカイブ（nartik）
 
 | ライブラリ | 用途 |
 |---|---|
@@ -82,16 +82,16 @@ Thundoku Shelf Desktop は、技術書典・BOOTH・FANZA同人・DLsite で購�
 （多重起動すると DB・パック・ダウンロード先を共有してしまい、二重取り込みや
 Google OAuth のループバックポート（`127.0.0.1:38387`）の取り合いが起きるため）。
 
-- **仕組み**: config ディレクトリ（`dirs::config_dir()/thundoku-shelf/instance.lock`）の
+- **仕組み**: config ディレクトリ（`dirs::config_dir()/ligrol/instance.lock`）の
   ロックファイルを OS のファイルロックで排他する。Unix は `flock` / Windows は
   `LockFileEx` で、どちらも `std::fs::File::try_lock` が吸収するため
-  プラットフォーム分岐は無い（`thundoku_core::single_instance::InstanceGuard`）
+  プラットフォーム分岐は無い（`ligrol_core::single_instance::InstanceGuard`）
 - **ロックファイルの場所**: データ保存先（設定で変更可能）ではなく config ディレクトリに
   置く。保存先を変更しても「同時に動くアプリは 1 つ」を保つため
 - **クラッシュ復帰**: ロックはプロセスに紐づくため、強制終了でも OS が解放する。
   古いロックが残って起動できなくなることはない（ロックファイル自体は残る）
 - **2 個目の挙動**: 外部からは静かに終了する（`exit 0`）。痕跡はログに残る
-  （`<データディレクトリ>/logs/thundoku.log` に追記。ログファイルは追記式で
+  （`<データディレクトリ>/logs/ligrol.log` に追記。ログファイルは追記式で
   開くため、2 個目の追記が起動中インスタンスの書き込みに上書きされない。
   増え続けないよう、起動時に 4MB を超えていたら捨てる）。既存ウィンドウの前面化はしない
 - **フォールバック**: ガードを取得できない場合（config ディレクトリが解決できない、
@@ -108,13 +108,13 @@ Google OAuth のループバックポート（`127.0.0.1:38387`）の取り合�
 実在の本を出さずに全画面を見せるための**サンプル（デモ）モード**を持つ。提出・デモ用で、
 **通常のデータディレクトリには一切書かず、ネットワークにも出ない**ことを最優先にしている。
 
-- **有効化**: 起動引数 `--demo` または環境変数 `THUNDOKU_DEMO=1`（判定は純関数
+- **有効化**: 起動引数 `--demo` または環境変数 `LIGROL_DEMO=1`（判定は純関数
   `crate::demo::enabled(&args, env)`。`main.rs` が起動時に一度だけ評価し、真なら
   `AppState::init_demo(cx)`、偽なら従来の `AppState::init(cx)`）。
   **単一インスタンスのロックパスは demo で別名**にし、本物の起動中インスタンスと衝突させない
   （demo と通常起動を同時に走らせられる）
 - **データ分離**: メモリ内 DB（`:memory:`）+ 一時ディレクトリ
-  （`temp_dir()/thundoku-shelf-demo`）+ メモリ内 keyring。`init_test` と本体を共有する
+  （`temp_dir()/ligrol-demo`）+ メモリ内 keyring。`init_test` と本体を共有する
   `init_in_memory(cx, data_dir, demo)` で**本物の `resolve_data_dir()` の下には書かない**。
   `AppState::demo` にフラグを持つ
 - **ログイン済みに見せる**: demo では Google（ダミーの `GoogleProfile`）と技術書典（ダミー
@@ -391,14 +391,14 @@ Google OAuth のループバックポート（`127.0.0.1:38387`）の取り合�
   DB = 基準値 `drive.backup.md5` と今の内容）で、ネットワークを使わない。判定できないときは
   確認を出す側に倒す（控えを失うより、一度多く訊く方が安全）。#6
 - **「パスフレーズ必須」を選べる**: 設定 →「本の鍵」→「必須にする」で、Google Drive の
-  `thundoku-keys.json` から「Google アカウントで解ける形」を消す（**Google ログインだけでは
+  `ligrol-keys.json` から「Google アカウントで解ける形」を消す（**Google ログインだけでは
   本の鍵を復元できない**。Drive の鍵ファイルと `sub` を奪われても本は復号できない）。
   代償として、他の端末・Web 版ではパスフレーズ入力が必須になり、**忘れると復元できない**。
   解除は同じ場所から（解錠ダイアログでパスフレーズを確認してから戻す）
 - **そもそも大きすぎる入力は先に断る**: 取り込み元ファイルは 2 GiB（`MAX_IMPORT_SOURCE_BYTES`。
     読む前に判定）、外側 ZIP は件数 10000 と展開後合計、PDF は 9000 ページを展開・描画の前に見る
     （セキュリティ評価 F06）
-  - PDF（レンダリング → webp）+ ZIP（画像セット）を .opfspack に変換。
+  - PDF（レンダリング → webp）+ ZIP（画像セット）を .nartik に変換。
     大きい pack でもメモリを食い潰さないよう、**組み立てはファイルへ直接**（一時ファイル →
     rename）行い、pack 全体のハッシュはファイルを順に読んで計算する
   - インポート後はイベント名補完・タグ生成（形態素解析 + Zenn タグマッチング）
@@ -669,7 +669,7 @@ Google OAuth のループバックポート（`127.0.0.1:38387`）の取り合�
 
 - **デコード**: webp は **libwebp（C 実装）で直接 RGBA デコード**。
   image クレートの webp デコーダー（1000px で 1 秒以上）と比べて数十 ms に短縮
-- **pack キャッシュ**: .opfspack のバイト列を OnceLock で 1 回だけ読み込む
+- **pack キャッシュ**: .nartik のバイト列を OnceLock で 1 回だけ読み込む
 - **キー導出のキャッシュ**: 暗号化 pack の鍵導出（v3 は `HKDF(PRK, book_id)`）を
   1 回だけ実行（`derive_pack_key` + `read_entry_with_key`）
 - **プリロード**: 現在ページ ±2 をバックグラウンドで並列ロード（**見開きは ±3**。
@@ -736,8 +736,8 @@ Google OAuth のループバックポート（`127.0.0.1:38387`）の取り合�
 - アカウント: 技術書典ログイン / Google ログイン
 - Google Drive 同期: 接続 / ドライブ同期トグル / 同期フォルダ表示 /
   「今すぐ同期」ボタン / 最終同期日時
-  - 同期中は段階付きの進捗を出す: 取得中は `pack-1.opfspack を取得中（2/5・3.0 MB / 9.0 MB）`
-    + 進捗バー、アップロード中は `pack-2.opfspack をアップロード中`、DB バックアップは
+  - 同期中は段階付きの進捗を出す: 取得中は `pack-1.nartik を取得中（2/5・3.0 MB / 9.0 MB）`
+    + 進捗バー、アップロード中は `pack-2.nartik をアップロード中`、DB バックアップは
     `バックアップを作成中`（進み具合が分からない段階ではバーを出さない）
   - **「中止」**は同期中いつでも押せて、次の区切り（取得中はその場 / アップロードは次の
     ファイルの直前 / バックアップは書き出す前）で止まる。取り込み済みの本はそのまま残り、
@@ -812,15 +812,15 @@ Google OAuth のループバックポート（`127.0.0.1:38387`）の取り合�
 
 - OAuth 2.0 Desktop フロー（PKCE + ループバック `127.0.0.1:38387`）
 - トークンは keyring に保存。401 時は自動リフレッシュ
-- **同期フォルダ**: My Drive 直下の `thundoku-shelf/` フォルダ（Web 版の
+- **同期フォルダ**: My Drive 直下の `ligrol/` フォルダ（Web 版の
   appdata ではなく、ユーザー可視のフォルダで Web 版とファイルを共有する）
   - フォルダ ID は初回同期時に確保する（`app_settings["drive.sync.folder_id"]` に保存）:
     ルート直下の同名フォルダを先に探し、**あれば再利用**する。1 つも無ければ作成する。
     複数あるときは `modifiedTime` が新しい方を使い、件数と ID を警告ログに出す
     （むやみに増やさない・消さない）
-- **ファイル名**: `{bookId}.opfspack`（パック ID がそのままファイル名になる）。
-  `appProperties: { app: "thundoku-shelf", packId }` を付与
-- **表紙バンドル**: `thundoku-thumbs.json`（1 ファイル）。**未ダウンロードの本の表紙**を
+- **ファイル名**: `{bookId}.nartik`（パック ID がそのままファイル名になる）。
+  `appProperties: { app: "ligrol", packId }` を付与
+- **表紙バンドル**: `ligrol-thumbs.json`（1 ファイル）。**未ダウンロードの本の表紙**を
   Web 版の本棚で出せるように、本棚の表紙（256px WebP）とチェックリストのサムネイル
   （256px JPEG）をまとめて同じフォルダに置く。DB バックアップと同じ封筒（v3。ラベルと鍵は
   別）で暗号化し、**鍵（PRK）が無いときは上げない**（平文では上げない）。内容が変わったときだけ
@@ -829,9 +829,9 @@ Google OAuth のループバックポート（`127.0.0.1:38387`）の取り合�
 - **双方向同期**: Drive 側の `md5Checksum` と `drive_sync_state.md5` を比較し、
   差異があるファイルだけダウンロード / アップロード
 - **競合時のルール**: Drive 側を優先取得。ローカルの旧 pack は
-  `packs/{packId}.conflict-local.opfspack` に退避（以後同期対象外）。
+  `packs/{packId}.conflict-local.nartik` に退避（以後同期対象外）。
   削除は両方向とも伝播しない
-- 暗号化 pack はアカウントごとのルート鍵（v3 の PRK。keyring か Drive の `thundoku-keys.json` から解決。必要ならパスフレーズを尋ねる）で復号する。**鍵を用意できなければ平文として読まずに失敗**する（未ログインならログイン誘導）。旧形式（v2）の pack は開けないので、ストアから取り込み直す
+- 暗号化 pack はアカウントごとのルート鍵（v3 の PRK。keyring か Drive の `ligrol-keys.json` から解決。必要ならパスフレーズを尋ねる）で復号する。**鍵を用意できなければ平文として読まずに失敗**する（未ログインならログイン誘導）。旧形式（v2）の pack は開けないので、ストアから取り込み直す
 - **取り込み（ダウンロード）には Google ログインが必要**（鍵をアカウントごとに作るため。未ログインでは取り込まず、ダウンロードを始める前にログインを促す — セキュリティ評価 F03）。**すでに取り込んだ本を読むのにログインは要らない**
 
 ### GitHub / レポート（Issue 投稿）
@@ -872,7 +872,7 @@ Google OAuth のループバックポート（`127.0.0.1:38387`）の取り合�
   しません）」と明記して、利用者が GitHub の画面で添付する。以前は送信時に
   `POST https://uploads.github.com/user-attachments/assets` へ上げていたが、それには対象
   リポジトリへの write 権限（＝ `public_repo`）が必要で、権限を求める理由そのものだったため廃止した
-- **投稿先**: `MegaBlackLabel/thundoku-shelf-app` に**固定**（画面に「このリポジトリの Issue に
+- **投稿先**: `MegaBlackLabel/ligrol-app` に**固定**（画面に「このリポジトリの Issue に
   投稿します（変更できません）」と表示する）。宛先を利用者が差し替えられると、誘導された
   利用者に別のリポジトリへ文面を送らせる余地になるため
 - **ログの格納先**: 画面の一番下の「ログ」カードに格納先（`<データディレクトリ>/logs`）を
@@ -922,21 +922,21 @@ Google OAuth のループバックポート（`127.0.0.1:38387`）の取り合�
 
 ## データディレクトリ
 
-`dirs::data_dir()/thundoku-shelf/` に保存されます（`dirs` クレートが OS ごとの
+`dirs::data_dir()/ligrol/` に保存されます（`dirs` クレートが OS ごとの
 パスを解決）。
 
-- **macOS**: `~/Library/Application Support/thundoku-shelf/`
-- **Windows**: `%APPDATA%\thundoku-shelf\`（例: `C:\Users\<ユーザー>\AppData\Roaming\thundoku-shelf\`）
+- **macOS**: `~/Library/Application Support/ligrol/`
+- **Windows**: `%APPDATA%\ligrol\`（例: `C:\Users\<ユーザー>\AppData\Roaming\ligrol\`）
 
 | パス | 内容 |
 |---|---|
-| `thundoku-shelf.db` | SQLite データベース |
-| `packs/{bookId}.opfspack` | ページ画像アーカイブ |
+| `ligrol.db` | SQLite データベース |
+| `packs/{bookId}.nartik` | ページ画像アーカイブ |
 | `thumbnails/{site}_{db}_448.png` | 表紙キャッシュ（幅 448px の縮小 PNG） |
 | `downloads/` | 一時ダウンロード先 |
-| `logs/thundoku.log` | アプリのログ（追記。4 MiB を超えたら起動時に捨てる） |
+| `logs/ligrol.log` | アプリのログ（追記。4 MiB を超えたら起動時に捨てる） |
 
-- **ログ**: `<データディレクトリ>/logs/thundoku.log` に**全 OS で**追記します
+- **ログ**: `<データディレクトリ>/logs/ligrol.log` に**全 OS で**追記します
   （GUI 起動では標準エラーが見えないためファイルにも出し、ターミナルから起動したときは
   その場でも読めます）。レポート画面の「ログ」カードが同じパスを表示し、
   「ログの格納先を開く」でエクスプローラー / Finder を開きます（不具合の報告に
@@ -944,8 +944,8 @@ Google OAuth のループバックポート（`127.0.0.1:38387`）の取り合�
   新しい保存先の `logs/` に書きます（古いログは古い保存先に残ります）。
 
 **注意**: キャッシュ・DB を初期化したい場合はアプリを終了してデータディレクトリを
-削除してください（macOS: `rm -rf ~/Library/Application Support/thundoku-shelf`、
-Windows: `rmdir /s %APPDATA%\thundoku-shelf`。表紙キャッシュや進捗・閲覧履歴などの
+削除してください（macOS: `rm -rf ~/Library/Application Support/ligrol`、
+Windows: `rmdir /s %APPDATA%\ligrol`。表紙キャッシュや進捗・閲覧履歴などの
 データが失われるため、必要なバックアップを取ること）。
 
 ---
@@ -953,7 +953,7 @@ Windows: `rmdir /s %APPDATA%\thundoku-shelf`。表紙キャッシュや進捗・
 ## データの復元
 
 **DB は「どのサイトのどのデータか（属性）」を保持し、「本の中身（ページ画像）」は
-`.opfspack` パックにのみ存在する**、という関係。
+`.nartik` パックにのみ存在する**、という関係。
 
 ### DB が保持するもの（属性・参照）
 
@@ -968,7 +968,7 @@ Windows: `rmdir /s %APPDATA%\thundoku-shelf`。表紙キャッシュや進捗・
 ### DB が保持しないもの
 
 - **本のページ画像** — `document_images` は width / height / mime / file_size / `pack_entry_path` のみで、
-  **バイト列は無い**。画像は `.opfspack` パックにだけ存在。
+  **バイト列は無い**。画像は `.nartik` パックにだけ存在。
 
 ### 復元シナリオ（DB 無事を前提）
 
@@ -976,7 +976,7 @@ Windows: `rmdir /s %APPDATA%\thundoku-shelf`。表紙キャッシュや進捗・
 |---|---|
 | DB + パック両方無事 | 完全復元 |
 | DB だけ無事、パック消失 | メタ・進捗・属性は復元。ページ画像はパックが必要 → ① Drive からパック再取得（`drive.sync.enabled` が ON かつ「書籍のバックアップ」が ON なら Drive に上がっている。1 GiB 超の pack は取り込み時に自動で対象外になる）② or サイトから再ダウンロード（`download_url` / `tbf_product_id` が DB に有る。ただしログインセッション（7 日で失効する暗号化保存）が要る） |
-| パックだけ無事、DB 消失 | パックは「名前の無い画像の山」。DB を Drive バックアップ（`thundoku-backup.json`）から復元すればパックと再リンク |
+| パックだけ無事、DB 消失 | パックは「名前の無い画像の山」。DB を Drive バックアップ（`ligrol-backup.json`）から復元すればパックと再リンク |
 
 > まとめ: **属性（どこ・何・どこから取るか）は DB、中身（画像）はパック。**
 > パックが Drive にバックアップされていれば、DB さえ無事なら復元可能。
@@ -991,7 +991,7 @@ Windows: `rmdir /s %APPDATA%\thundoku-shelf`。表紙キャッシュや進捗・
   走り数百秒もかかるため、メモリ上で毎回補完する）
 - **表紙キャッシュは縮小 PNG**。オリジナルサイズのキャッシュが残っていると
   reload が遅くなる（`thumbnails/` を削除すれば再取得される）
-- `.opfspack` の読み込みはパックバイト列を 1 回だけ読み込んでキャッシュ。
+- `.nartik` の読み込みはパックバイト列を 1 回だけ読み込んでキャッシュ。
   ディスク I/O は初回のみ
 - ダウンロード / 同期 / 表紙取得はすべて専用スレッドで実行（UI をブロックしない）
 - グリッド / リストの仮想化により、315 件のカードで「スクロール中に全カード・全行を
@@ -1010,10 +1010,10 @@ Windows: `rmdir /s %APPDATA%\thundoku-shelf`。表紙キャッシュや進捗・
 
 - [x] **PC の保存先を変更できるようにする** — 設定から変更でき、変更時は既存ファイル
   （DB / packs / thumbnails / downloads）を新しい保存先へ移動する（失敗時はロールバック）
-- [x] **opfspack も Google Drive にバックアップ** — 同期実装済み。設定の
+- [x] **nartik も Google Drive にバックアップ** — 同期実装済み。設定の
   「書籍のバックアップ」（`drive.sync.books`。**行が無ければ ON**）で pack の送受信だけを
-  止められる。OFF でも DB バックアップ（`thundoku-backup.json`）と pack 鍵 bundle
-  （`thundoku-keys.json`）は同期する（失うものが別なので止めない）
+  止められる。OFF でも DB バックアップ（`ligrol-backup.json`）と pack 鍵 bundle
+  （`ligrol-keys.json`）は同期する（失うものが別なので止めない）
   （`crates/core/src/drive/sync.rs:295-303`, `:369`, `:492`, `:823-833`;
   `crates/app/src/views/settings.rs:1359`, `:2741-2787`）
 - [x] **チェックリストをバックアップ対象に** — `checked_items` / `tbf_events` /

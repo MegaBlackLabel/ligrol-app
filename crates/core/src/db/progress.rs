@@ -200,7 +200,7 @@ mod tests {
         crate::db::block_on(async {
             sqlx::query(
                 "INSERT INTO books (id, title, file_name, file_size, opfs_path) \
-                 VALUES ('b1', 't', 't.zip', 1, 'b1.opfspack')",
+                 VALUES ('b1', 't', 't.zip', 1, 'b1.nartik')",
             )
             .execute(&pool)
             .await
@@ -291,7 +291,7 @@ mod tests {
                 purchase_date: None,
                 file_name: "t.pdf".into(),
                 file_size: 1,
-                opfs_path: "b1.opfspack".into(),
+                opfs_path: "b1.nartik".into(),
                 cover_thumbnail: None,
                 tbf_product_id: None,
                 site_id: None,

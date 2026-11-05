@@ -24,7 +24,7 @@ pub const GITHUB_API_URL: &str = "https://api.github.com";
 /// 本文はテンプレートの数だけ CDN から取る（`HEAD` は既定ブランチを指す）。
 pub const GITHUB_RAW_URL: &str = "https://raw.githubusercontent.com";
 /// GitHub は `User-Agent` の無いリクエストを 403 で拒否する。
-pub const USER_AGENT: &str = concat!("thundoku-shelf/", env!("CARGO_PKG_VERSION"));
+pub const USER_AGENT: &str = concat!("ligrol/", env!("CARGO_PKG_VERSION"));
 
 /// ブラウザーで開く URL の長さの上限（目安）。
 ///
@@ -433,7 +433,7 @@ mod tests {
     type Captured = Arc<Mutex<Vec<RequestSpec>>>;
 
     const OWNER: &str = "MegaBlackLabel";
-    const REPO: &str = "thundoku-shelf-app";
+    const REPO: &str = "ligrol-app";
 
     /// スクリプト順にレスポンスを返し、リクエストを記録するテスト用 transport。
     struct ScriptedTransport {
@@ -508,7 +508,7 @@ body:
 
         assert_eq!(
             url,
-            "https://github.com/MegaBlackLabel/thundoku-shelf-app/issues/new\
+            "https://github.com/MegaBlackLabel/ligrol-app/issues/new\
              ?title=%E4%B8%80%E8%A6%A7%20%26%20%E8%A1%A8%E7%A4%BA%20%231\
              &body=%23%23%20%E6%A6%82%E8%A6%81%0A100%25%20%2B%2020"
         );
@@ -597,11 +597,11 @@ body:
         assert_eq!(reqs.len(), 2, "ディレクトリ一覧 + 各フォームを取得する");
         assert_eq!(
             reqs[0].url,
-            "https://api.github.com/repos/MegaBlackLabel/thundoku-shelf-app/contents/.github/ISSUE_TEMPLATE"
+            "https://api.github.com/repos/MegaBlackLabel/ligrol-app/contents/.github/ISSUE_TEMPLATE"
         );
         assert_eq!(
             reqs[1].url,
-            "https://raw.githubusercontent.com/MegaBlackLabel/thundoku-shelf-app/HEAD/.github/ISSUE_TEMPLATE/bug.yml"
+            "https://raw.githubusercontent.com/MegaBlackLabel/ligrol-app/HEAD/.github/ISSUE_TEMPLATE/bug.yml"
         );
         for req in &reqs {
             // トークンを持たないので、認証ヘッダを送ってはいけない。
@@ -612,7 +612,7 @@ body:
             );
             let user_agent = header(req, "user-agent").expect("User-Agent は必須");
             assert!(
-                user_agent.starts_with("thundoku-shelf/"),
+                user_agent.starts_with("ligrol/"),
                 "アプリを識別できる User-Agent を送る: {user_agent}"
             );
         }

@@ -25,15 +25,15 @@
 |---|---|---|---|---|
 | 技術書典 | アプリ DB（`app_settings`） | `tbf.session` | `TbfSession` の JSON（cookies / xsrf_raw / xsrf_token） | **keyring の鍵で暗号化（AES-256-GCM）+ 保存時刻つき・7 日**（旧版は OS keyring の `user=techbookfest` に平文相当で置いていた。起動時に空なら一度だけ移行して消す） |
 | Google | OS keyring | user=`google` | `OAuthTokens` の JSON（access_token / refresh_token / expires_at） | 同上 |
-| Google Drive 用 DB 鍵 | OS keyring | user=`thundoku-shelf.db-key` | 32 byte 乱数の BASE64 文字列 | 同上 |
-| pack のルート鍵（v3 / PRK） | OS keyring | user=`thundoku-shelf.pack-root-key:<owner_id>`（`owner_id` = `SHA-256("opfspack:v1:" + sub)` の hex） | 32 byte 乱数（PRK そのもの）の BASE64 文字列。Drive 側の `thundoku-keys.json` は `sub` / パスフレーズでラップした PRK | 同上。**PRK は `sub` から導出できない**（乱数）ので、これが漏れれば pack が解ける。`sub` / パスフレーズはここに置かない（§10 章） |
+| Google Drive 用 DB 鍵 | OS keyring | user=`ligrol.db-key` | 32 byte 乱数の BASE64 文字列 | 同上 |
+| pack のルート鍵（v3 / PRK） | OS keyring | user=`ligrol.pack-root-key:<owner_id>`（`owner_id` = `SHA-256("nartik:v1:" + sub)` の hex） | 32 byte 乱数（PRK そのもの）の BASE64 文字列。Drive 側の `ligrol-keys.json` は `sub` / パスフレーズでラップした PRK | 同上。**PRK は `sub` から導出できない**（乱数）ので、これが漏れれば pack が解ける。`sub` / パスフレーズはここに置かない（§10 章） |
 | BOOTH | アプリ DB（`app_settings`） | `booth.session` | `BoothSession` の JSON | **keyring の鍵で暗号化（AES-256-GCM）+ 保存時刻つき・7 日** |
 | FANZA同人 | アプリ DB（`app_settings`） | `fanza.session` | `FanzaSession` の JSON | **keyring の鍵で暗号化（AES-256-GCM）+ 保存時刻つき・7 日** |
 | DLsite | アプリ DB（`app_settings`） | `dlsite.session` | `DlsiteSession` の JSON | **keyring の鍵で暗号化（AES-256-GCM）+ 保存時刻つき・7 日** |
 
 - keyring の service 名と user 名の定数: `crates/core/src/secrets.rs`（`SERVICE` / `USER_TECHBOOKFEST` / `USER_GOOGLE` / `USER_BOOTH` / `USER_DB_KEY` / `USER_SESSION_KEY`）。
-- **pack のルート鍵（v3）はアカウントごとのスロットに入る**: user 名は `PACK_ROOT_KEY_PREFIX = "thundoku-shelf.pack-root-key:"` + `owner_id`（`pack_root_key_user(owner_id)`）、読み書きは `load_pack_root_key` / `save_pack_root_key` / `delete_pack_root_key`（`crates/core/src/secrets.rs:76-80`, `:205-218`）。鍵の解決順序と Drive 側のラップは `crates/core/src/pack_keys.rs`（§3.1 / §10 章）。
-- **DB 保存の 4 ストア（技術書典を含む）は keyring の鍵で暗号化する**: 鍵は `thundoku-shelf.session-key`（`USER_DB_KEY` とは別スロット＝別鍵）、値は AES-256-GCM（AAD に用途名と形式版）で `enc:v2:` + base64 として `app_settings` に入る。**復号できない値は未ログインとして破棄**し、平文へはフォールバックしない `crates/core/src/session_store.rs`。
+- **pack のルート鍵（v3）はアカウントごとのスロットに入る**: user 名は `PACK_ROOT_KEY_PREFIX = "ligrol.pack-root-key:"` + `owner_id`（`pack_root_key_user(owner_id)`）、読み書きは `load_pack_root_key` / `save_pack_root_key` / `delete_pack_root_key`（`crates/core/src/secrets.rs:76-80`, `:205-218`）。鍵の解決順序と Drive 側のラップは `crates/core/src/pack_keys.rs`（§3.1 / §10 章）。
+- **DB 保存の 4 ストア（技術書典を含む）は keyring の鍵で暗号化する**: 鍵は `ligrol.session-key`（`USER_DB_KEY` とは別スロット＝別鍵）、値は AES-256-GCM（AAD に用途名と形式版）で `enc:v2:` + base64 として `app_settings` に入る。**復号できない値は未ログインとして破棄**し、平文へはフォールバックしない `crates/core/src/session_store.rs`。
 - **保存期限は 7 日（`SESSION_MAX_AGE_SECONDS`）**: 保存時刻を**暗号文の中**（`Envelope { saved_at, session }`）に入れて復元時に判定し、期限切れ・未来の時刻（改ざん/時計ずれ）は行ごと破棄して再ログインを求める（DB を書き換えても期限は延ばせない）。形式版は v2 で、**v1 の値は接頭辞が違うため復号できず破棄**される `crates/core/src/session_store.rs`。
 - **旧 keyring 値の移行**: 技術書典だけは旧版が keyring（`user=techbookfest`・期限なし）に置いていたため、起動時に `SessionVault::adopt_legacy` で **vault が空なら一度だけ移行**して keyring を消す。vault に値があれば移行しない（vault のほうが新しい）。削除に失敗したら印（`session-purge.pending`）を残し、次の起動では移行し直さず削除を再試行する（消えるまで復元しない＝再ログイン）`crates/core/src/session_store.rs`。
 - keyring の鍵が取得できない環境では**セッションを保存しない**（平文で保存しない）。その場合、次回起動では再ログインが必要。
@@ -46,7 +46,7 @@
 
 ### 1.2 `owner_sub` 暗号化用ローカル鍵（DB 鍵）
 
-- 定数 `USER_DB_KEY = "thundoku-shelf.db-key"` `crates/core/src/secrets.rs:15`。
+- 定数 `USER_DB_KEY = "ligrol.db-key"` `crates/core/src/secrets.rs:15`。
 - 取得手順 `SecretStore::db_key()` `crates/core/src/secrets.rs:72-88`:
   1. keyring から読み込み → BASE64 デコード → 長さ 32 byte なら採用。
   2. 無い／壊れている場合は `OsRng` で 32 byte 生成 → BASE64 で keyring に保存して返す。
@@ -85,8 +85,8 @@
 | コールバックの read タイムアウト | 120 秒 | `crates/core/src/google.rs:168` |
 | コールバック受信バッファ | 4096 byte | `crates/core/src/google.rs:170` |
 | `expires_in` 既定値 | 3600 秒（応答に無い場合） | `crates/core/src/google.rs:126-129` |
-| 既定 client_id（ビルド時 `THUNDOKU_GOOGLE_CLIENT_ID` 未設定時） | `1054619943130-2kaqpgnm719bp8l8rslm8rkuvdhb945s.apps.googleusercontent.com` | `crates/app/src/app_state.rs:21-25` |
-| 既定 client_secret | コード内の `DEFAULT_GOOGLE_CLIENT_SECRET`（`THUNDOKU_GOOGLE_CLIENT_SECRET` で上書き可）。**デスクトップではクライアント種別が「デスクトップ アプリ」である前提**で扱う（§2.5）。実値は仕様書に転記しない | `crates/app/src/app_state.rs:27-32` |
+| 既定 client_id（ビルド時 `LIGROL_GOOGLE_CLIENT_ID` 未設定時） | `1054619943130-2kaqpgnm719bp8l8rslm8rkuvdhb945s.apps.googleusercontent.com` | `crates/app/src/app_state.rs:21-25` |
+| 既定 client_secret | コード内の `DEFAULT_GOOGLE_CLIENT_SECRET`（`LIGROL_GOOGLE_CLIENT_SECRET` で上書き可）。**デスクトップではクライアント種別が「デスクトップ アプリ」である前提**で扱う（§2.5）。実値は仕様書に転記しない | `crates/app/src/app_state.rs:27-32` |
 
 ### 2.2 OAuth フロー（installed-app / PKCE S256 + ループバック受信）
 
@@ -166,7 +166,7 @@
 | 確認項目 | 期待する状態 | 違反していた場合の対応 |
 |---|---|---|
 | クライアント種別 | **デスクトップ アプリ**（インストール型）として登録されている | Web アプリ等の機密クライアントを共用しているなら、デスクトップ用を別途作成して分離する |
-| Web 版との共用 | Web 版（thundoku-web）と `client_id` / `client_secret` を共用していない | 共用しているなら Web 側の `client_secret` を失効・再発行し、公開履歴を確認する |
+| Web 版との共用 | Web 版（ligrol-web）と `client_id` / `client_secret` を共用していない | 共用しているなら Web 側の `client_secret` を失効・再発行し、公開履歴を確認する |
 | リダイレクト URI | ループバック（`http://127.0.0.1`）が許可されている | 未登録だとフォールバック（動的ポート）で認可できない |
 | 要求スコープ | `openid email` + `drive.file` のみ | `drive.readonly` を要求していたら最小権限に戻す（§2.1） |
 | 同意画面 | アプリ名・サポート連絡先・プライバシーポリシーが設定されている | 未設定だと利用者に警告が出る |
@@ -198,7 +198,7 @@
 | resumable upload `upload_resumable_from_file(name, folder_id, path)` | `POST .../files?uploadType=resumable`（メタデータ + `X-Upload-Content-Length`）で `Location`（セッション URI）を得て、`PUT` を `Content-Range: bytes <start>-<end>/<total>` つきで **`RESUMABLE_CHUNK_BYTES`（8 MiB = 256 KiB の倍数）ずつ**送る。途中は `308 Resume Incomplete` + `Range` を読み、**受理済みの位置から続ける**（進まない `308` はエラー = 無限ループにしない）。最後の応答 JSON の `id` を返す。0 バイトは multipart に委譲 | `crates/core/src/drive/mod.rs`（`DriveClient`。既定実装は multipart へ委譲 = テストのモック用） |
 
 | アップロード（ファイル直結） `upload_multipart_from_file(name, folder_id, path)` | 上と同じ multipart を、前後の境界だけメモリに持って**本体は `File` からストリーム**して送る（`Transport::send_stream` に `Content-Length` = 前後 + ファイル長を渡す）。pack 全体を RAM に載せない | `crates/core/src/drive/mod.rs`（`DriveClient` の実装。既定実装はメモリ経由 = テストのモック用） |
-| アップロード（メモリ） `upload_multipart(name, folder_id, bytes)` | `POST https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`（`DRIVE_UPLOAD_URL`）、`Content-Type: multipart/related; boundary=thundoku_shelf_boundary`（`MULTIPART_BOUNDARY`）。metadata は `{"name","parents":[folder_id],"mimeType":"application/octet-stream","appProperties":{"app":"thundoku-shelf","packId":<拡張子を除いた name>}}`。応答 JSON の `id` を返す | `crates/core/src/drive/mod.rs:12`, `:14`, `:236-285` |
+| アップロード（メモリ） `upload_multipart(name, folder_id, bytes)` | `POST https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`（`DRIVE_UPLOAD_URL`）、`Content-Type: multipart/related; boundary=ligrol_boundary`（`MULTIPART_BOUNDARY`）。metadata は `{"name","parents":[folder_id],"mimeType":"application/octet-stream","appProperties":{"app":"ligrol","packId":<拡張子を除いた name>}}`。応答 JSON の `id` を返す | `crates/core/src/drive/mod.rs:12`, `:14`, `:236-285` |
 | フォルダ作成 `create_folder(name)` | `POST .../files`、`{"name","mimeType":"application/vnd.google-apps.folder"}`。応答 `id` を返す（**同期フォルダの確保は `ensure_folder` 経由**なので、既存があれば呼ばれない） | `crates/core/src/drive/mod.rs:718-740` |
 | フォルダ検索 `find_root_folders(name)` | `files.list` に `q=mimeType='application/vnd.google-apps.folder' and name='{name}' and 'root' in parents and trashed=false` を渡し、**全ページ走査**して返す（同名が複数返り得る）。`q` の `percent_encode`・`fields`・`pageSize=100`・`pageToken`・401/403 の扱いは `list_files` と同じ共通関数 `list_by_query` | `crates/core/src/drive/mod.rs:335-397`, `:433-439` |
 | 更新日時更新 `touch(file_id)` | `PATCH .../files/{file_id}`、`{"modifiedTime": <現在 UTC の RFC3339>}` | `crates/core/src/drive/mod.rs:311-328` |
@@ -221,13 +221,13 @@
 - `DriveError::Cancelled` を追加（進捗コールバックが `false` を返したとき。**部分的な本文は返さない**）。`From<TbfError>` は `TbfError::Cancelled` だけ `DriveError::Cancelled` に写し、他は `Network` にする `crates/core/src/drive/mod.rs:41-42`, `:45-51`。
 - **Content-Length が無い応答でも進捗・キャンセルは効く**: `read_body_with_progress` が `total = 0` のとき **1 MiB 刻み**で通知し（`UNKNOWN_TOTAL_STEP`）、読み切ったら最後のサイズを一度通知する `crates/core/src/tbf/transport.rs:175-227`（`:182`, `:207`, `:224-226`）。
 - 同期エンジン（`drive/sync.rs`）は pack の取得に `drive.download_with_progress(...)` を通す（進捗 = `sync_with_progress` の報告、キャンセル = コールバックが `false`）。DB バックアップの復元（`:545`）と差分検査（`:649`）は `drive.download(...)`（＝`download_with_progress` に委譲）で、こちらは 2 GiB 経路だけを使い進捗は報告しない（1 ファイルの小さな JSON のため）`crates/core/src/drive/sync.rs:312-331`, `crates/core/src/drive/mod.rs:414-432`。
-- 同期フォルダは My Drive 直下の `thundoku-shelf/`（Web 版 appdata ではなくユーザー可視フォルダ）`docs/features.md:745-750`。確保は `drive::ensure_folder(drive, SYNC_FOLDER_NAME)`（`crates/core/src/drive/mod.rs:185-217`）が行う: `find_root_folders` でルート直下の同名フォルダを探し、**あれば再利用**し、1 つも無ければ `create_folder` する。id は `app_settings['drive.sync.folder_id']` に保存する（`crates/app/src/pack_keys.rs:330-342` と `crates/app/src/views/settings.rs:1455-1467` の 2 経路。設定に id があれば Drive を触らない）。
+- 同期フォルダは My Drive 直下の `ligrol/`（Web 版 appdata ではなくユーザー可視フォルダ）`docs/features.md:745-750`。確保は `drive::ensure_folder(drive, SYNC_FOLDER_NAME)`（`crates/core/src/drive/mod.rs:185-217`）が行う: `find_root_folders` でルート直下の同名フォルダを探し、**あれば再利用**し、1 つも無ければ `create_folder` する。id は `app_settings['drive.sync.folder_id']` に保存する（`crates/app/src/pack_keys.rs:330-342` と `crates/app/src/views/settings.rs:1455-1467` の 2 経路。設定に id があれば Drive を触らない）。
   - 複数見つかったときの選択は **`modifiedTime` 降順 → 同値・欠落は `id` 昇順**（決定的）。`modifiedTime` が無いものは最も古い扱い。同期先が呼び出しごとに揺れると「同期したのに本が増えない」状態になるため順序を固定する。件数と id は `log::warn!` に出す（孤児に気付けるように）。古いフォルダは**自動で消さない**（ユーザーが手で置いたファイルを失わないため）。
-  - 背景: 以前は拾えず毎回 `create_folder("thundoku-shelf")` を呼んでいたため、フォルダ id を失う経路（設定の初期化・別プロファイル）を通るたびに同名フォルダが増え、My Drive 直下に 14 個まで溜まった（2026-09-27 に 13 個を手でゴミ箱へ）。
+  - 背景: 以前は拾えず毎回 `create_folder("ligrol")` を呼んでいたため、フォルダ id を失う経路（設定の初期化・別プロファイル）を通るたびに同名フォルダが増え、My Drive 直下に 14 個まで溜まった（2026-09-27 に 13 個を手でゴミ箱へ）。
   - テスト: `crates/core/src/drive/mod.rs:1349-1542`（`find_root_folders` のクエリと全ページ走査・`ensure_folder` の再利用/作成/決定的な選択）と `crates/app/src/pack_keys.rs:1388-1471`（再利用して `drive.sync.folder_id` に保存・既存が無ければ作成・保存済み id の優先）。
-- **鍵 bundle `thundoku-keys.json`（v3）**: 同じフォルダに、`sub` / パスフレーズで**ラップした** PRK を置く（ファイル形式・ラップの計算は `docs/spec/10-pack-keys.md` §3.2、実装は `crates/core/src/pack_keys.rs`）。
+- **鍵 bundle `ligrol-keys.json`（v3）**: 同じフォルダに、`sub` / パスフレーズで**ラップした** PRK を置く（ファイル形式・ラップの計算は `docs/spec/10-pack-keys.md` §3.2、実装は `crates/core/src/pack_keys.rs`）。
   - 取得 `pack_keys::load_bundle(drive, folder_id, owner_id)`: 名前で一覧から探してダウンロードし、**`owner_id` が一致しない bundle は使わない**（`PackKeysError::OwnerMismatch`。黙って上書きすると相手の鍵を失うため）。無ければ `None`。
-  - 保存 `pack_keys::upload_bundle`: **新しいファイルを上げてから**同名の旧ファイルを消す（先に消すと途中で失敗したときに鍵を失う。`thundoku-backup.json` と同じ順序）。
+  - 保存 `pack_keys::upload_bundle`: **新しいファイルを上げてから**同名の旧ファイルを消す（先に消すと途中で失敗したときに鍵を失う。`ligrol-backup.json` と同じ順序）。
   - **未アップロードの印**は `app_settings['drive.pack_keys.pending']`（値は `owner_id`）。取り込み中のアップロード失敗は取り込みを止めず、印を残して**同期の最後に再試行**する（`retry_pending_upload`。§3.2 手順 8）。この間その鍵は端末にしか無い＝端末故障で復元不能なので、警告ログを出す。
   - keyring に PRK が無い / 未ログインのときは何もしない（再試行は `false`）。`crates/core/src/pack_keys.rs:23`, `:29`, `:214-245`, `:268-325`
 
@@ -238,7 +238,7 @@
 手順:
 
 1. `drive.list_files(folder_id)` で全ファイル取得、件数をログ `crates/core/src/drive/sync.rs:225-227`。
-2. Drive 側ファイル名から pack_id を抽出（`{pack_id}.opfspack` のみ。空・`/`・`\`・`..`・`:`・制御文字・先頭 `.` を含む id は除外）。同名は**最初の 1 件を採用**（`HashMap::entry().or_insert`）`crates/core/src/drive/sync.rs:76-79`, `:239-245`。
+2. Drive 側ファイル名から pack_id を抽出（`{pack_id}.nartik` のみ。空・`/`・`\`・`..`・`:`・制御文字・先頭 `.` を含む id は除外）。同名は**最初の 1 件を採用**（`HashMap::entry().or_insert`）`crates/core/src/drive/sync.rs:76-79`, `:239-245`。
 3. `outcome.file_count = files.len()`、`outcome.total_bytes = Σ max(size,0)` `crates/core/src/drive/sync.rs:246-251`。
 4. アップロード対象集合 `upload_ids = books::owned_book_ids(pool, key, Some(sub))`。未ログイン（`identity_sub = None`）は空集合で**何もアップロードしない** `crates/core/src/drive/sync.rs:231-238`。
 5. **ダウンロード方向**（Drive の各 pack について）`crates/core/src/drive/sync.rs:253-325`:
@@ -246,12 +246,12 @@
    2. `drive_md5` が空でなく `state.md5` と一致 → スキップ（`outcome.skipped`）`crates/core/src/drive/sync.rs:255-264`。
    3. `local_changed = state があり、ローカル pack の mtime(秒) > state.last_synced_at("%Y-%m-%d %H:%M:%S")`（厳密に大。ファイル無し・metadata 取得失敗・mtime 取得失敗・日時パース失敗はすべて false = 未変更扱い）`crates/core/src/drive/sync.rs:87-107`。
    4. `drive.download_to_file(file.id, temp, on_progress)` で**一時ファイルへ直接ストリーム**する（実体は `Transport::send_download_to` の 10 GiB + 進捗/キャンセル経路。§3.1）。pack 全体を RAM に載せないので、pack サイズがメモリ使用量に効かない。進捗は `SyncProgress { name, index, count, bytes, total_bytes }` として `sync_with_progress` のコールバックへ渡す（`total_bytes` は `Content-Length` が無ければ `None`）。コールバックが `false` を返す、2xx 以外、書き込み失敗のいずれでも**一時ファイルを削除**し、`SyncError::Cancelled` なら同期全体を中断する（**その pack は置き場に残さない・取り込まない。取り込み済みの分は残る**）。
-   4b. 検証も**ファイル裏打ち**（`opfspack::PackFileReader::open`）で行う（`ENCRYPTED` と鍵の有無だけ見る）。失敗したら一時ファイルを消して中断する。検証後は**開いているハンドルを落としてから** rename する（Windows は開いているファイルを rename できない）。
+   4b. 検証も**ファイル裏打ち**（`nartik::PackFileReader::open`）で行う（`ENCRYPTED` と鍵の有無だけ見る）。失敗したら一時ファイルを消して中断する。検証後は**開いているハンドルを落としてから** rename する（Windows は開いているファイルを rename できない）。
    4c. 取り込み（`import_book` → `rebuild_from_pack`）は**最終パスから開き直した reader**（`&dyn PackRead`）で行う `crates/core/src/drive/sync.rs:320-400`。
    5. `PackReader::open(&bytes)` が失敗 → **`PackError::Version` は `SyncError::UnsupportedPackVersion`**（v2 以前の pack。ストアからの**再取り込み**を案内）、それ以外は `SyncError::InvalidPack` `crates/core/src/drive/sync.rs:269-277`。
    6. ヘッダの `ENCRYPTED` が立ち、`pack_root_key` が無い → `SyncError::PackKeyRequired`（同期全体を中断）。**平文として読む・平文で上書きする経路は無い**（fail-closed）`crates/core/src/drive/sync.rs:279-281`。
-   7. 競合（`local_changed` かつローカル pack が存在）→ ローカルを `packs/{pack_id}.conflict-local.opfspack` にコピーし `outcome.conflicts` に追加。**Drive 側が勝つ**。
-   8. `downloads_dir` と `packs_dir` を作成し、`downloads/{pack_id}.opfspack`（一時）と `packs/{pack_id}.opfspack`（本体）の両方に書き出す。
+   7. 競合（`local_changed` かつローカル pack が存在）→ ローカルを `packs/{pack_id}.conflict-local.nartik` にコピーし `outcome.conflicts` に追加。**Drive 側が勝つ**。
+   8. `downloads_dir` と `packs_dir` を作成し、`downloads/{pack_id}.nartik`（一時）と `packs/{pack_id}.nartik`（本体）の両方に書き出す。
    9. `import_book` で DB 反映（後述）。
    10. ログイン中なら `books::set_owner_sub(pack_id, encrypt(key, sub))`。
    11. `sync_state::upsert(pack_id, drive_file_id, md5, modified_time, last_synced_at=now)`。`now` は UTC の `%Y-%m-%d %H:%M:%S` `crates/core/src/drive/sync.rs:81-83`。
@@ -261,20 +261,20 @@
    - **Drive バックアップ対象外の本（`books.backup_excluded = 1`）は skip する**（大きい pack を上げない。右クリックメニューで切り替え、取り込み時に pack が 1 GiB を超えたら自動で立てる）。**終了時のアップロードも同じ経路**なので終了時にも上がらない `crates/core/src/drive/sync.rs`
    1. `pack_id = book.pack_id`（無ければ `book.id`）。空ならスキップ。
    2. `upload_ids` に含まれない本（未所属・他アカウント）はスキップ。
-   3. `packs_dir/{pack_id}.opfspack` が無ければスキップ。
+   3. `packs_dir/{pack_id}.nartik` が無ければスキップ。
    4. `sync_state` が無ければアップロード。あれば「Drive 側に同じ `drive_file_id` がまだ存在」**かつ**「ローカル mtime > last_synced_at」のときだけアップロード（削除は伝播させない）。
    5. 上げる直前に `SyncPhase::Upload` の進捗（`count = 0` = 総数不明。ファイル名のみ）を報告し、`false` なら**そのファイルを上げずに** `SyncError::Cancelled` で中断する（転送そのものは止められないので、ここが区切り）。
    6. `drive.upload_multipart_from_file(file名, folder_id, local_path)` で上げた後、`sync_state::upsert(md5 = md5(ファイルを順に読んで計算), modified_time = None, last_synced_at = now)`。
 7. **DB バックアップ**（`db_path.is_some()` のとき）`crates/core/src/drive/sync.rs:379-485`:
    1. `db::backup::export_json(pool, Some(&upload_ids), owner_filter)` でテキストテーブルの JSON を生成（所有者フィルタは必須。無ければバックアップしない）。
-   2. **PRK があれば `thundoku-backup.json` を v3 の暗号化された封筒にする**（後述。仕様は `docs/spec/10-pack-keys.md` §11）。**鍵が無ければ平文（v2）で書き、警告をログに残す**（鍵が用意できないだけで利用者の唯一の控えを失う方が危険、という判断）`crates/core/src/drive/sync.rs:406-419`。
+   2. **PRK があれば `ligrol-backup.json` を v3 の暗号化された封筒にする**（後述。仕様は `docs/spec/10-pack-keys.md` §11）。**鍵が無ければ平文（v2）で書き、警告をログに残す**（鍵が用意できないだけで利用者の唯一の控えを失う方が危険、という判断）`crates/core/src/drive/sync.rs:406-419`。
    3. アップロード要否:
       - **v3**: 基準値 `app_settings['drive.backup.md5']`（前回アップロードした内容の `content_hmac`）と今回の封筒の `content_hmac` を比較。**暗号文の md5 は nonce が乱数で毎回変わるため使えない**。Drive 側にファイルが無ければ上げ直す `crates/core/src/drive/sync.rs:421-437`。
       - **v2**: 従来どおり書き出したバイト列の md5 と Drive の `md5Checksum` を比較。
    4. 上げる場合 → **先に新しいバックアップを上げてから**旧ファイルを `delete`。`outcome.database_backed_up = true`。
    5. 上げない場合（同じ内容）→ `drive.touch(file.id)` で `modifiedTime` だけ現在時刻に更新（バックアップの更新日時が古いままにならないように）。
    6. どちらの場合も基準値を保存する（**v3 = `content_hmac` / v2 = 正規形 md5**。形式ごとに比較できる値が違う）`crates/core/src/drive/sync.rs:478-485`, `:598`。
-8. **鍵 bundle の再試行**（`identity_sub` があるとき）`crates/core/src/drive/sync.rs:487-500`: `pack_keys::PackKeyStore::retry_pending_upload` を呼び、`drive.pack_keys.pending` が自分の `owner_id` なら `thundoku-keys.json` を上げ直して印を消す。**失敗しても同期全体は成功**として扱う（印は残り、次の同期で再試行。§3.1）。
+8. **鍵 bundle の再試行**（`identity_sub` があるとき）`crates/core/src/drive/sync.rs:487-500`: `pack_keys::PackKeyStore::retry_pending_upload` を呼び、`drive.pack_keys.pending` が自分の `owner_id` なら `ligrol-keys.json` を上げ直して印を消す。**失敗しても同期全体は成功**として扱う（印は残り、次の同期で再試行。§3.1）。
 - 進捗つき API: `sync(request)` は `sync_with_progress(request, &mut |_| true)`（進捗を使わない呼び出し＝起動時・終了時の自動同期）。`SyncProgress` は `phase`（`Download` / `Upload` / `Backup`）+ 名前・何件目/全件（`0` = 総数不明）・受信バイト数を持つ。ダウンロードの分母 `count` は**その回に転送する pack の総数**で、md5 一致でスキップした pack は数えない（先に転送対象を確定してから回す）。**中止が効くのはこの 3 つの区切りだけ**（取得中はその場、アップロードは次のファイルの直前、バックアップは書き出す前）。
 - 戻り値 `SyncOutcome` `crates/core/src/drive/sync.rs:31-43`: `downloaded` / `uploaded` / `skipped` / `conflicts`（pack_id の Vec）, `file_count`（Drive フォルダ内の全ファイル数）, `total_bytes`（Σ size、bytes）, `database_backed_up`, `database_restored`。
 - エラー型 `SyncError`: `Drive` / `Io` / **`Cancelled`**（進捗コールバックが中止を要求した。利用者操作なので UI はエラーではなく通知で伝える） / `Db` / `Pack` / `InvalidPack` / **`PackKeyRequired`**（暗号化 pack だが PRK が無い。fail-closed） / **`UnsupportedPackVersion { pack_id, version }`**（v2 以前の pack。再取り込みを案内） / **`BackupKeyRequired(owner_id)`**（暗号化された DB バックアップだが鍵が無い） / **`Backup(BackupError)`**（バックアップの形式不正・復号失敗）。
@@ -284,7 +284,7 @@
 ### 3.3 ダウンロードした pack の DB 反映（`import_book`）
 
 - `metadata.json` エントリを（`pack_root_key` があれば `PackKey = PRK.derive_pack_key(pack_id)` を渡して）読み、`title` / `author` / `circleName` / `purchaseDate` を採用。鍵が無い・読めない場合は `title = pack_id`、他は空（`read_entry` の失敗は握って続行）`crates/core/src/drive/sync.rs:121-123`, `:109-190`。
-- `books::upsert` の固定値: `file_name = opfs_path = "{pack_id}.opfspack"`, `tags_fetched = 1`, `pack_id = Some(pack_id)`, `is_favorite = 0`, `is_hidden = 0`, `is_drm = 0`, `cover_thumbnail = None`, `tbf_product_id = None`, `site_id = None`, `created_at = updated_at = now` `crates/core/src/drive/sync.rs:147-179`。
+- `books::upsert` の固定値: `file_name = opfs_path = "{pack_id}.nartik"`, `tags_fetched = 1`, `pack_id = Some(pack_id)`, `is_favorite = 0`, `is_hidden = 0`, `is_drm = 0`, `cover_thumbnail = None`, `tbf_product_id = None`, `site_id = None`, `created_at = updated_at = now` `crates/core/src/drive/sync.rs:147-179`。
 - 続けて `import::rebuild_from_pack(pool, pack_id, pack_bytes, root_key)` でドキュメント・コンテンツ・ページ行を再構築（失敗は `log::warn` のみで続行）`crates/core/src/drive/sync.rs:182-188`。
 
 ### 3.4 DB バックアップの中身（`db/backup.rs`）
@@ -305,12 +305,12 @@
   - 復元 `import_json` は `books.id` / `books.pack_id` が安全な id でなければ**復元を中止**する
     （`pack_path::is_safe_id`。保存領域外を指す pack パスを作らせない）。
 - 復元 `import_json`: 各テーブルを PK 競合時 `DO UPDATE` の UPSERT でマージ（**Drive 側優先**）。`INSERT ... ON CONFLICT DO UPDATE` は DELETE を伴わないため FK の `ON DELETE CASCADE` を発火させない `crates/core/src/db/backup.rs:331-379`, `:526-`。PK 定義は `books:[id]`, `bookshelf_items:[site_id,database_id]`, `checked_items:[id]`, `product_sample_pages:[id]`, `tbf_events:[id]`, `book_contents:[content_id]`, `content_formats:[format_id]`, `reading_progress:[book_id,content_id]`, `page_views:[book_id,content_id,page_number]`, `book_tags:[id]`, `favorite_tags:[tag_name]`, `favorite_entities:[entity_kind,entity_name]`, `imported_documents:[id]`, `document_images:[id]`, `book_first_events:[site_id,database_id]`, `zenn_tag_metadata:[tag_name]`, `view_history:[id]` `crates/core/src/db/backup.rs:439-461`。
-- Drive 上のファイル名: `const DB_BACKUP_NAME = "thundoku-backup.json"` `crates/core/src/drive/sync.rs:501`。
-- **暗号化（v3 / R06）**: Drive 上の `thundoku-backup.json` は 2 形式ある（仕様の正は `docs/spec/10-pack-keys.md` §11）:
+- Drive 上のファイル名: `const DB_BACKUP_NAME = "ligrol-backup.json"` `crates/core/src/drive/sync.rs:501`。
+- **暗号化（v3 / R06）**: Drive 上の `ligrol-backup.json` は 2 形式ある（仕様の正は `docs/spec/10-pack-keys.md` §11）:
   - **v3 = 暗号化された封筒**（`format_version: 3` + `encryption`）。平文は従来のバックアップ JSON そのもので、鍵は PRK から導出した `backup_cipher_key` / `backup_hash_key`
   - **v2 = 平文**（従来のまま）。**読める**（既存の控えを読めなくしない）
   - 判別と復号は `db::backup::DriveBackup`（`parse` / `owner_id` / `change_token` / `plaintext`）`crates/core/src/db/backup.rs:194`, `:218`。**`encryption` があるファイルは必ず封筒として扱い**、壊れていればエラーにする（暗号文を平文として取り込まない）。未知の `format_version` も同様に拒否する
-  - 復号の鍵は keyring の `thundoku-shelf.pack-root-key:<owner_id>`（封筒の `owner_id` でスロットを選ぶ）`crates/core/src/drive/sync.rs:576`。**無ければ復号しない**
+  - 復号の鍵は keyring の `ligrol.pack-root-key:<owner_id>`（封筒の `owner_id` でスロットを選ぶ）`crates/core/src/drive/sync.rs:576`。**無ければ復号しない**
 - 復元 API: `check_drive_backup(drive, folder_id)` → `DriveBackupInfo{file_id, md5, size, modified_time}`（無ければ `None`）`crates/core/src/drive/sync.rs:517-531`; `restore_drive_backup(drive, folder_id, pool)` はダウンロード → v3 なら復号 → `backup::import_json` `crates/core/src/drive/sync.rs:538-569`。鍵が無ければ `SyncError::BackupKeyRequired` で失敗し**1 行も取り込まない**（fail-closed）。
 - 差分判定 `inspect_drive_backup(pool, drive, folder_id, book_ids, owner, baseline_md5)` → `Option<BackupStatus{info, drive_changed, local_differs}>` `crates/core/src/drive/sync.rs:638-687`:
   - 比較は両側を `backup::canonicalize_json` の正規形にしてから md5 で行う。正規形は「Drive 側に存在するテーブルだけに絞る」「揮発列（`books.updated_at` / `bookshelf_items.synced_at,updated_at` / `tbf_events.updated_at`）を落とす」「行を PK 順に並べる」`crates/core/src/db/backup.rs:50-146`。新テーブル追加・同期のたびに書き換わる時刻・行の物理順で毎回復元確認が出るのを防ぐ。**v3 は先に復号してから**同じ比較に載せる。
@@ -366,16 +366,16 @@
 - 同期完了トーストは「同期完了（DL n / UL n / スキップ n / 競合 n）[/ DB バックアップ]」`crates/app/src/views/settings.rs:868-882`。
 - 同期は `drive_enabled` 設定に関わらず**手動実行は可能**（無効時もエンジンは動く）。無効化は「終了時アップロード」等の自動導線を止める意味を持つ `crates/app/src/views/settings.rs:754-766`（※意図の明記はコード上なし → 「推測」節）。
 
-### 3.6 表紙バンドル（`thundoku-thumbs.json`）
+### 3.6 表紙バンドル（`ligrol-thumbs.json`）
 
 Web 版の本棚が**未ダウンロードの本の表紙**を出せるように、表紙画像を 1 ファイルにまとめて
 同じフォルダへ置く。形式・鍵・画像の仕様は `docs/spec/10-pack-keys.md` §11.8。
 
 | 項目 | 値 / 挙動 | アンカー |
 |---|---|---|
-| ファイル名 | `thundoku-thumbs.json`（`thundoku-backup.json` と同じフォルダ） | `crates/core/src/drive/sync.rs`（`THUMBS_NAME`） |
+| ファイル名 | `ligrol-thumbs.json`（`ligrol-backup.json` と同じフォルダ） | `crates/core/src/drive/sync.rs`（`THUMBS_NAME`） |
 | 平文 | 本棚の表紙（256px WebP）とチェックリストのサムネイル（256px JPEG）を base64 で持つ `entries` 配列 | `crates/core/src/thumbs.rs`（`build_plaintext`） |
-| 封筒 | `thundoku-backup.json` と同じ AES-256-GCM の封筒（ラベルだけ別）。**PRK があるときだけ上げる**（平文フォールバックは無い） | `crates/opfspack/src/keys.rs`（`THUMBS_LABEL`） |
+| 封筒 | `ligrol-backup.json` と同じ AES-256-GCM の封筒（ラベルだけ別）。**PRK があるときだけ上げる**（平文フォールバックは無い） | `crates/nartik/src/keys.rs`（`THUMBS_LABEL`） |
 | 変更検知 | `app_settings['drive.thumbs.hash']`（封筒の `content_hmac`）。同じ内容なら `touch` だけ | `crates/core/src/drive/sync.rs`（`THUMBS_BASELINE_KEY`） |
 | 1 回の同期でエンコードする枚数 | 100 枚まで。残りは次の同期で載る（派生キャッシュに入った分は再エンコードしない） | `crates/core/src/drive/sync.rs`（`THUMBS_ENCODE_PER_SYNC`） |
 | 空のとき | 1 枚も作れなければ**既存のバンドルを残す**（表紙キャッシュの無い端末が Web 側の表紙を消さない） | 同上 |

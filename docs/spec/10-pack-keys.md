@@ -1,13 +1,13 @@
 # 10. pack の鍵（v3 = ルート鍵 + ラップ）
 
-> **状態: Rust 側は実装済み（`crates/opfspack` = Phase A / `crates/core` = Phase B）/ Web 版は未対応**。
-> 実装の正は `crates/opfspack/src/keys.rs` と `crates/core/src/pack_keys.rs`、pack 形式と鍵導出の
+> **状態: Rust 側は実装済み（`crates/nartik` = Phase A / `crates/core` = Phase B）/ Web 版は未対応**。
+> 実装の正は `crates/nartik/src/keys.rs` と `crates/core/src/pack_keys.rs`、pack 形式と鍵導出の
 > 記述は `docs/spec/03-import-and-pack.md` §4.5・§6.2。**読み出しも v3 のみ**で、v2 の pack は
 > `unsupported pack version` として拒否され、再取り込みが要る。
-> **残り**: Web 版（`thundoku-shelf` モノレポ / `packages/opfspack`）の対応（§7 のチェックリスト）と、
-> アプリ側の配線（パスフレーズの入力 UI など。本章は core / opfspack の仕様まで）。
+> **残り**: Web 版（`ligrol` モノレポ / `packages/nartik`）の対応（§7 のチェックリスト）と、
+> アプリ側の配線（パスフレーズの入力 UI など。本章は core / nartik の仕様まで）。
 > **§11（メタデータバックアップの暗号化）も Rust 側は実装済み**（2026-09-25 / R06）。
-> `thundoku-backup.json` は PRK がある限り**暗号化された封筒（v3）**になり、v2 の平文も読める。
+> `ligrol-backup.json` は PRK がある限り**暗号化された封筒（v3）**になり、v2 の平文も読める。
 >
 > **決定（2026-09-24）**: 方式は **C（`sub` ラップ + 任意のパスフレーズラップ）**。
 > α 版のため**後方互換は切る**。**パスフレーズラップも今回の実装に含める**。
@@ -23,7 +23,7 @@
 ## 0. この章の読み方
 
 - 数値・文字列・バイト列は**バイト一致が要件**（Rust 版と TS 版で同じ pack を読めること）。
-- 実装アンカーは `crates/opfspack/src/keys.rs`（ラップ・bundle・PRK）と `crates/core/src/pack_keys.rs`
+- 実装アンカーは `crates/nartik/src/keys.rs`（ラップ・bundle・PRK）と `crates/core/src/pack_keys.rs`
   （keyring / Drive の解決と保管）。pack 本体の数値（header / version / 上限）は
   `docs/spec/03-import-and-pack.md` §4 を参照。
 - 断定的に書いていない事項は §10「不明点」に分離してある。
@@ -34,7 +34,7 @@
 
 | | 内容 |
 |---|---|
-| 守る | `.opfspack` の中身（ページ画像・メタデータ）。**鍵材料は乱数**で、`sub` からは導出できない |
+| 守る | `.nartik` の中身（ページ画像・メタデータ）。**鍵材料は乱数**で、`sub` からは導出できない |
 | 守らない | 端末の OS アカウントを奪われて keyring を読まれる場合（PRK そのものが取られる）／ブラウザの XSS（Web 実装が鍵を保持する）／Drive アカウントごと奪われる場合（既存端末の keyring が無ければ復号はできないが、鍵の更新はできない） |
 
 ### 1.2 どの漏洩で何が解けるか（正直な強度）
@@ -44,7 +44,7 @@
 
 **現行の `set_passphrase` はパスフレーズラップを追加するだけで `sub` ラップを消さない**
 （`crates/core/src/pack_keys.rs` の `set_passphrase` は `bundle.upsert_wrap(...)` のみ）。
-したがって Drive ごと漏れる想定（`thundoku-keys.json` + `sub`）では、**パスフレーズの有無は
+したがって Drive ごと漏れる想定（`ligrol-keys.json` + `sub`）では、**パスフレーズの有無は
 強度に影響しない**。パスフレーズは「Google に依存しない**復元手段**」であって、追加の防御では
 ない（**追加防御にしたい場合は「パスフレーズ必須モード」をオンにする**＝ `sub` ラップを削除する。
 §5.2.1 / 2026-09-26 実装済み。オンにすると下表の最終列になる）。
@@ -52,11 +52,11 @@
 | 漏れたもの | `sub` ラップのみ | パスフレーズラップあり（現行＝`sub` ラップ併存） | `sub` ラップ無し（必須モード §5.2.1） |
 |---|---|---|---|
 | pack ファイル 1 つ | 解けない（bundle が要る） | 解けない | 解けない |
-| pack + `thundoku-keys.json` | **解ける**（`sub` を知っていれば） | **解ける**（`sub` ラップが残っている） | 解けない（パスフレーズが要る） |
+| pack + `ligrol-keys.json` | **解ける**（`sub` を知っていれば） | **解ける**（`sub` ラップが残っている） | 解けない（パスフレーズが要る） |
 | 上記 + `sub` | 解ける | **解ける** | 解けない |
 | 端末の keyring | 解ける（PRK を直接取られる） | 解ける | 解ける |
 
-- `thundoku-keys.json` に `sub` は**入らない**（`owner_id` は `sub` のハッシュで一方向）。
+- `ligrol-keys.json` に `sub` は**入らない**（`owner_id` は `sub` のハッシュで一方向）。
   したがって「bundle だけ漏れた」場合は `sub` を別途入手しないと解けない。
 - v2 との比較: v2 は「pack ファイル + `sub`」で解けた。v3 は**bundle が無ければ解けない**。
   これが移行の実利（＋後述のローテーション可能性）。
@@ -81,22 +81,22 @@ PRK (pack root key, 32B 乱数・アカウントごとに 1 個)
 PRK の保管 = ラップ（Wrapping）= 以下で AES-256-GCM した 32B
   KEK_sub        = PBKDF2-SHA256(password = UTF8(sub) ‖ APP_SALT, salt = APP_SALT, 100_000, 32B)
   KEK_passphrase = PBKDF2-SHA256(password = NFKC(passphrase) の UTF-8, salt = ランダム 16B, iterations, 32B)
-  ラップの AAD    = UTF8("thundoku-pack-root:1:" + owner_id)
+  ラップの AAD    = UTF8("ligrol-pack-root:1:" + owner_id)
 ```
 
 | 定数 | 値 | 備考 |
 |---|---|---|
-| `APP_SALT` | `b"opfspack-v1-identity-salt-2024"` | v2 と同一（`sub` ラップの KEK は v2 の master key そのもの） |
+| `APP_SALT` | `b"nartik-v1-identity-salt-2026"` | v2 と同一（`sub` ラップの KEK は v2 の master key そのもの） |
 | `PBKDF2_ITERATIONS`（sub） | `100_000` | 同上 |
 | `PBKDF2_ITERATIONS`（passphrase） | `600_000` | ラップごとに `iterations` を記録するので将来上げられる。**実測: release ビルドで 1 回 ≒ 60ms**（debug は ≒ 3.4s。2026-09-24 計測） |
 | `MIN_PASSPHRASE_CHARS` | `12` | パスフレーズの最低文字数。強度は反復回数より**長さ**に強く効くため、短いものは設定時に拒否する（`crates/core/src/pack_keys.rs`） |
-| `HKDF_INFO` | `b"opfspack-entry-key"` | v2 と同一 |
-| `owner_id` | `SHA-256("opfspack:v1:" + sub)` の小文字 hex | 既存 `derive_owner_id` と同一 |
-| ラップの AAD | `"thundoku-pack-root:1:" + owner_id` | 別アカウントのラップへの差し替えを検出する |
+| `HKDF_INFO` | `b"nartik-entry-key"` | v2 と同一 |
+| `owner_id` | `SHA-256("nartik:v1:" + sub)` の小文字 hex | 既存 `derive_owner_id` と同一 |
+| ラップの AAD | `"ligrol-pack-root:1:" + owner_id` | 別アカウントのラップへの差し替えを検出する |
 
-- 既存の `thundoku-shelf.db-key` / `thundoku-shelf.session-key` とは**別の鍵**（用途分離を維持）。
+- 既存の `ligrol.db-key` / `ligrol.session-key` とは**別の鍵**（用途分離を維持）。
 - PRK は**アカウントごと**（`owner_id` ごと）。アカウント切替時はそれぞれの PRK を使う。
-- 実装側の定数名（`crates/opfspack/src/`）: `APP_SALT` / `SUB_WRAP_ITERATIONS` / `PASSPHRASE_WRAP_ITERATIONS`（`lib.rs:46-51`）、`HKDF_INFO`（`crypto.rs:16`）、`KEY_BUNDLE_FORMAT_VERSION` / `WRAP_AAD_PREFIX` / `PASSPHRASE_SALT_LEN` / `WRAP_CIPHERTEXT_LEN`（`keys.rs:24-40`）。
+- 実装側の定数名（`crates/nartik/src/`）: `APP_SALT` / `SUB_WRAP_ITERATIONS` / `PASSPHRASE_WRAP_ITERATIONS`（`lib.rs:46-51`）、`HKDF_INFO`（`crypto.rs:16`）、`KEY_BUNDLE_FORMAT_VERSION` / `WRAP_AAD_PREFIX` / `PASSPHRASE_SALT_LEN` / `WRAP_CIPHERTEXT_LEN`（`keys.rs:24-40`）。
 
 ## 3. ラップの保存形式
 
@@ -104,15 +104,15 @@ PRK の保管 = ラップ（Wrapping）= 以下で AES-256-GCM した 32B
 
 | 場所 | 内容 |
 |---|---|
-| 端末（デスクトップ） | OS keyring。service = 既存の `SERVICE`、user = **`thundoku-shelf.pack-root-key:<owner_id>`**、値 = PRK の base64 |
-| Drive | ファイル **`thundoku-keys.json`**（`thundoku-backup.json` と同じフォルダ）。下記の bundle |
+| 端末（デスクトップ） | OS keyring。service = 既存の `SERVICE`、user = **`ligrol.pack-root-key:<owner_id>`**、値 = PRK の base64 |
+| Drive | ファイル **`ligrol-keys.json`**（`ligrol-backup.json` と同じフォルダ）。下記の bundle |
 
-### 3.2 `thundoku-keys.json`
+### 3.2 `ligrol-keys.json`
 
 ```json
 {
   "format_version": 1,
-  "owner_id": "6366bfc3b6ab37feaf2adb385aeaa515c4aa52cf09e70cac890d888e4409f3b0",
+  "owner_id": "27b44245034c0ede5be981b0d5d07ab78ce95311defd60ce9d9e8fe2bc25ab7d",
   "created_at": 1790000000000,
   "updated_at": 1790000000000,
   "wraps": [
@@ -120,7 +120,7 @@ PRK の保管 = ラップ（Wrapping）= 以下で AES-256-GCM した 32B
       "kind": "sub",
       "kdf": "pbkdf2-sha256",
       "iterations": 100000,
-      "salt": "b3Bmc3BhY2stdjEtaWRlbnRpdHktc2FsdC0yMDI0",
+      "salt": "bmFydGlrLXYxLWlkZW50aXR5LXNhbHQtMjAyNg==",
       "nonce": "AAECAwQFBgcICQoL",
       "ciphertext": "nHt3APH/39gU7sCBwhoBh7xDgqgW9a...="
     },
@@ -152,7 +152,7 @@ PRK の保管 = ラップ（Wrapping）= 以下で AES-256-GCM した 32B
 - `kind=sub` の KEK: `PBKDF2-SHA256(password = UTF8(sub) ‖ APP_SALT, salt = APP_SALT, iterations = 100_000)`
   （v2 の `master_key` と同式。Web 版の既存 `deriveMasterKey` をそのまま使える）。
 - `kind=passphrase` の KEK: `PBKDF2-SHA256(password = NFKC(passphrase) の UTF-8, salt = wraps[].salt, iterations = wraps[].iterations)`。
-- ラップの AAD（両 kind 共通）: `UTF8("thundoku-pack-root:1:" + owner_id)`。**AAD を付け忘れると復号できない**。
+- ラップの AAD（両 kind 共通）: `UTF8("ligrol-pack-root:1:" + owner_id)`。**AAD を付け忘れると復号できない**。
 - base64 は標準アルファベット + padding（`Buffer`/`btoa` 互換）。base64url は使わない。
 
 ## 4. 解決順序（PRK をどう得るか）
@@ -163,8 +163,8 @@ PRK の保管 = ラップ（Wrapping）= 以下で AES-256-GCM した 32B
    （`ImportError::LoginRequired`。平文 pack を作らない — セキュリティ評価 F03）。UI は
    ダウンロードを始める前にログインを促す（`crates/app/src/views/bookshelf.rs` の
    `require_import_login`）。
-1. keyring に `thundoku-shelf.pack-root-key:<owner_id>` があれば**それを使う**（何も尋ねない）。
-2. 無ければ Drive から `thundoku-keys.json` を取得し、`owner_id` 一致の bundle を選ぶ。
+1. keyring に `ligrol.pack-root-key:<owner_id>` があれば**それを使う**（何も尋ねない）。
+2. 無ければ Drive から `ligrol-keys.json` を取得し、`owner_id` 一致の bundle を選ぶ。
 3. `kind=passphrase` がある場合はパスフレーズを尋ねる。入力があればそれで復号し、
    失敗したら**エラー**（`sub` ラップへ黙って落ちない）。利用者が「スキップ」した場合のみ
    `kind=sub` を使う。
@@ -206,7 +206,7 @@ keyring が無いので 2 → 3 の順。`sub` は既存の認証セッション
 |---|---|
 | 何をする | bundle から `kind=sub` のラップを削除し、（必要なら）`kind=passphrase` を upsert する（**1 回の書き込み**。Drive に中途半端な状態を残さない） |
 | パスフレーズを尋ねる条件 | **まだパスフレーズが設定されていないときだけ**。既に設定済みなら `enable_passphrase_only(..., None)` で**既存のラップをそのまま使う**（値を尋ね直さない。必要なのは `sub` ラップを消すことだけ）。値も既存のラップも無ければ `PassphraseRequired` で断る（必須にした瞬間に解錠手段が無くなるため） |
-| 何が変わる | Google ログイン（`sub`）だけでは PRK に戻せない。Drive の `thundoku-keys.json` と `sub` を**両方**奪われても本は復号できない（§1.2 の表の最終列） |
+| 何が変わる | Google ログイン（`sub`）だけでは PRK に戻せない。Drive の `ligrol-keys.json` と `sub` を**両方**奪われても本は復号できない（§1.2 の表の最終列） |
 | 解錠 | パスフレーズを尋ねる（`decide_root_key`）。**「スキップ」では復元しない**（`PackKeysError::PassphraseRequired`。`sub` へ戻る経路が無い） |
 | 代償 | 新端末で Google ログインだけでは読めない（Web 版の「ログインだけで読める」経路も止まる）。**パスフレーズを忘れると復元できない** |
 | 既定 | **オフ**。設定画面「本の鍵」の「必須にする」で明示的にオンにする（パスフレーズ入力欄の値を使う）。オンのときは「必須を解除する」が出る |
@@ -247,16 +247,16 @@ UI は `crates/app/src/views/settings.rs`（「本の鍵」カード）、解錠
 - v2 の pack は開けない（`PackError::Version(2)`）。利用者には「旧形式のため**再取り込みが必要**」と
   案内する（取り込み直せば v3 で保存される）。
 
-## 7. Web 実装チェックリスト（`thundoku-shelf` モノレポ）
+## 7. Web 実装チェックリスト（`ligrol` モノレポ）
 
-- [ ] `packages/opfspack/src/auth/identity-key.ts`: 既存 `deriveMasterKey(sub)` を
+- [ ] `packages/nartik/src/auth/identity-key.ts`: 既存 `deriveMasterKey(sub)` を
       **`deriveSubWrapKek(sub)` として再利用**（式は同じ。用途名を変えて誤用を防ぐ）。
 - [ ] `unwrapPackRoot({ salt, iterations, nonce, ciphertext }, kek, ownerId)` を追加
       （Web Crypto: `crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations, hash: "SHA-256" }, ...)`
-      → `crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce, additionalData: UTF8("thundoku-pack-root:1:" + ownerId) }, ...)`）。
+      → `crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce, additionalData: UTF8("ligrol-pack-root:1:" + ownerId) }, ...)`）。
 - [ ] `derivePackKey(prk, packId)` を追加（`HKDF`: `importKey("raw", prk, "HKDF")` →
-      `deriveBits({ name: "HKDF", hash: "SHA-256", salt: UTF8(packId), info: UTF8("opfspack-entry-key") }, ..., 256)`）。
-- [ ] `thundoku-keys.json` の取得（Drive の同じフォルダ）・`owner_id` 照合・`format_version` 検査・
+      `deriveBits({ name: "HKDF", hash: "SHA-256", salt: UTF8(packId), info: UTF8("nartik-entry-key") }, ..., 256)`）。
+- [ ] `ligrol-keys.json` の取得（Drive の同じフォルダ）・`owner_id` 照合・`format_version` 検査・
       `kind` 選択・パスフレーズ入力 UI（**NFKC 正規化**してから UTF-8 化）。
 - [ ] パスフレーズが設定されている場合は**先に**そちらを試し、失敗時に `sub` ラップへ
       黙って落ちない（デスクトップと同じ規則）。
@@ -273,22 +273,22 @@ UI は `crates/app/src/views/settings.rs`（「本の鍵」カード）、解錠
 
 | 入力 | 期待値 |
 |---|---|
-| `owner_id("test-sub")` | `6366bfc3b6ab37feaf2adb385aeaa515c4aa52cf09e70cac890d888e4409f3b0` |
-| `KEK_sub = PBKDF2(sub="test-sub")` | `e0aaeaedbc447f52d089dc7f7422eb4575edb21c67fe954c006e9a1c9131bd73` |
+| `owner_id("test-sub")` | `27b44245034c0ede5be981b0d5d07ab78ce95311defd60ce9d9e8fe2bc25ab7d` |
+| `KEK_sub = PBKDF2(sub="test-sub")` | `d76f7af69d173784da3876982bf29fbf6e35bf79534ea30cd3de3dc4bf62ecc5` |
 | `pack_key v2 = HKDF(KEK_sub, pack_id="test-pack")` | `1ac84c9cbe517c58667657c7536b5a7a90e3e0d9a3d584732bae2e345ed97d29` |
-| `pack_key v3 = HKDF(PRK, pack_id="test-pack")`、`PRK = 00 01 … 1f` | `9c65c8705e14eacc536cf438b3ff2fa58d399ffa50b10c451d543b2c058f7cd6` |
+| `pack_key v3 = HKDF(PRK, pack_id="test-pack")`、`PRK = 00 01 … 1f` | `d31e08ee0ca212fdd318a543e187d47549fa45590fcc69b5af670cebce28bccc` |
 
 **ラップ**（`PRK = 00 01 … 1f` / `KEK = KEK_sub("test-sub")` / `nonce = 00 01 … 0b` / AAD は §2 の式）
 
 | 項目 | 期待値 |
 |---|---|
 | `nonce` (hex) | `000102030405060708090a0b` |
-| `ciphertext` (hex) | `9c7b7700f1ffdfd814eec081c21a0187bc4382a816f5a48918a789a5f485bd1b428c7b8cffa54ccdacf74a0ae0e094fa` |
-| `AAD` (UTF-8) | `thundoku-pack-root:1:6366bfc3b6ab37feaf2adb385aeaa515c4aa52cf09e70cac890d888e4409f3b0` |
+| `ciphertext` (hex) | `756655214168acab16e030def3d23f1a9be48a63a76f696c72b324d65533daf338d683031070104af7987cd683a77d4b` |
+| `AAD` (UTF-8) | `ligrol-pack-root:1:27b44245034c0ede5be981b0d5d07ab78ce95311defd60ce9d9e8fe2bc25ab7d` |
 
 - PBKDF2 / HKDF の検算用（実装の前提そのものの確認）: PBKDF2-HMAC-SHA256(`"password"`, `"salt"`, 1 回, 32B)
   = `120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b`／RFC 5869 Test Case 1 の OKM。
-- **Rust 側はこの表をテストで固定している**: `crates/opfspack/tests/keys_v3.rs`（`pack_key v3` と `sub` ラップの暗号文）・`crates/opfspack/tests/interop.rs`（`owner_id`）。値を書き換えるときは仕様書と実装を同時に直す。`pack_key v2` の行は**廃止した旧方式の参考値**（v2 の pack は読めない）。
+- **Rust 側はこの表をテストで固定している**: `crates/nartik/tests/keys_v3.rs`（`pack_key v3` と `sub` ラップの暗号文）・`crates/nartik/tests/interop.rs`（`owner_id`）。値を書き換えるときは仕様書と実装を同時に直す。`pack_key v2` の行は**廃止した旧方式の参考値**（v2 の pack は読めない）。
 
 ## 9. 未実装・将来のオプション（現時点で実装しない）
 
@@ -298,21 +298,21 @@ UI は `crates/app/src/views/settings.rs`（「本の鍵」カード）、解錠
 - パスフレーズの代わりになる明示的な回復コード（現状は「Drive の bundle + パスフレーズ」が回復手段）。
 - 鍵のローテーション（PRK そのものの入れ替え＝全 pack の再暗号化）。漏洩が疑われる場合に
   現行でできるのは「鍵（keyring と bundle）を消して新しい PRK を作り、本を取り込み直す」運用
-  だけ（古い `.opfspack` は開けなくなる）。
+  だけ（古い `.nartik` は開けなくなる）。
 
 ## 10. 不明点
 
 | 項目 | 現状 |
 |---|---|
 | パスフレーズの PBKDF2 反復回数 | `600_000` で確定（release 実測 ≒ 60ms。ローカルの解錠では体感できない。将来上げる場合はラップの `iterations` を上げて作り直すだけ＝ PRK も pack も変えない） |
-| NFKC 正規化の必要性 | IME / OS による差（合成文字）を避けるために仕様に含めたが、実機での差は未検証。Rust 側は `unicode_normalization` で NFKC してから PBKDF2 に渡す（`crates/opfspack/src/keys.rs`。パスフレーズのラップ作成・復号の両方） |
+| NFKC 正規化の必要性 | IME / OS による差（合成文字）を避けるために仕様に含めたが、実機での差は未検証。Rust 側は `unicode_normalization` で NFKC してから PBKDF2 に渡す（`crates/nartik/src/keys.rs`。パスフレーズのラップ作成・復号の両方） |
 | Drive のフォルダがアカウント別でない既知の制約 | `docs/spec/README.md` §4 の「Drive の保存先フォルダはアカウント別ではない」。bundle は `owner_id` で選別するので混在しても誤用しない設計だが、フォルダ分離は別件（§11.5 も参照） |
 | Web 側の鍵の保持 | メモリのみか IndexedDB かは Web 側の判断（XSS リスクの tradeoff。本仕様はどちらも許容する） |
 
-## 11. バックアップの暗号化（`thundoku-backup.json` v3 / R06）
+## 11. バックアップの暗号化（`ligrol-backup.json` v3 / R06）
 
 > **状態: Rust 側は実装済み（2026-09-25）/ Web 版は未対応**。実装の正は
-> `crates/opfspack/src/keys.rs`（鍵導出と封筒 `SealedEnvelope` + ラベル
+> `crates/nartik/src/keys.rs`（鍵導出と封筒 `SealedEnvelope` + ラベル
 > `BACKUP_LABEL` / `THUMBS_LABEL`）と
 > `crates/core/src/db/backup.rs`（`DriveBackup` = v3/v2 の判別と復号）、同期への配線は
 > `crates/core/src/drive/sync.rs`。同じ封筒を**表紙バンドル**（§11.8）でも使う。
@@ -322,31 +322,31 @@ UI は `crates/app/src/views/settings.rs`（「本の鍵」カード）、解錠
 | | 内容 |
 |---|---|
 | 守る | Drive に上げる**メタデータバックアップ**（本棚・進捗・履歴・付箋メモ。`crates/core/src/db/backup.rs` の `TABLES` のテキスト列） |
-| **守らない（DB 全体）** | **ローカルの SQLite（`thundoku-shelf.db`）全体**。SQLCipher 等は入れない（重い・既存の読み書き経路を総取り替えになる）。**ただし機密列（`document_text.text_content` / `token_analysis` の `token`・`pos`・`base_form`・`reading` / `page_notes.memo`）だけは keyring の DB 鍵で暗号化する**（2026-09-26 / セキュリティ評価 F02。`crates/core/src/db/column_crypto.rs`、保存形式は `docs/spec/02-data-model.md` §1.11）。書誌・進捗・履歴などの他の列は平文のまま。**ディスク暗号化（BitLocker / FileVault 等）と OS アカウント分離**を前提にする（`README.md`） |
+| **守らない（DB 全体）** | **ローカルの SQLite（`ligrol.db`）全体**。SQLCipher 等は入れない（重い・既存の読み書き経路を総取り替えになる）。**ただし機密列（`document_text.text_content` / `token_analysis` の `token`・`pos`・`base_form`・`reading` / `page_notes.memo`）だけは keyring の DB 鍵で暗号化する**（2026-09-26 / セキュリティ評価 F02。`crates/core/src/db/column_crypto.rs`、保存形式は `docs/spec/02-data-model.md` §1.11）。書誌・進捗・履歴などの他の列は平文のまま。**ディスク暗号化（BitLocker / FileVault 等）と OS アカウント分離**を前提にする（`README.md`） |
 | 守らない | 端末の OS アカウントを奪われて keyring を読まれる場合（PRK そのものが取られる。§1.2 と同じ） |
 | 対象外 | 画像（`thumbnail_data` / `image_data`）とページ本文（`extracted_text`）は**そもそもバックアップに含めない**（`docs/spec/06-sync-auth-drive.md` §3.4） |
 
-鍵は §2 の PRK から導出する。**新しい鍵管理を増やさない**（keyring と `thundoku-keys.json` の
+鍵は §2 の PRK から導出する。**新しい鍵管理を増やさない**（keyring と `ligrol-keys.json` の
 既存の仕組みをそのまま使う）。
 
 ### 11.2 鍵導出
 
 ```text
-backup_cipher_key = HKDF-SHA256(ikm = PRK, salt = b"thundoku-backup:v1", info = b"thundoku-backup-key",  32B)
-backup_hash_key   = HKDF-SHA256(ikm = PRK, salt = b"thundoku-backup:v1", info = b"thundoku-backup-hash", 32B)
+backup_cipher_key = HKDF-SHA256(ikm = PRK, salt = b"ligrol-backup:v1", info = b"ligrol-backup-key",  32B)
+backup_hash_key   = HKDF-SHA256(ikm = PRK, salt = b"ligrol-backup:v1", info = b"ligrol-backup-hash", 32B)
 ```
 
 | 定数 | 値 |
 |---|---|
-| salt | `b"thundoku-backup:v1"` |
-| info（暗号鍵） | `b"thundoku-backup-key"` |
-| info（HMAC 鍵） | `b"thundoku-backup-hash"` |
-| 封筒の AAD | `UTF8("thundoku-backup:3:" + owner_id)`（`owner_id` = `derive_owner_id(sub)`） |
+| salt | `b"ligrol-backup:v1"` |
+| info（暗号鍵） | `b"ligrol-backup-key"` |
+| info（HMAC 鍵） | `b"ligrol-backup-hash"` |
+| 封筒の AAD | `UTF8("ligrol-backup:3:" + owner_id)`（`owner_id` = `derive_owner_id(sub)`） |
 
 - 実装: `PackRootKey::derive_backup_cipher_key()` / `derive_backup_hash_key()`
-  （`crates/opfspack/src/keys.rs`）。2 本に分けるのは用途分離のため（同じ PRK から導出するが、
+  （`crates/nartik/src/keys.rs`）。2 本に分けるのは用途分離のため（同じ PRK から導出するが、
   暗号鍵を HMAC に流用しない）。
-- pack 鍵（`HKDF_INFO` = `opfspack-entry-key`）とは salt も info も違う。
+- pack 鍵（`HKDF_INFO` = `nartik-entry-key`）とは salt も info も違う。
 - 封筒の `format_version`（3）を AAD に含めるので、**同じ平文でも版が上がれば別の暗号文**になる。
 
 ### 11.3 封筒の形式
@@ -354,7 +354,7 @@ backup_hash_key   = HKDF-SHA256(ikm = PRK, salt = b"thundoku-backup:v1", info = 
 ```json
 {
   "format_version": 3,
-  "owner_id": "6366bfc3b6ab37feaf2adb385aeaa515c4aa52cf09e70cac890d888e4409f3b0",
+  "owner_id": "27b44245034c0ede5be981b0d5d07ab78ce95311defd60ce9d9e8fe2bc25ab7d",
   "encryption": {
     "alg": "aes-256-gcm",
     "kdf": "hkdf-sha256",
@@ -414,7 +414,7 @@ backup_hash_key   = HKDF-SHA256(ikm = PRK, salt = b"thundoku-backup:v1", info = 
   - `encryption`（オブジェクト）があれば**封筒として扱う**。`format_version` が 3 でなければ
     `対応していないバックアップ形式です（v{n}）` として**拒否**する（暗号文を平文として取り込まない）
   - `encryption` が無ければ従来の平文バックアップ（v2 / 版なし）として読む＝**既存の控えを読めなくしない**
-- 復号に使う鍵は keyring の `thundoku-shelf.pack-root-key:<owner_id>`（§3.1 と同じスロット）。
+- 復号に使う鍵は keyring の `ligrol.pack-root-key:<owner_id>`（§3.1 と同じスロット）。
   スロットは**封筒の `owner_id` で選ぶ**。
 - core には UI が無いのでパスフレーズを尋ねられない。解錠はアプリの `PackKeyStore` が行い、
   成功すれば keyring に入る（§4.1）。したがって**keyring に無い鍵では復号しない**。
@@ -455,8 +455,8 @@ backup_hash_key   = HKDF-SHA256(ikm = PRK, salt = b"thundoku-backup:v1", info = 
 
 | 入力 | 期待値 |
 |---|---|
-| `derive_backup_cipher_key()` | `514e03cce7c0aa82128b07af6ed7cbd1b2e7a30262f811d39201f21fd4faba8e` |
-| `derive_backup_hash_key()` | `840d69fba8e9af9525b86e4c0dfa74403ecfcaa8743a6ed4f7576322c81df043` |
+| `derive_backup_cipher_key()` | `1bf68ba47f38341eb05bdc83a1c7e8d4a4625d3f45100618bdbc584cf46e3d96` |
+| `derive_backup_hash_key()` | `ec18f9e823762350c0d149e259a51db53303b9302674bd9f90954a2ed88864c7` |
 
 **封筒**（`PRK = 00 01 … 1f` / `owner_id = derive_owner_id("test-sub")` /
 `nonce = 0b 0a 09 08 07 06 05 04 03 02 01 00` /
@@ -464,22 +464,22 @@ backup_hash_key   = HKDF-SHA256(ikm = PRK, salt = b"thundoku-backup:v1", info = 
 
 | 項目 | 期待値 |
 |---|---|
-| `AAD` (UTF-8) | `thundoku-backup:3:6366bfc3b6ab37feaf2adb385aeaa515c4aa52cf09e70cac890d888e4409f3b0` |
+| `AAD` (UTF-8) | `ligrol-backup:3:27b44245034c0ede5be981b0d5d07ab78ce95311defd60ce9d9e8fe2bc25ab7d` |
 | `nonce` (hex) | `0b0a09080706050403020100` |
-| `ciphertext` (hex) | `a89bac086476371010c84a0f976bee1d8e83650f48c9c2c411b5bbcf54df7cdea7185fdbd89c979adeb6404b869a38b3` |
-| `content_hmac` (hex) | `1d43363600f7a97ed4357e385917178206398a86b2bb0b0512c67d412007488b` |
+| `ciphertext` (hex) | `445576399467ff7398a654eec82cf5cbbd50c2f8ca853da6690a5b958aed8c69ef68849f6bcc5afbc5a64f19b801d27c` |
+| `content_hmac` (hex) | `01dd31a61fa0bff7ce79dde91e1e9ba878821efd0966b19d390ddda9cf226e0c` |
 
 - 平文は封筒ベクタのための**例**（実際の平文は `export_json` の出力で `format_version` は 2）。
-- Rust 側はこの表を `crates/opfspack/tests/backup_envelope.rs` で固定し、`content_hmac` が
+- Rust 側はこの表を `crates/nartik/tests/backup_envelope.rs` で固定し、`content_hmac` が
   同じ平文で不変・暗号文は毎回変わることも同じファイルで固定している。値を書き換えるときは
   仕様書と実装を同時に直す。
 
-### 11.7 Web 実装チェックリスト（`thundoku-shelf` モノレポ）
+### 11.7 Web 実装チェックリスト（`ligrol` モノレポ）
 
-- [ ] `deriveBackupKey(prk)`: HKDF で 2 本（`info` は `thundoku-backup-key` / `thundoku-backup-hash`、
-  `salt` は `thundoku-backup:v1`）。§11.2 の式と一致させる。
+- [ ] `deriveBackupKey(prk)`: HKDF で 2 本（`info` は `ligrol-backup-key` / `ligrol-backup-hash`、
+  `salt` は `ligrol-backup:v1`）。§11.2 の式と一致させる。
 - [ ] 封筒の `seal` / `open`: `crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce,
-  additionalData: UTF8("thundoku-backup:3:" + ownerId) }, ...)` と `HMAC`（`crypto.subtle.sign`）。
+  additionalData: UTF8("ligrol-backup:3:" + ownerId) }, ...)` と `HMAC`（`crypto.subtle.sign`）。
   `content_hmac` は**平文のバイト列そのもの**に対して計算する（JSON を再直列化しない。
   キー順や空白が違うと値が変わり、無駄なアップロードになる）。
 - [ ] 読むときは `encryption` の有無で v3 / v2 を判別する。未知の `format_version` は**エラー**
@@ -488,13 +488,13 @@ backup_hash_key   = HKDF-SHA256(ikm = PRK, salt = b"thundoku-backup:v1", info = 
 - [ ] PRK が無いときのフォールバック（平文で書く + 警告）と、その結果 Drive 上に平文の
    バックアップが載り得ることを UI / ログで利用者に伝える。
 
-### 11.8 表紙バンドル（`thundoku-thumbs.json` / 2026-09-28）
+### 11.8 表紙バンドル（`ligrol-thumbs.json` / 2026-09-28）
 
 > **状態: デスクトップ側は実装済み / Web 版は未対応**。実装の正は
-> `crates/opfspack/src/keys.rs`（ラベル `THUMBS_LABEL`）と `crates/core/src/thumbs.rs`
+> `crates/nartik/src/keys.rs`（ラベル `THUMBS_LABEL`）と `crates/core/src/thumbs.rs`
 > （平文の組み立て・エンコード）、配線は `crates/core/src/drive/sync.rs`
 > （`backup_thumbnails`）と `crates/core/src/db/thumbs.rs`（派生キャッシュ）。
-> コメント付きのサンプル（データはダミー）は `docs/thundoku-thumbs.jsonc`。
+> コメント付きのサンプル（データはダミー）は `docs/ligrol-thumbs.jsonc`。
 
 #### 何のために
 
@@ -507,9 +507,9 @@ Web 版の本棚が**未ダウンロードの本の表紙**を出せるように
 
 | 項目 | 値 |
 |---|---|
-| ファイル名 | `thundoku-thumbs.json`（`thundoku-backup.json` と同じフォルダ） |
-| 封筒 | §11.3 と同じ（`aes-256-gcm` / `hkdf-sha256`）。**ラベルだけ別**（AAD は `thundoku-thumbs:1:<owner_id>`、`format_version` は 1） |
-| 鍵 | `thumbs_cipher_key` / `thumbs_hash_key`（§11.2 の式の `salt` / `info` を `thundoku-thumbs:*` に差し替え） |
+| ファイル名 | `ligrol-thumbs.json`（`ligrol-backup.json` と同じフォルダ） |
+| 封筒 | §11.3 と同じ（`aes-256-gcm` / `hkdf-sha256`）。**ラベルだけ別**（AAD は `ligrol-thumbs:1:<owner_id>`、`format_version` は 1） |
+| 鍵 | `thumbs_cipher_key` / `thumbs_hash_key`（§11.2 の式の `salt` / `info` を `ligrol-thumbs:*` に差し替え） |
 | 平文 | `{"entries":[…],"format_version":1}` |
 | 対象 | 本棚（`bookshelf_items`）の表紙と、チェックリスト（`checked_items.thumbnail_data`）のサムネイル |
 | 平文で上げるフォールバック | **無い**。PRK が無い端末では上げない（表紙は蔵書そのものを晒し、かつ再取得できる派生データなので、DB バックアップとは判断が違う） |
@@ -570,23 +570,23 @@ Web 版の本棚が**未ダウンロードの本の表紙**を出せるように
 
 | 入力 | 期待値 |
 |---|---|
-| `derive_thumbs_cipher_key()` | `c6bcc317a110145e9c2ab08f079195fd43790f37a54a5217a8ac58e050cea8e1` |
-| `derive_thumbs_hash_key()` | `43ea28b23b2dab950943cf6a97ee9266560b2ca1781eaee08fa28e9f8b168d25` |
+| `derive_thumbs_cipher_key()` | `b70eaa4452b2c60383228dbcd21a276e84fe0c4264ccaf1f4b43653cb49df158` |
+| `derive_thumbs_hash_key()` | `1fa93028b673a377304c1bb769dcb91e40d75ba8524caf9acd7dd43465b19e89` |
 
 **封筒**（`PRK = 00 01 … 1f` / `owner_id = derive_owner_id("test-sub")` /
 `nonce = 0b 0a 09 08 07 06 05 04 03 02 01 00` / 平文 = `{"format_version":1,"entries":[]}`）
 
 | 項目 | 期待値 |
 |---|---|
-| `AAD` (UTF-8) | `thundoku-thumbs:1:6366bfc3b6ab37feaf2adb385aeaa515c4aa52cf09e70cac890d888e4409f3b0` |
+| `AAD` (UTF-8) | `ligrol-thumbs:1:27b44245034c0ede5be981b0d5d07ab78ce95311defd60ce9d9e8fe2bc25ab7d` |
 | `nonce` (hex) | `0b0a09080706050403020100` |
-| `ciphertext` (hex) | `61697d8103eb4a2fc6440c6230179c9ca86081b45f26bdb39a34cfd01d7bef36609fc48cd14c8cf74c6c5e9b65b1c4c091` |
-| `content_hmac` (hex) | `46fba895ee29f2dcdddd05c9e7ee8e0f690d8722f6b337744ecc8d87f4e6e7e6` |
+| `ciphertext` (hex) | `3aaae7fe5422afced658e4e10958f7508b50bc3ae65444a9f2b61f1a0d214c06efceed6d0dc8f383ad209dd8f9553c356b` |
+| `content_hmac` (hex) | `fea21458f392cf7054deff144bd9a781371f549a00293832e70eda3643013dff` |
 
-固定は `crates/opfspack/tests/thumbs_envelope.rs`。`format_version` が違うので
+固定は `crates/nartik/tests/thumbs_envelope.rs`。`format_version` が違うので
 **表紙の封筒をバックアップとして読むことはできない**（逆も同じ。AAD のラベルと鍵も別）。
 既存のバックアップ側のベクタ（§11.6）はバイト単位で不変であることが回帰条件
-（`crates/opfspack/tests/backup_envelope.rs`）。
+（`crates/nartik/tests/backup_envelope.rs`）。
 
 #### Drive 上のファイル属性（探すための情報）
 
@@ -596,17 +596,17 @@ Web は「同期フォルダの一覧 → 名前一致」でファイルを見�
 
 | 項目 | 値 |
 |---|---|
-| 名前 | `thundoku-thumbs.json`（完全一致。`sync.rs` の `THUMBS_NAME`） |
-| 親 | 同期フォルダ（My Drive 直下 `thundoku-shelf/`。`SYNC_FOLDER_NAME`） |
+| 名前 | `ligrol-thumbs.json`（完全一致。`sync.rs` の `THUMBS_NAME`） |
+| 親 | 同期フォルダ（My Drive 直下 `ligrol/`。`SYNC_FOLDER_NAME`） |
 | `mimeType` | `application/octet-stream`（**`application/json` ではない**ので、mime で絞り込まない） |
-| `appProperties.app` | `thundoku-shelf` |
-| `appProperties.packId` | `thundoku-thumbs.json`（`.opfspack` で終わらないので名前がそのまま入る） |
+| `appProperties.app` | `ligrol` |
+| `appProperties.packId` | `ligrol-thumbs.json`（`.nartik` で終わらないので名前がそのまま入る） |
 | サイズ | 平文 + 16B タグを base64 した長さ + 封筒のフィールド。実データ 612 枚で平文 17.3 MB（`entries` 次第で増減。約 1.33 倍が base64） |
 
 - 一覧クエリの例（`folderId` は同期フォルダの id。`docs/spec/06-sync-auth-drive.md` の `list_files` と同じ形）:
-  `q = '<folderId>' in parents and trashed=false and name='thundoku-thumbs.json'`、
+  `q = '<folderId>' in parents and trashed=false and name='ligrol-thumbs.json'`、
   `fields = nextPageToken,files(id,name,size,md5Checksum,modifiedTime)`、`pageSize=100`・`pageToken` で全ページ。
-  `appProperties` を絞り込みに使うなら `and appProperties has { key='packId' and value='thundoku-thumbs.json' }`。
+  `appProperties` を絞り込みに使うなら `and appProperties has { key='packId' and value='ligrol-thumbs.json' }`。
 - **同名が 2 つ以上あり得る**。デスクトップは「新しい方を上げてから旧い方を消す」ので、削除に失敗すると
   そのまま残る（`sync.rs` は警告だけで続行）。デスクトップ自身は一覧の最初の一致を使うが、
   **Web は `modifiedTime` が新しい方を採る**こと（古い方を読むと 1 世代前の表紙が出る）。
@@ -615,14 +615,14 @@ Web は「同期フォルダの一覧 → 名前一致」でファイルを見�
 
 #### 暗号処理（WebCrypto の具体形）
 
-`thundoku-backup.json` と**同じ PRK**を使い、**ラベルだけ別**（この節の「形式」表）。
+`ligrol-backup.json` と**同じ PRK**を使い、**ラベルだけ別**（この節の「形式」表）。
 Rust の実装（`hkdf` crate / `aes-gcm` crate）とバイト一致させる:
 
 | 段階 | Rust の式 | WebCrypto |
 |---|---|---|
-| 暗号鍵 | `HKDF-SHA256(ikm = PRK, salt = b"thundoku-thumbs:v1", info = b"thundoku-thumbs-key")` 32B | `importKey("raw", prk, "HKDF", false, ["deriveBits"])` → `deriveBits({ name: "HKDF", hash: "SHA-256", salt: UTF8("thundoku-thumbs:v1"), info: UTF8("thundoku-thumbs-key") }, key, 256)` |
-| HMAC 鍵 | 同式で `info = b"thundoku-thumbs-hash"` | 同上（`info` だけ差し替え） |
-| 復号 | `AES-256-GCM(key = cipherKey, nonce, AAD)(ciphertext)` | `importKey("raw", cipherKey, "AES-GCM", false, ["decrypt"])` → `decrypt({ name: "AES-GCM", iv: nonceBytes, additionalData: UTF8("thundoku-thumbs:1:" + ownerId), tagLength: 128 }, key, ciphertextBytes)` |
+| 暗号鍵 | `HKDF-SHA256(ikm = PRK, salt = b"ligrol-thumbs:v1", info = b"ligrol-thumbs-key")` 32B | `importKey("raw", prk, "HKDF", false, ["deriveBits"])` → `deriveBits({ name: "HKDF", hash: "SHA-256", salt: UTF8("ligrol-thumbs:v1"), info: UTF8("ligrol-thumbs-key") }, key, 256)` |
+| HMAC 鍵 | 同式で `info = b"ligrol-thumbs-hash"` | 同上（`info` だけ差し替え） |
+| 復号 | `AES-256-GCM(key = cipherKey, nonce, AAD)(ciphertext)` | `importKey("raw", cipherKey, "AES-GCM", false, ["decrypt"])` → `decrypt({ name: "AES-GCM", iv: nonceBytes, additionalData: UTF8("ligrol-thumbs:1:" + ownerId), tagLength: 128 }, key, ciphertextBytes)` |
 | 平文の改変検出 | `HMAC-SHA256(hashKey, 平文)` を `content_hmac`（小文字 hex）と比較 | `importKey("raw", hashKey, { name: "HMAC", hash: "SHA-256" }, false, ["sign"])` → `sign("HMAC", key, plaintextBytes)` → 32B を hex 化して比較 |
 
 - **`ciphertext` は「平文 + 16B の GCM タグ」が連結された形**（WebCrypto の `decrypt` はこの形を
@@ -638,15 +638,15 @@ Rust の実装（`hkdf` crate / `aes-gcm` crate）とバイト一致させる:
 #### PRK の解決（Web）
 
 表紙バンドルの復号に使う PRK は **DB バックアップと同一の経路**で解く（§3.2 / §4.2 / §5.2.1）。
-Web は OS keyring を持たないので、`thundoku-keys.json`（同じフォルダ）から毎回解く:
+Web は OS keyring を持たないので、`ligrol-keys.json`（同じフォルダ）から毎回解く:
 
-1. `thundoku-keys.json` を一覧から名前で探して取得（無ければ表紙は出せない → 退化経路）。
+1. `ligrol-keys.json` を一覧から名前で探して取得（無ければ表紙は出せない → 退化経路）。
 2. `owner_id` が自分と一致する bundle だけを使う（不一致は `OwnerMismatch` 相当として無視）。
 3. `kind = "sub"` のラップ: `KEK_sub = PBKDF2-SHA256(password = UTF8(sub) ‖ APP_SALT, salt = APP_SALT, iterations = 100_000, 32B)`。
    `sub` は Google の ID トークンの `sub` claim（`googleProfile.sub`）。
-   `APP_SALT = b"opfspack-v1-identity-salt-2024"`。**`sub` を UTF8 にしてから `APP_SALT` を後置連結**する
+   `APP_SALT = b"nartik-v1-identity-salt-2026"`。**`sub` を UTF8 にしてから `APP_SALT` を後置連結**する
    （区切り文字は入れない）。
-4. `AES-256-GCM(KEK)(wraps[].ciphertext)` を AAD `UTF8("thundoku-pack-root:1:" + owner_id)` で復号すると PRK 32B（`ciphertext` は 48B = 32B + 16B タグ）。
+4. `AES-256-GCM(KEK)(wraps[].ciphertext)` を AAD `UTF8("ligrol-pack-root:1:" + owner_id)` で復号すると PRK 32B（`ciphertext` は 48B = 32B + 16B タグ）。
 5. パスフレーズラップがある場合は**先にパスフレーズを試す**（§4.2）。`NFKC` 正規化してから UTF-8 化する。
 6. **パスフレーズ必須モード**（`kind = "sub"` のラップが無い bundle）では `sub` からは戻せない。
    パスフレーズを尋ね、「スキップ」では**復号しない**（`sub` へ落ちる経路が無い。§5.2.1）。
@@ -674,8 +674,8 @@ Web は OS keyring を持たないので、`thundoku-keys.json`（同じフォ�
   3. 進んでいたらダウンロードして復号し、平文から `content_hmac` を計算する。
   4. 前回保存した `content_hmac` と同じなら、**画像のデコード結果をそのまま使い回す**
      （17 MB を落とした無駄は戻らないが、デコードと再描画はしない）。
-- **キャッシュの格納先は OPFS / IndexedDB**（`localStorage` は 5 MB 級で入らない。平文 17 MB +
-  base64 のデコード結果を考えると IndexedDB / OPFS が前提）。
+- **キャッシュの格納先は NRTK / IndexedDB**（`localStorage` は 5 MB 級で入らない。平文 17 MB +
+  base64 のデコード結果を考えると IndexedDB / NRTK が前提）。
   - 粗い単位: `content_hmac` をキーに**平文 JSON をそのまま**保存する（再ダウンロードしても復号を省ける）。
   - 細かい単位: `{kind}:{item_key}:{sha256}` をキーに**デコード済み画像**（Blob / ImageBitmap）を保存する。
     こちらは世代をまたいで再利用できる（`sha256` が同じ = 同じ画像）。
@@ -720,17 +720,17 @@ Web は OS keyring を持たないので、`thundoku-keys.json`（同じフォ�
 
 #### Web 実装チェックリスト（§11.7 に追加）
 
-- [ ] `deriveThumbsKey(prk)`: HKDF で 2 本（`info` = `thundoku-thumbs-key` /
-  `thundoku-thumbs-hash`、`salt` = `thundoku-thumbs:v1`）。§11.2 の式と一致させる。
+- [ ] `deriveThumbsKey(prk)`: HKDF で 2 本（`info` = `ligrol-thumbs-key` /
+  `ligrol-thumbs-hash`、`salt` = `ligrol-thumbs:v1`）。§11.2 の式と一致させる。
   **移植直後にテストベクタ（後述）と突き合わせる**。
-- [ ] 封筒の AAD は `UTF8("thundoku-thumbs:1:" + ownerId)`、`format_version` は 1。
+- [ ] 封筒の AAD は `UTF8("ligrol-thumbs:1:" + ownerId)`、`format_version` は 1。
 - [ ] `ciphertext` を「平文 + 16B タグ」として `AES-GCM`（`tagLength: 128`）で復号し、
   平文の `HMAC-SHA256` を計算して `content_hmac` と照合する（照合しない実装にしない）。
 - [ ] `entries` を `kind` で分岐（`shelf` = `site_id` + `database_id` / `checklist` = `item_id`）。
   未知の `kind` は 1 件だけ捨て、未知のキーは無視する（前方互換）。
 - [ ] `data` は base64 をデコードして `Blob` → `URL.createObjectURL` で表示する（CORS 不要）。
   **可視カードだけ**デコードし、不要になった URL は `revokeObjectURL` する。
-- [ ] 保存は `content_hmac` をキーに OPFS / IndexedDB へ。再取得の判定は
+- [ ] 保存は `content_hmac` をキーに NRTK / IndexedDB へ。再取得の判定は
   「`modifiedTime` が同じなら何もしない」→「変わっていたら落として `content_hmac` を比較」の順。
   **`md5Checksum` / サイズを内容の判定に使わない**（`touch` と乱数 `nonce` で動く）。
 - [ ] 同名ファイルが複数あるときは `modifiedTime` が新しい方を採る。
@@ -740,7 +740,7 @@ Web は OS keyring を持たないので、`thundoku-keys.json`（同じフォ�
 
 #### 平文の読み方（Web が守ること）
 
-- **書き込まない**。`thundoku-thumbs.json` の所有者はデスクトップ（毎回全体を書き直す）。
+- **書き込まない**。`ligrol-thumbs.json` の所有者はデスクトップ（毎回全体を書き直す）。
   Web は読み取り専用で扱う（書き換えると次回の同期で戻るか、`content_hmac` の比較が壊れる）。
 - **`entries` は部分集合**。表紙キャッシュがまだ無い本・アカウントに紐づかない本は入らない。
   1 冊も入っていない（`entries` が空・ファイルが無い）状態も正常系として扱う。
@@ -770,17 +770,17 @@ Web は OS keyring を持たないので、`thundoku-keys.json`（同じフォ�
 
 #### Web の実装手順
 
-1. バックアップ JSON（`thundoku-backup.json`）を読める状態にする（§11.7）。PRK の解決も同じ手順
-   （`thundoku-keys.json` → `owner_id` 照合 → `sub` ラップ / パスフレーズ。上の「PRK の解決（Web）」）。
-2. 同期フォルダの一覧から `thundoku-thumbs.json` を探す（**無ければ**手順 8 の退化経路へ）。同名が複数あれば
+1. バックアップ JSON（`ligrol-backup.json`）を読める状態にする（§11.7）。PRK の解決も同じ手順
+   （`ligrol-keys.json` → `owner_id` 照合 → `sub` ラップ / パスフレーズ。上の「PRK の解決（Web）」）。
+2. 同期フォルダの一覧から `ligrol-thumbs.json` を探す（**無ければ**手順 8 の退化経路へ）。同名が複数あれば
    `modifiedTime` が新しい方を採る。
 3. 前回保存した `modifiedTime` と同じなら、**ダウンロードも復号もしない**（キャッシュを使う）。
 4. 変わっていたらダウンロードし、封筒として `open(prk, ownerId)` する。AAD・鍵はこの節の値
-   （`thundoku-thumbs:1` / `thundoku-thumbs:v1` / `-key` / `-hash`）。`format_version` は 1。
+   （`ligrol-thumbs:1` / `ligrol-thumbs:v1` / `-key` / `-hash`）。`format_version` は 1。
    平文の `HMAC-SHA256` を計算して `content_hmac` と照合する（照合しない実装にしない）。
 5. 平文の `entries` を `kind` ごとの Map（`shelf` = `site_id:database_id` /
    `checklist` = `item_id`）にする。未知のキーは無視、未知の `kind` は 1 件だけ捨てる。
-6. `content_hmac` をキーにして OPFS / IndexedDB へ保存する。前回と同じ `content_hmac` なら
+6. `content_hmac` をキーにして NRTK / IndexedDB へ保存する。前回と同じ `content_hmac` なら
    **デコード結果を使い回す**（落としたバイト列は無駄になるが、デコードと再描画はしない）。
 7. 表示は `data` を base64 デコード → `Blob` → `URL.createObjectURL`（CORS 不要）。
    **可視カードだけ**デコードし、不要になった URL は `revokeObjectURL` する。
@@ -789,17 +789,17 @@ Web は OS keyring を持たないので、`thundoku-keys.json`（同じフォ�
 
 #### 受け入れ確認（TS で検算する）
 
-実装の前に、**`crates/opfspack/tests/thumbs_envelope.rs` と同じベクタを TS のテストとして書く**
+実装の前に、**`crates/nartik/tests/thumbs_envelope.rs` と同じベクタを TS のテストとして書く**
 （Rust ⇔ TS のバイト一致が唯一の合格条件。値を書き換えるときは仕様書・Rust テスト・TS テストを同時に直す）。
 
 | 入力 | 期待値 |
 |---|---|
-| `deriveThumbsCipherKey(PRK)`（PRK = `00 01 … 1f`） | `c6bcc317a110145e9c2ab08f079195fd43790f37a54a5217a8ac58e050cea8e1` |
-| `deriveThumbsHashKey(PRK)` | `43ea28b23b2dab950943cf6a97ee9266560b2ca1781eaee08fa28e9f8b168d25` |
-| `ownerId("test-sub")` | `6366bfc3b6ab37feaf2adb385aeaa515c4aa52cf09e70cac890d888e4409f3b0` |
-| 平文 `{"format_version":1,"entries":[]}` / `nonce = 0b0a09080706050403020100` のときの `ciphertext` | `61697d8103eb4a2fc6440c6230179c9ca86081b45f26bdb39a34cfd01d7bef36609fc48cd14c8cf74c6c5e9b65b1c4c091` |
-| 同・`content_hmac` | `46fba895ee29f2dcdddd05c9e7ee8e0f690d8722f6b337744ecc8d87f4e6e7e6` |
-| 同・AAD (UTF-8) | `thundoku-thumbs:1:6366bfc3b6ab37feaf2adb385aeaa515c4aa52cf09e70cac890d888e4409f3b0` |
+| `deriveThumbsCipherKey(PRK)`（PRK = `00 01 … 1f`） | `b70eaa4452b2c60383228dbcd21a276e84fe0c4264ccaf1f4b43653cb49df158` |
+| `deriveThumbsHashKey(PRK)` | `1fa93028b673a377304c1bb769dcb91e40d75ba8524caf9acd7dd43465b19e89` |
+| `ownerId("test-sub")` | `27b44245034c0ede5be981b0d5d07ab78ce95311defd60ce9d9e8fe2bc25ab7d` |
+| 平文 `{"format_version":1,"entries":[]}` / `nonce = 0b0a09080706050403020100` のときの `ciphertext` | `3aaae7fe5422afced658e4e10958f7508b50bc3ae65444a9f2b61f1a0d214c06efceed6d0dc8f383ad209dd8f9553c356b` |
+| 同・`content_hmac` | `fea21458f392cf7054deff144bd9a781371f549a00293832e70eda3643013dff` |
+| 同・AAD (UTF-8) | `ligrol-thumbs:1:27b44245034c0ede5be981b0d5d07ab78ce95311defd60ce9d9e8fe2bc25ab7d` |
 
 確認すること:
 
@@ -811,12 +811,12 @@ Web は OS keyring を持たないので、`thundoku-keys.json`（同じフォ�
 - [ ] `owner_id` を変えると復号できない。
 - [ ] 平文を 1 バイト改変すると `content_hmac` の照合で落ちる。
 
-平文の形と実装者向けの注記は `docs/thundoku-thumbs.jsonc`（コメント付きサンプル。データはダミー）に
+平文の形と実装者向けの注記は `docs/ligrol-thumbs.jsonc`（コメント付きサンプル。データはダミー）に
 まとめてある。実ファイルはこの `.jsonc` ではなく、Drive 上のコメント無し JSON である。
 
 #### 前提（Web 側で確認が要る）
 
-- 同期フォルダ（My Drive 直下の `thundoku-shelf/`）へ Web 側の `drive.file` で到達できること。
+- 同期フォルダ（My Drive 直下の `ligrol/`）へ Web 側の `drive.file` で到達できること。
   別クライアント（別 OAuth クライアント ID）から見るには、**同じ Google Cloud プロジェクト**で
   クライアントを作る（Picker の `setAppId` にプロジェクト番号を渡す）か、Picker でフォルダを
   開いて利用者に許可させる必要がある。ここが満たせないと表紙バンドルは読めない

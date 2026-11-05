@@ -17,9 +17,9 @@ use gpui_kit::{
 use gpui_kit::{
     InteractiveElement as _, ReadGlobal as _, StatefulInteractiveElement as _, Styled as _,
 };
-use thundoku_core::db;
-use thundoku_core::db::checklist::{CheckedItem, TbfEvent};
-use thundoku_core::tbf;
+use ligrol_core::db;
+use ligrol_core::db::checklist::{CheckedItem, TbfEvent};
+use ligrol_core::tbf;
 
 use crate::app_state::AppState;
 use crate::icons::AppIcon;
@@ -368,7 +368,7 @@ impl ChecklistView {
             for (id, data) in &stored {
                 let _ = db::checklist::update_thumbnail_data(&db, id, data);
                 // Drive の表紙バンドル用の共有キャッシュにも入れる（再エンコードしない）
-                let _ = thundoku_core::thumbs::cache_checklist_thumbnail(&db, id, data);
+                let _ = ligrol_core::thumbs::cache_checklist_thumbnail(&db, id, data);
             }
             (failed, stored)
         });
@@ -1652,7 +1652,7 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use thundoku_core::db::checklist as checklist_db;
+    use ligrol_core::db::checklist as checklist_db;
 
     use super::*;
 

@@ -5,7 +5,7 @@ pdfium.dll
 libpdfium.dylib
 libpdfium.so
 # ローカルでパッケージしたリリース成果物（zip）はコミットしない
-/thundoku-shelf-*-windows.zip
+/ligrol-*-windows.zip
 # 署名用の鍵・証明書とそのパスワードは絶対にコミットしない
 # （macOS の Developer ID 署名鍵。CI へは GitHub Secrets から渡し、リポジトリには置かない）
 *.p12

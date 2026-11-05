@@ -77,9 +77,9 @@ pub const ME_URL: &str = "https://fantia.jp/api/v1/me";
 
 /// 送る UA。FANZA と同じく**クライアントを名乗る**（`crate::ua` の差し替えは今のところ無し）。
 const USER_AGENT: &str = concat!(
-    "ThundokuShelf/",
+    "Ligrol/",
     env!("CARGO_PKG_VERSION"),
-    " (+https://github.com/MegaBlackLabel/thundoku-shelf-app)"
+    " (+https://github.com/MegaBlackLabel/ligrol-app)"
 );
 
 #[derive(Debug, thiserror::Error)]
@@ -501,7 +501,7 @@ mod tests {
 
     fn download_temp_path(name: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "thundoku-fantia-download-{}-{name}",
+            "ligrol-fantia-download-{}-{name}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&path);

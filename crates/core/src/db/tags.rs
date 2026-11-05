@@ -164,7 +164,7 @@ mod tag_crud_tests {
                 purchase_date: None,
                 file_name: format!("{id}.pdf"),
                 file_size: 10,
-                opfs_path: format!("{id}.opfspack"),
+                opfs_path: format!("{id}.nartik"),
                 cover_thumbnail: None,
                 tbf_product_id: None,
                 site_id: None,

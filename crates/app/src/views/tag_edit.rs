@@ -12,9 +12,9 @@ use gpui_kit::{
     AppContext as _, InteractiveElement as _, ReadGlobal as _, StatefulInteractiveElement as _,
     Styled as _,
 };
-use thundoku_core::db;
-use thundoku_core::db::{books, bookshelf};
-use thundoku_core::tbf;
+use ligrol_core::db;
+use ligrol_core::db::{books, bookshelf};
+use ligrol_core::tbf;
 
 use crate::app_state::AppState;
 
@@ -53,7 +53,7 @@ impl TagEditDialog {
 
     /// ローカル book（id または tbf_product_id）を解決する。無ければ
     /// bookshelf_items の database_id として扱う（Web の updateBookTags と同一）。
-    fn resolve_local_book_id(&self, db: &thundoku_core::db::SqlitePool) -> Option<String> {
+    fn resolve_local_book_id(&self, db: &ligrol_core::db::SqlitePool) -> Option<String> {
         books::list(db)
             .unwrap_or_default()
             .into_iter()

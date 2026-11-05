@@ -10,7 +10,7 @@
 - `crates/core/src/db/mod.rs` / `schema.sql` / `desktop.sql` / `backup.rs` / `books.rs` / `bookshelf.rs` / `checklist.rs` / `contents.rs` / `documents.rs` / `favorites.rs` / `notes.rs` / `page_views.rs` / `progress.rs` / `samples.rs` / `settings.rs` / `sync_state.rs` / `tags.rs` / `view_history.rs`
 - `crates/core/migrations/0001_init.sql`
 - `crates/core/src/import/mod.rs` / `classify.rs` / `pdf.rs` / `zip_names.rs` / `export_text.rs`
-- `crates/opfspack/src/lib.rs` / `format.rs` / `builder.rs` / `reader.rs` / `crypto.rs` / `Cargo.toml` / `tests/interop.rs` / `examples/roundtrip_emit.rs`
+- `crates/nartik/src/lib.rs` / `format.rs` / `builder.rs` / `reader.rs` / `crypto.rs` / `Cargo.toml` / `tests/interop.rs` / `examples/roundtrip_emit.rs`
 - 参照（意図・決定の根拠としてのみ）: `docs/database.md`, `docs/import-patterns.md`（§5.1 §11.1 §11.2 R1〜R6）
 - 補助的な裏取り: `crates/core/tests/import.rs`（パイプライン挙動の統合テスト 1,566 行）、`crates/app/src/app_state.rs`（データディレクトリ配置）
 
@@ -31,7 +31,7 @@
 | `import::pdf` | PDF → WebP ページ + テキスト抽出（全プラットフォーム共通。PDFium を実行時ロード） | `crates/core/src/import/pdf.rs:1-21`, `:39`, `:84` |
 | `import::zip_names` | ZIP エントリ名/本文の CP932 デコード | `crates/core/src/import/zip_names.rs:1-14` |
 | `import::export_text` | `_export.txt`（`<<NPage>>` マーカー）パース | `crates/core/src/import/export_text.rs:1-5` |
-| `opfspack` | `.opfspack` バイナリ形式の reader/writer + 暗号（TS 実装とバイト互換） | `crates/opfspack/src/lib.rs:1-16` |
+| `nartik` | `.nartik` バイナリ形式の reader/writer + 暗号（TS 実装とバイト互換） | `crates/nartik/src/lib.rs:1-16` |
 
 ---
 
@@ -338,7 +338,7 @@ CREATE TABLE IF NOT EXISTS product_sample_pages (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- 表紙バンドル（`thundoku-thumbs.json`）に載せる画像の派生キャッシュ（`db::thumbs`）。
+-- 表紙バンドル（`ligrol-thumbs.json`）に載せる画像の派生キャッシュ（`db::thumbs`）。
 -- DB バックアップの対象外（復元先で作り直せる）。kind = 'shelf' | 'checklist'、
 -- item_key = `{site_id}:{database_id}`（本棚）/ `checked_items.id`（チェックリスト）。
 CREATE TABLE IF NOT EXISTS thumbnail_share (
@@ -615,7 +615,7 @@ CREATE TABLE IF NOT EXISTS drive_sync_state (
 - `crates/core/src/db/mod.rs:271-274`: `books` に `page_turn TEXT` を `ensure_column` で追加（本ごとの綴じ方向。リリース前のためマイグレーションファイルは増やしていない）。既存 DB で列が足されることはテスト `legacy_books_get_the_page_turn_column` が固定する（`crates/core/tests/db.rs:112-183`）。
 - `crates/core/src/db/mod.rs:303-313`: `bookshelf_items` に `download_options TEXT` を `ensure_column` で追加（BOOTH の**1 商品複数ダウンロード**の候補 = JSON 配列 `[{"name","url"}]`）。**`schema.sql`（Web スキーマ）にも `0001_init.sql` にも無い列**なので、`hidden_at` / `tags_fetched` と同じく PRAGMA で確認してから追加する。`NULL` = 候補なし（`download_url` 1 件として扱う）。読み書きは `crates/core/src/db/bookshelf.rs:23-26`, `:53-57`, `:59-76`, `:105-108`、同期側の保存は `crates/app/src/views/bookshelf.rs:3508-3509`
 
-- `crates/core/src/db/mod.rs`（`migrate`）: `CREATE TABLE IF NOT EXISTS thumbnail_share (kind, item_key, mime, width, height, sha256, bytes, source_mtime, source_size, updated_at, PK(kind, item_key))`。Drive の表紙バンドル（`thundoku-thumbs.json`）に載せる画像の派生キャッシュで、α版なのでマイグレーションファイルを足さず毎回冪等に作る。**DB バックアップの対象外**（`db::backup::TABLES` に入れない）。仕様は `docs/spec/10-pack-keys.md` §11.8。
+- `crates/core/src/db/mod.rs`（`migrate`）: `CREATE TABLE IF NOT EXISTS thumbnail_share (kind, item_key, mime, width, height, sha256, bytes, source_mtime, source_size, updated_at, PK(kind, item_key))`。Drive の表紙バンドル（`ligrol-thumbs.json`）に載せる画像の派生キャッシュで、α版なのでマイグレーションファイルを足さず毎回冪等に作る。**DB バックアップの対象外**（`db::backup::TABLES` に入れない）。仕様は `docs/spec/10-pack-keys.md` §11.8。
 
 ### 1.5 `schema.sql` と `0001_init.sql` の差分（再実装時に効く）
 
@@ -661,7 +661,7 @@ CREATE TABLE IF NOT EXISTS drive_sync_state (
 | `favorite_entities` | サークル / 作者のお気に入り（種別ごとに独立） | `(entity_kind, entity_name)` | — | `schema.sql:249-254` |
 | `book_first_events` | 本の初出イベント | `(site_id, database_id)` | 複合 FK `(site_id, database_id) → bookshelf_items(site_id, database_id)` | `schema.sql:256-264` |
 | `product_sample_pages` | 試し読み画像 | `id` | `checklist_item_id → checked_items(id)` | `schema.sql:266-281` |
-| `thumbnail_share` | 表紙バンドル（Drive `thundoku-thumbs.json`）に載せる画像の派生キャッシュ。**DB バックアップの対象外**（復元先で作り直せる） | `(kind, item_key)` | — | `schema.sql:291-306` / `crates/core/src/db/mod.rs`（`migrate`） |
+| `thumbnail_share` | 表紙バンドル（Drive `ligrol-thumbs.json`）に載せる画像の派生キャッシュ。**DB バックアップの対象外**（復元先で作り直せる） | `(kind, item_key)` | — | `schema.sql:291-306` / `crates/core/src/db/mod.rs`（`migrate`） |
 | `drive_sync_state` | Drive 同期の記帳 | `pack_id` | — | `crates/core/src/db/desktop.sql:3-9` / `0001_init.sql:230-238` |
 | `view_history` | 閲覧セッション（開始/終了時刻） | `id` | `book_id → books(id) ON DELETE CASCADE` | `crates/core/src/db/mod.rs:274` |
 | `page_notes` | 付箋（1 ページ 1 件） | `id` + `UNIQUE(book_id, content_id, page)` | `book_id → books(id) ON DELETE CASCADE` | `crates/core/src/db/mod.rs:291` |
@@ -694,7 +694,7 @@ ON DELETE の注記（事実）: `books` の子のうち `imported_documents` / 
 | ブリッジ | プロセス共有の tokio マルチスレッドランタイム（`worker_threads(2)`）に `block_on`。リポジトリ API は同期 | `crates/core/src/db/mod.rs:31-46` |
 | 接続オプション | `foreign_keys(true)`, `journal_mode(Wal)`, `busy_timeout(5s)`, `create_if_missing(true)` | `crates/core/src/db/mod.rs:50-60` |
 | テスト用プール | `:memory:` + `foreign_keys(true)` + `max_connections(1)`（同一メモリ共有のため）+ マイグレーション適用 | `crates/core/src/db/mod.rs:461-477` |
-| DB ファイル | `<data_dir>/thundoku-shelf.db`（`data_dir` 既定 = `dirs::data_dir()/thundoku-shelf`） | `crates/app/src/app_state.rs:129-141` |
+| DB ファイル | `<data_dir>/ligrol.db`（`data_dir` 既定 = `dirs::data_dir()/ligrol`） | `crates/app/src/app_state.rs:129-141` |
 | packs ディレクトリ | `<data_dir>/packs`（`AppState::packs_dir`） | `crates/app/src/app_state.rs:139`, `:142` |
 | サムネイルキャッシュ | `<data_dir>/thumbnails`（`{site_id}_{database_id}_448.png` 等。サイト表紙用で、pack 内 `thumbnail.webp` とは別物） | `crates/app/src/app_state.rs:149`, `crates/app/src/views/bookshelf.rs:7123-7129` |
 
@@ -708,7 +708,7 @@ ON DELETE の注記（事実）: `books` の子のうち `imported_documents` / 
 | 初回クリア | `app_settings['owner_sub_model.initialized']` が無い初回起動時のみ、FK 安全順（子→親）で 17 テーブル（`thumbnail_share` を含む）を `DELETE` し、`packs` / `thumbnails` ディレクトリを作り直し、`drive.last_sync_at` / `drive.sync.enabled` / `drive.sync.folder_id` / `drive.backup.md5` / `drive.thumbs.hash` / `drive.thumbs.failed` を削除してからフラグを立てる。2 回目以降は `false` を返して何もしない | `crates/core/src/db/mod.rs`（`clear_owner_model_if_first_run`） |
 | 機密列の暗号化 | `document_text.text_content` / `token_analysis` の 4 列 / `page_notes.memo` の**平文を一度だけ暗号化**する（`app_settings['column_crypto.v1_migrated']` で 2 回目以降は何もしない）。平文の行が無ければ**鍵（keyring）に触れずに**フラグだけ立てる。鍵が取れない・書き込みに失敗したときはフラグを立てず、**次回起動で再試行**する（§1.11） | `crates/core/src/db/mod.rs`（`migrate_column_crypto_once`）、`crates/core/src/db/column_crypto.rs` |
 | クリア対象テーブル（順序そのまま） | `product_sample_pages` → `token_analysis` → `document_text` → `document_images` → `content_formats` → `book_contents` → `imported_documents` → `book_tags` → `reading_progress` → `view_history` → `page_views` → `book_first_events` → `checked_items` → `bookshelf_items` → `books` → `drive_sync_state` → `thumbnail_share`（`sites` / `tbf_events` は残す） | `crates/core/src/db/mod.rs`（`clear_owner_model_if_first_run`） |
-| 表紙バンドルの派生キャッシュ | `thumbnail_share` は**DB バックアップに含めない**（復元先で作り直せる派生データ）。Drive の `thundoku-thumbs.json` は PRK があるときだけ上げ、1 枚も作れなければ既存のファイルを残す（上位の詳細は `docs/spec/10-pack-keys.md` §11.8） | `crates/core/src/db/thumbs.rs`, `crates/core/src/thumbs.rs`, `crates/core/src/drive/sync.rs`（`backup_thumbnails`） |
+| 表紙バンドルの派生キャッシュ | `thumbnail_share` は**DB バックアップに含めない**（復元先で作り直せる派生データ）。Drive の `ligrol-thumbs.json` は PRK があるときだけ上げ、1 枚も作れなければ既存のファイルを残す（上位の詳細は `docs/spec/10-pack-keys.md` §11.8） | `crates/core/src/db/thumbs.rs`, `crates/core/src/thumbs.rs`, `crates/core/src/drive/sync.rs`（`backup_thumbnails`） |
 | バックアップ対象テーブル（順序 = FK 参照元が先） | `books`, `bookshelf_items`, `checked_items`, `product_sample_pages`（所有者は親の `checked_items` 経由で判定）, `tbf_events`, `book_contents`, `content_formats`, `reading_progress`, `page_views`, `book_tags`, `favorite_tags`, `favorite_entities`, `imported_documents`, `document_images`, `book_first_events`, `zenn_tag_metadata`, `view_history`（17 件） | `crates/core/src/db/backup.rs:17-43,192-214,515-526` |
 | バックアップから除外する列 | `thumbnail_data`, `image_data`（画像 base64 を含めない。`product_sample_pages` は `image_url` を残し、開くたびに自サイトの `/api/image/` から取り直すので復元先でも開ける）, `extracted_text`（`document_images` のページ本文。暗号化 pack の本文を平文で載せない） | `crates/core/src/db/backup.rs` |
 | 比較で無視する揮発列 | `books.updated_at`, `bookshelf_items.synced_at,updated_at`, `tbf_events.updated_at`（アプリ自身が同期のたびに書き換える時刻。内容が同じでも変わるため差分判定から外す） | `crates/core/src/db/backup.rs:41-47` |
@@ -720,7 +720,7 @@ ON DELETE の注記（事実）: `books` の子のうち `imported_documents` / 
 
 ページ本文・形態素解析・付箋メモは**平文で保存しない**（2026-09-26 / セキュリティ評価 F02）。
 DB ファイル全体（SQLCipher 等）は暗号化しない（`docs/spec/10-pack-keys.md` §11.1 の線引き）が、
-この 6 列だけを keyring の DB 鍵（`books.owner_sub` と同じ `thundoku-shelf.db-key`）で
+この 6 列だけを keyring の DB 鍵（`books.owner_sub` と同じ `ligrol.db-key`）で
 AES-256-GCM にして保存する。
 
 | 列 | 保存値 | アンカー |
@@ -729,7 +729,7 @@ AES-256-GCM にして保存する。
 | `token_analysis.token` / `pos` / `base_form` / `reading` | 同上（`base_form` / `reading` の NULL は NULL のまま） | `crates/core/src/db/column_crypto.rs` / `db/documents.rs` |
 | `page_notes.memo` | 同上 | `crates/core/src/db/column_crypto.rs` / `db/notes.rs` |
 
-- AAD は `thundoku-shelf/column/v1/{テーブル名}/{行キー}/{列名}`。**行キー**は
+- AAD は `ligrol/column/v1/{テーブル名}/{行キー}/{列名}`。**行キー**は
   `document_text` / `token_analysis` が主キー `id`、`page_notes` が `book_id` + `content_id` +
   `page`（`ON CONFLICT(book_id, content_id, page)` の自然キー。`id` は別端末の復元で変わり得る）。
   **列の入れ替え・行の入れ替え・別テーブルへのコピー**はタグ検証で落ちる。
@@ -753,7 +753,7 @@ AES-256-GCM にして保存する。
 | `sites` | `id` | 固定文字列 `techbookfest` / `booth`（SQL シード）、`fanza` / `dlsite`（runtime DDL） | `schema.sql:19-23`, `db/mod.rs:382-392` |
 | `app_settings` | `key` | 呼び出し側が決める文字列（例 `owner_sub_model.initialized`, `drive.last_sync_at`, `drive.sync.enabled`, `drive.sync.folder_id`, `drive.sync.books`（`true` / `false`・行が無ければ ON）, `viewer.wheel_direction`（`down-to-next` / `up-to-next`）, `bookshelf.view_mode`（`card` / `list`）, `bookshelf.sort_field`（`purchase-date` / `release-date` / `last-viewed-at` / `view-count` / `view-seconds` / `file-size` / `title`）, `bookshelf.sort_ascending`（`1` / `0`）） | `db/settings.rs:7-40`, `db/mod.rs:449-455` |
 | `books` | `id` | `book_id_for()`: ① `reuse_book_id` があればそれ ② 無ければ `Identity.pack_id` ③ 無ければ `Uuid::new_v4()` | `import/mod.rs:166-174` |
-| `books` | `opfs_path` | `format!("{book_id}.opfspack")`（`UNIQUE`） | `import/mod.rs:937` |
+| `books` | `opfs_path` | `format!("{book_id}.nartik")`（`UNIQUE`） | `import/mod.rs:937` |
 | `books` | `pack_id` | 取り込み時は `Some(book_id)` | `import/mod.rs:944` |
 | `books` | `owner_sub` | ローカル鍵で暗号化済みの sub（`None` = 未所属）。暗号化は `crate::owner` 側 | `db/books.rs:247-266` |
 | `tbf_events` | `id` | 技術書典の slug（例 `tbf18`）。`tbf_event_id` は `format!("Event:{slug}")` | `core/src/tbf/mod.rs:339-340`, `:1143-1144` |
@@ -795,11 +795,11 @@ AES-256-GCM にして保存する。
 
 | 経路 | `books.id` | pack ファイル | アンカー |
 |---|---|---|---|
-| ローカル取り込み（ZIP/PDF/EPUB/画像） | `identity.pack_id`（ログイン時）または新規 UUID | `<data_dir>/packs/{book_id}.opfspack` | `import/mod.rs:166-174`, `:922-924` |
+| ローカル取り込み（ZIP/PDF/EPUB/画像） | `identity.pack_id`（ログイン時）または新規 UUID | `<data_dir>/packs/{book_id}.nartik` | `import/mod.rs:166-174`, `:922-924` |
 | 再取り込み（同一 source） | `reuse_book_id`（`resolve_reuse_id` が `(site_id, tbf_product_id)` + owner で既存行を探す） | 上書き | `db/books.rs:336-362`, `import/mod.rs:891-910` |
-| Drive 復元 | ファイル名 stem = `pack_id` | `{pack_id}.opfspack` | `core/src/drive/sync.rs:57-62`, `:110-156` |
-| 拡張子 | 定数 `PACK_EXTENSION = "opfspack"` | — | `core/src/drive/sync.rs:22` |
-| 競合退避 | `{pack_id}.conflict-local.opfspack` | — | `core/src/drive/sync.rs:269` |
+| Drive 復元 | ファイル名 stem = `pack_id` | `{pack_id}.nartik` | `core/src/drive/sync.rs:57-62`, `:110-156` |
+| 拡張子 | 定数 `PACK_EXTENSION = "nartik"` | — | `core/src/drive/sync.rs:22` |
+| 競合退避 | `{pack_id}.conflict-local.nartik` | — | `core/src/drive/sync.rs:269` |
 
 ### 2.4 日時フォーマット
 
@@ -807,6 +807,6 @@ AES-256-GCM にして保存する。
 |---|---|---|
 | 取り込み時の `created_at` / `updated_at` | `chrono::Utc::now().format("%Y-%m-%d %H:%M:%S")`（UTC、タイムゾーン表記なし） | `import/mod.rs:56-58` |
 | DB 既定値 | `CURRENT_TIMESTAMP`（SQLite の UTC） | `schema.sql` 各テーブル |
-| pack の `created_at` | `chrono::Utc::now().timestamp_millis() as u64`（UNIX ミリ秒。TS 実装のフィクスチャは `1_728_000_000_000`） | `import/mod.rs:916`, `crates/opfspack/tests/interop.rs:41-50` |
+| pack の `created_at` | `chrono::Utc::now().timestamp_millis() as u64`（UNIX ミリ秒。TS 実装のフィクスチャは `1_728_000_000_000`） | `import/mod.rs:916`, `crates/nartik/tests/interop.rs:41-50` |
 
 ---

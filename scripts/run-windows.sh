@@ -8,16 +8,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-BOTTLE="thundoku"
+BOTTLE="ligrol"
 # debug ビルド: release は gpui_windows のシェーダーコンパイル（fxc.exe）が
 # xwin 環境に無く失敗するため（include! は debug でスキップされる）
-EXE="target/x86_64-pc-windows-msvc/debug/thundoku-shelf.exe"
+EXE="target/x86_64-pc-windows-msvc/debug/ligrol.exe"
 
 # 1) ビルド（Windows ターゲット）
 #    cargo-xwin は llvm-lib を AR として使うため、Homebrew の llvm を PATH に含める
 export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
 echo "==> Building for Windows (x86_64-pc-windows-msvc, debug)"
-mise exec -- cargo xwin build --target x86_64-pc-windows-msvc -p thundoku-shelf
+mise exec -- cargo xwin build --target x86_64-pc-windows-msvc -p ligrol
 
 if [ ! -f "$EXE" ]; then
   echo "error: build output not found: $EXE" >&2

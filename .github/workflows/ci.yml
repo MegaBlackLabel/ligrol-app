@@ -60,25 +60,25 @@ jobs:
       # `--locked`: Cargo.lock のとおりに解決する（依存が黙って変わらない）。
       - name: Clippy (core crates) — Linux
         if: runner.os == 'Linux'
-        run: cargo clippy -p opfspack -p thundoku-core --locked --all-targets -- -D warnings
+        run: cargo clippy -p nartik -p ligrol-core --locked --all-targets -- -D warnings
       - name: Clippy (workspace) — macOS / Windows
         if: runner.os != 'Linux'
         run: cargo clippy --workspace --locked --all-targets -- -D warnings
 
-      - name: Test (opfspack + core) — Linux
+      - name: Test (nartik + core) — Linux
         if: runner.os == 'Linux'
-        run: cargo test -p opfspack -p thundoku-core --locked
+        run: cargo test -p nartik -p ligrol-core --locked
 
       - name: Test (workspace) — macOS
         if: runner.os == 'macOS'
         run: cargo test --workspace --locked
 
-      - name: Test (opfspack + core) + build app — Windows
+      - name: Test (nartik + core) + build app — Windows
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          cargo test -p opfspack -p thundoku-core --locked
-          cargo build -p thundoku-shelf --locked
+          cargo test -p nartik -p ligrol-core --locked
+          cargo build -p ligrol --locked
 
   # 依存の既知脆弱性を継続的に確認する。例外（許容する勧告）は `.cargo/audit.toml` に
   # 「理由」と「見直し時期」つきで列挙し、**それ以外は失敗させる**。

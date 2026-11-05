@@ -36,7 +36,7 @@
 - 技術書典のセッションは BOOTH / FANZA / DLsite と同じ vault（保存時刻つきの暗号文・**7 日**）から
   起動時に復元する。7 日を過ぎた値は破棄して未ログインで起動する（＝再ログイン案内。
   ログイン必須のチェックリスト・試し読みは `tbf_logged_in` が false なので導線ごと閉じる）。
-- 旧版は keyring（`thundoku_core::secrets::USER_TECHBOOKFEST`）に**期限なし**で置いていた。
+- 旧版は keyring（`ligrol_core::secrets::USER_TECHBOOKFEST`）に**期限なし**で置いていた。
   起動時に **vault が空なら一度だけ vault へ移行**し、keyring の値を消す
   （`SessionVault::adopt_legacy`）。
   - keyring の削除に失敗したら印を残す。印がある起動では**移行し直さない**（期限の管理外の値を

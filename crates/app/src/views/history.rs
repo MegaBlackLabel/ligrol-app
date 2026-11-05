@@ -20,7 +20,7 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, Window, div, img, px, relative,
 };
 
-use thundoku_core::db::{self, books, bookshelf, progress};
+use ligrol_core::db::{self, books, bookshelf, progress};
 
 use crate::actions::OpenReader;
 use crate::app_state::AppState;
@@ -2050,7 +2050,7 @@ mod tests {
                 },
             )
             .unwrap();
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-cache-1' WHERE id = 'b1'")
                     .execute(pool)
                     .await
@@ -2150,7 +2150,7 @@ mod tests {
                 },
             )
             .unwrap();
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
                     .execute(pool)
                     .await
@@ -2587,7 +2587,7 @@ mod tests {
                     purchase_date: None,
                     file_name: format!("{id}.pdf"),
                     file_size: 1,
-                    opfs_path: format!("{id}.opfspack"),
+                    opfs_path: format!("{id}.nartik"),
                     cover_thumbnail: None,
                     tbf_product_id: None,
                     site_id: Some(site.into()),
@@ -2624,7 +2624,7 @@ mod tests {
                 purchase_date: None,
                 file_name: format!("{id}.pdf"),
                 file_size: 1,
-                opfs_path: format!("{id}.opfspack"),
+                opfs_path: format!("{id}.nartik"),
                 cover_thumbnail: None,
                 tbf_product_id: None,
                 site_id: Some("techbookfest".into()),
@@ -2678,7 +2678,7 @@ mod tests {
             let state = crate::app_state::AppState::global(cx);
             let pool = &state.db_pool;
             db::bookshelf::upsert(pool, &test_shelf_item("db-1")).unwrap();
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
                     .execute(pool)
                     .await
@@ -2985,7 +2985,7 @@ mod tests {
         cx.update(|cx| {
             let pool = &crate::app_state::AppState::global(cx).db_pool;
             let ended = started_utc + chrono::Duration::minutes(minutes);
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query(
                     "INSERT INTO view_history (id, book_id, started_at, ended_at) \
                      VALUES (?1, ?2, ?3, ?4)",
@@ -3020,7 +3020,7 @@ mod tests {
                 },
             )
             .unwrap();
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
                     .execute(pool)
                     .await

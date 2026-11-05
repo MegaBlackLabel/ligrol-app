@@ -1,4 +1,4 @@
-//! Thundoku Shelf desktop application library. The binary entry point is
+//! Ligrol desktop application library. The binary entry point is
 //! `main.rs`; everything else lives here so `#[gpui_kit::test]` can exercise it.
 
 pub mod actions;

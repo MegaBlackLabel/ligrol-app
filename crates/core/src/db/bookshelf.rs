@@ -563,7 +563,7 @@ mod tests {
             .bind("タイトル")
             .bind("t.pdf")
             .bind(1_i64)
-            .bind(format!("b_{database_id}.opfspack"))
+            .bind(format!("b_{database_id}.nartik"))
             .bind(database_id)
             .bind(site_id)
             .execute(pool)

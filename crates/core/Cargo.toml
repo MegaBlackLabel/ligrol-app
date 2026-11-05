@@ -1,5 +1,5 @@
 [package]
-name = "thundoku-core"
+name = "ligrol-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -32,7 +32,7 @@ rand = "0.10"
 sha2.workspace = true
 aes-gcm = "0.11"
 socket2 = "0.6"
-opfspack = { path = "../opfspack" }
+nartik = { path = "../nartik" }
 image = { version = "0.25", default-features = false, features = ["webp", "png", "jpeg", "bmp", "tiff"] }
 webp = "0.3"
 lindera = { version = "6.2", features = ["embed-ipadic"] }
