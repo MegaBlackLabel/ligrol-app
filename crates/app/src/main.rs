@@ -1,4 +1,4 @@
-//! Thundoku Shelf desktop binary.
+//! Ligrol desktop binary.
 
 // Windows ではコンソール（黒い cmd 窓）を出さない（GUI サブシステム）。
 #![cfg_attr(windows, windows_subsystem = "windows")]
@@ -6,10 +6,10 @@
 use gpui_kit::component::*;
 use gpui_kit::*;
 
-use thundoku_core::single_instance::{InstanceError, InstanceGuard};
-use thundoku_shelf::app_state::AppState;
-use thundoku_shelf::icons::AppAssets;
-use thundoku_shelf::workspace::Workspace;
+use ligrol_core::single_instance::{InstanceError, InstanceGuard};
+use ligrol::app_state::AppState;
+use ligrol::icons::AppAssets;
+use ligrol::workspace::Workspace;
 
 fn main() {
     // Windows で WebView（gpui-webview）を描画させるには DirectComposition を
@@ -21,13 +21,13 @@ fn main() {
         std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "true");
     }
 
-    // サンプル（デモ）モード（`--demo` / `THUNDOKU_DEMO=1`）。メモリ内 DB と一時
+    // サンプル（デモ）モード（`--demo` / `LIGROL_DEMO=1`）。メモリ内 DB と一時
     // ディレクトリだけで動き、ネットワークへは出ない。単一インスタンスのロック
     // （下）とデータの保存先（`AppState::init_demo`）を本物の起動と混ぜないよう、
     // **何よりも先に**決める。
-    let demo = thundoku_shelf::demo::enabled(
+    let demo = ligrol::demo::enabled(
         &std::env::args().collect::<Vec<_>>(),
-        std::env::var("THUNDOKU_DEMO").ok().as_deref(),
+        std::env::var("LIGROL_DEMO").ok().as_deref(),
     );
 
     // 2 重起動を防ぐ（macOS / Windows / Linux 共通。実体は OS のファイルロック）。
@@ -54,20 +54,20 @@ fn main() {
         }
     };
 
-    // ログは**データディレクトリ配下**（`<data_dir>/logs/thundoku.log`）に出す。
+    // ログは**データディレクトリ配下**（`<data_dir>/logs/ligrol.log`）に出す。
     // レポート画面が同じ場所を表示し、「ログの格納先を開く」で開く（issue #8）。
     // 初期化は単一インスタンスの判定より**後**（ログ初期化が大きすぎるファイルを
     // 切り詰めるため、2 個目の起動が起動中インスタンスのログを壊すのを防ぐ）。
-    thundoku_shelf::logging::init(&log_data_dir(demo));
+    ligrol::logging::init(&log_data_dir(demo));
 
-    // 調査用の UA 差し替え（`thundoku_core::ua`）が効いている状態で起動したかを残す。
+    // 調査用の UA 差し替え（`ligrol_core::ua`）が効いている状態で起動したかを残す。
     // ストアの同期が失敗したとき、「差し替えた状態で走らせたのか」をログだけで確定できる
     // ようにする（実機確認のときに最初に見る行）。
     for key in [
-        thundoku_core::ua::ENV_DLSITE,
-        thundoku_core::ua::ENV_FANZA,
-        thundoku_core::ua::ENV_BOOTH,
-        thundoku_core::ua::ENV_COVER,
+        ligrol_core::ua::ENV_DLSITE,
+        ligrol_core::ua::ENV_FANZA,
+        ligrol_core::ua::ENV_BOOTH,
+        ligrol_core::ua::ENV_COVER,
     ] {
         if let Ok(value) = std::env::var(key)
             && !value.trim().is_empty()
@@ -81,7 +81,7 @@ fn main() {
         .run(move |cx| {
             // Must be called before using any GPUI Component features.
             gpui_kit::init(cx);
-            cx.set_app_identity("com.megablacklabel.thundoku-shelf", "Thundoku Shelf");
+            cx.set_app_identity("com.megablacklabel.ligrol", "Ligrol");
             Theme::sync_system_appearance(None, cx);
             // カルーセルのスナップはテーマの `motion.spring_move`（既定 280ms / 減衰 0.85）で
             // 動くため、1 コマ送りのたびに鈍く感じる。移動系スプリングを短くして切れよくする
@@ -100,12 +100,12 @@ fn main() {
             }
             // 起動時の状態をメニューに反映する（技術書典にログイン済みなら
             // 「チェックリスト」を有効にする）。
-            thundoku_shelf::workspace::sync_app_menus(cx);
+            ligrol::workspace::sync_app_menus(cx);
 
             cx.spawn(async move |cx| {
                 // 前回のウィンドウ配置・サイズがあれば復元する（macOS / Linux / Windows 共通）
                 let saved_bounds =
-                    cx.update(|cx| thundoku_shelf::app_state::load_window_bounds(cx));
+                    cx.update(|cx| ligrol::app_state::load_window_bounds(cx));
                 let mut options = TitleBar::window_options();
                 match saved_bounds {
                     Some(bounds) => options.window_bounds = Some(bounds),
@@ -130,7 +130,7 @@ fn main() {
                 // ディスプレイがその幅より狭いときは画面幅で止める（画面外へはみ出すと
                 // 何も操作できなくなるため）。高さは制限しない。
                 let min_width = cx.update(|cx| {
-                    let needed = thundoku_shelf::views::bookshelf::MIN_WINDOW_WIDTH;
+                    let needed = ligrol::views::bookshelf::MIN_WINDOW_WIDTH;
                     cx.displays()
                         .first()
                         .map(|display| {
@@ -148,9 +148,9 @@ fn main() {
                     // 「キャンセル」後は再度確認を出すため、確認済みフラグは AppState で管理し、
                     // キャンセル時（cancel_exit_upload）に false へ戻す。
                     window.on_window_should_close(cx, move |window, cx| {
-                        thundoku_shelf::app_state::save_window_bounds(window, cx);
+                        ligrol::app_state::save_window_bounds(window, cx);
                         // 閉じてよいかの判断は Workspace 側（アップロード中は閉じない等）
-                        let workspace = thundoku_shelf::app_state::AppState::global(cx)
+                        let workspace = ligrol::app_state::AppState::global(cx)
                             .workspace
                             .lock()
                             .clone();
@@ -162,7 +162,7 @@ fn main() {
                     let workspace = cx.new(Workspace::new);
                     // 終了時確認（on_window_should_close）から workspace にアクセスできるよう、
                     // AppState.workspace に弱参照を設定する。
-                    *thundoku_shelf::app_state::AppState::global(cx)
+                    *ligrol::app_state::AppState::global(cx)
                         .workspace
                         .lock() = Some(workspace.downgrade());
                     cx.new(|cx| Root::new(workspace, window, cx).bg(cx.theme().background))
@@ -187,19 +187,19 @@ fn instance_lock_path(demo: bool) -> Option<std::path::PathBuf> {
     } else {
         "instance.lock"
     };
-    dirs::config_dir().map(|dir| dir.join("thundoku-shelf").join(name))
+    dirs::config_dir().map(|dir| dir.join("ligrol").join(name))
 }
 
 /// ログの出力先になるデータディレクトリ。
 ///
-/// サンプル（デモ）モードは一時領域（[`thundoku_shelf::demo::data_dir`]）に出す:
+/// サンプル（デモ）モードは一時領域（[`ligrol::demo::data_dir`]）に出す:
 /// 本物のデータディレクトリに書くと、サンプルを見ただけで実ログを切り詰めてしまう
 /// （`logging::init` は大きすぎるファイルを `File::create` で作り直す）。
 fn log_data_dir(demo: bool) -> std::path::PathBuf {
     if demo {
-        thundoku_shelf::demo::data_dir()
+        ligrol::demo::data_dir()
     } else {
-        thundoku_shelf::app_state::resolve_data_dir()
+        ligrol::app_state::resolve_data_dir()
     }
 }
 
@@ -209,13 +209,13 @@ fn log_data_dir(demo: bool) -> std::path::PathBuf {
 /// （`logging::init` はここでは呼ばない: 2 個目はロガーを初期化せずに終了する）。
 /// ファイルに書けなければ標準エラーへ出す（開発時に見えるように）。
 fn note_second_launch(lock_path: &std::path::Path, demo: bool) {
-    let log_path = thundoku_shelf::logging::log_file(&log_data_dir(demo));
+    let log_path = ligrol::logging::log_file(&log_data_dir(demo));
     let message = format!(
         "既に別のインスタンスが起動しているため終了します（lock: {}）",
         lock_path.display()
     );
     // 追記できないときは標準エラーへ出す（開発時に見えるように）
-    if !thundoku_shelf::logging::append_line(&log_path, &message) {
+    if !ligrol::logging::append_line(&log_path, &message) {
         eprintln!("{message}");
     }
 }
@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn demo_logs_and_locks_do_not_collide_with_the_real_run() {
         assert!(
-            super::log_data_dir(true).starts_with(thundoku_shelf::demo::data_dir()),
+            super::log_data_dir(true).starts_with(ligrol::demo::data_dir()),
             "サンプルのログが一時領域の外に出ている"
         );
         assert_ne!(

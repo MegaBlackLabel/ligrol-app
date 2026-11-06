@@ -1,6 +1,6 @@
 # DB 構成情報
 
-アプリのデータは SQLite（`thundoku-shelf.db`）に保存されます。スキーマの正本は
+アプリのデータは SQLite（`ligrol.db`）に保存されます。スキーマの正本は
 `crates/core/src/db/schema.sql`、マイグレーションは `crates/core/migrations/0001_init.sql`
 （`sqlx::migrate!` 管理）です。後から追加されたテーブル（`view_history` / `page_views` /
 `favorite_entities` / `thumbnail_share` など）はマイグレーションファイルではなく、`migrate()` 内の
@@ -44,7 +44,7 @@ OFF のとき Drive 同期は pack の送受信をスキップする）、`api.l
 
 ### books
 
-ローカルに取り込んだ書籍（ダウンロード済みの本）。`.opfspack`（`pack_id`）と紐づく。
+ローカルに取り込んだ書籍（ダウンロード済みの本）。`.nartik`（`pack_id`）と紐づく。
 
 | カラム | 型 | 説明 |
 |---|---|---|
@@ -58,7 +58,7 @@ OFF のとき Drive 同期は pack の送受信をスキップする）、`api.l
 | tbf_product_id | TEXT | 技術書典の商品 ID（bookshelf_items と突合） |
 | site_id | TEXT FK→sites | サイト |
 | tags_fetched | INTEGER | タグ取得済みフラグ |
-| pack_id | TEXT | .opfspack の ID（`packs/{pack_id}.opfspack`） |
+| pack_id | TEXT | .nartik の ID（`packs/{pack_id}.nartik`） |
 | is_favorite | INTEGER | お気に入り |
 | is_hidden | INTEGER | 非表示 |
 | page_turn | TEXT | 本ごとの綴じ方向（`right-to-left` / `left-to-right`。未設定はサイト別設定に従う） |
@@ -309,7 +309,7 @@ Google Drive との同期状態（pack ごと）。
 
 ### thumbnail_share
 
-Drive の表紙バンドル（`thundoku-thumbs.json`。未ダウンロードの本の表紙を Web 版の本棚へ渡す）に
+Drive の表紙バンドル（`ligrol-thumbs.json`。未ダウンロードの本の表紙を Web 版の本棚へ渡す）に
 載せる**アップロード用にエンコード済みの画像**の派生キャッシュ。**DB バックアップの対象外**
 （復元先で作り直せる派生データ）。`crates/core/src/db/thumbs.rs`。
 
@@ -353,6 +353,6 @@ Drive の表紙バンドル（`thundoku-thumbs.json`。未ダウンロードの�
 ## データの流れ
 
 1. 技術書典 / BOOTH / FANZA同人 / DLsite の同期 → `bookshelf_items` / `tbf_events` / `checked_items` / `product_sample_pages`
-2. ダウンロード → `books` + `imported_documents` + `document_images`（.opfspack 作成）
+2. ダウンロード → `books` + `imported_documents` + `document_images`（.nartik 作成）
 3. 読み取り → `reading_progress` / `view_history`
 4. タグ → `book_tags` / `favorite_tags` / `zenn_tag_metadata`

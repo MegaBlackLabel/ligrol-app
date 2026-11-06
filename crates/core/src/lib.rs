@@ -1,4 +1,4 @@
-//! thundoku-core: storage, DB, external API clients and sync engines.
+//! ligrol-core: storage, DB, external API clients and sync engines.
 pub mod booth;
 pub mod db;
 pub mod dlsite;

@@ -7,22 +7,22 @@ cd "$(dirname "$0")/.."
 
 TARGET="${1:-debug}"
 if [ "$TARGET" = "release" ]; then
-  BIN="target/release/thundoku-shelf"
+  BIN="target/release/ligrol"
   PROFILE="release"
 else
-  BIN="target/debug/thundoku-shelf"
+  BIN="target/debug/ligrol"
   PROFILE="debug"
 fi
 
 if [ ! -x "$BIN" ]; then
-  echo "binary not found: $BIN (run: mise exec -- cargo build -p thundoku-shelf)" >&2
+  echo "binary not found: $BIN (run: mise exec -- cargo build -p ligrol)" >&2
   exit 1
 fi
 
-APP="target/$PROFILE/ThundokuShelf.app"
+APP="target/$PROFILE/Ligrol.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/thundoku-shelf"
+cp "$BIN" "$APP/Contents/MacOS/ligrol"
 cp crates/app/assets/app-icon/icon.icns "$APP/Contents/Resources/icon.icns"
 
 # PDFium の動的ライブラリを同梱する。PDF レンダリングは実行時ロードで、
@@ -42,13 +42,13 @@ cat > "$APP/Contents/Info.plist" << 'PLIST'
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key>
-  <string>Thundoku Shelf</string>
+  <string>Ligrol</string>
   <key>CFBundleDisplayName</key>
-  <string>Thundoku Shelf</string>
+  <string>Ligrol</string>
   <key>CFBundleIdentifier</key>
-  <string>com.megablacklabel.thundoku-shelf</string>
+  <string>com.megablacklabel.ligrol</string>
   <key>CFBundleExecutable</key>
-  <string>thundoku-shelf</string>
+  <string>ligrol</string>
   <key>CFBundleIconFile</key>
   <string>icon</string>
   <key>CFBundlePackageType</key>

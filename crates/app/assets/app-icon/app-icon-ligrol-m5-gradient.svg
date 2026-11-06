@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1254" height="1254" viewBox="0 0 1254 1254"
+     role="img" aria-label="ligrol icon M5 — gradient">
+  <title>ligrol icon M5 — gradient</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#01214b"/>
+      <stop offset="1" stop-color="#00122e"/>
+    </linearGradient>
+  </defs>
+  <rect width="1254" height="1254" fill="url(#bg)"/>
+  <rect x="46" y="46" width="1162" height="1162" rx="230" fill="none" stroke="#ffffff" stroke-width="28"/>
+  <text x="627" y="300" text-anchor="middle"
+        font-family="'Arial Hebrew','Noto Sans Hebrew','David',Arial,sans-serif" font-size="100" font-weight="400"
+        fill="#ffffff" opacity="0.65" direction="rtl">לגלול</text>
+  <text x="627" y="680" text-anchor="middle"
+        font-family="'Helvetica Neue','Arial',sans-serif" font-size="320" font-weight="700"
+        letter-spacing="-6" fill="#ffffff" opacity="1.0">ligrol</text>
+</svg>

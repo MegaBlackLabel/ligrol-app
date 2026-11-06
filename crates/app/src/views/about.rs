@@ -1,6 +1,6 @@
 //! アプリの説明ページ（Web 版トップページ https://…/ のデスクトップ版）。
 //!
-//! Web 版の記載（ブラウザアプリ・OPFS・PWA インストール・Cookie セッション）
+//! Web 版の記載（ブラウザアプリ・NRTK・PWA インストール・Cookie セッション）
 //! はネイティブアプリの実態に合わせて修正してある。
 
 use std::collections::HashSet;
@@ -48,7 +48,7 @@ const FIRST_STEPS_TITLE: &str = "はじめての方へ";
 /// **最初の 1 冊を読むところまで**を 3 ステップで示すのが目的。
 /// 「ローカルの本だけでも読める」とは書かない（アプリの管理外のダウンロードファイルまで
 /// 使えると読めてしまう）。
-const FIRST_STEPS_LEAD: &str = "Thundoku Shelf は「ストアにログイン → 本棚に取り込む → 読む」の \
+const FIRST_STEPS_LEAD: &str = "Ligrol は「ストアにログイン → 本棚に取り込む → 読む」の \
                                 3 ステップで使い始められます。";
 
 /// はじめて使う人向けの 3 ステップ（見出し / 説明）。
@@ -249,24 +249,24 @@ const DRIVE_NOTICE_STORE: &str = "技術書典で購入済みの書籍を同期�
 /// 失うと復号できないため、パスフレーズでの保護を勧める（設定画面の「本の鍵」）。
 const KEY_NOTICE_LABEL: &str = "本の鍵について";
 const KEY_NOTICE_TITLE: &str = "取り込んだ本は「本の鍵」で暗号化されます";
-const KEY_NOTICE_BODY: &str = "取り込んだ本（.opfspack）は、このアプリが作ったアカウントごとの鍵\
+const KEY_NOTICE_BODY: &str = "取り込んだ本（.nartik）は、このアプリが作ったアカウントごとの鍵\
                                （乱数）で暗号化されます。鍵はお使いの PC の OS 資格情報ストア\
                                （Windows: 資格情報マネージャー / macOS: キーチェーン）に保存され、\
-                               Google Drive の thundoku-keys.json には「Google アカウントで解ける\
+                               Google Drive の ligrol-keys.json には「Google アカウントで解ける\
                                形」と「パスフレーズで解ける形」の 2 通りで保存されます。";
 const KEY_NOTICE_PASSPHRASE: &str = "パスフレーズを設定すると、Google に依存しない復元手段を\
                                      持てます（Google アカウントを使えない状況でも、Drive の\
-                                     thundoku-keys.json とパスフレーズだけで鍵を戻せます）。\
+                                     ligrol-keys.json とパスフレーズだけで鍵を戻せます）。\
                                      設定画面の一番上の「本の鍵」から設定・変更・解除ができます。\
                                      ログイン直後に未設定だと、このアプリが設定を促す案内を出します。\
-                                     なお、thundoku-keys.json には「Google アカウントで解ける形」の\
+                                     なお、ligrol-keys.json には「Google アカウントで解ける形」の\
                                      ラップも併存するため、Drive の中身とアカウント識別子の両方を\
                                      取得された相手は、パスフレーズが無くても鍵を解けます\
                                      （乗っ取りに対する追加防御にはなりません）。";
 const KEY_NOTICE_LOSS: &str = "鍵の控え（OS 資格情報ストアと Google Drive の\
-                                thundoku-keys.json）をすべて失うと、取り込んだ本は復号できなく\
+                                ligrol-keys.json）をすべて失うと、取り込んだ本は復号できなく\
                                 なります（ストアから取り込み直すことはできます）。旧形式（v2）の\
-                                .opfspack はこの方式に対応していないため開けません。\
+                                .nartik はこの方式に対応していないため開けません。\
                                 お手数ですが取り込み直してください。";
 
 /// 説明画面の「主な機能」に出す項目（タイトル / アイコン / 説明）。
@@ -332,7 +332,7 @@ const FEATURES: [(&str, AppIcon, &str); 15] = [
         "本の鍵（パスフレーズ）",
         AppIcon::KeyRound,
         "取り込んだ本は、アカウントごとの乱数で作られた鍵で暗号化されます。鍵は OS の資格情報\
-         ストアと Google Drive（thundoku-keys.json）に保存され、パスフレーズを設定すると\
+         ストアと Google Drive（ligrol-keys.json）に保存され、パスフレーズを設定すると\
          端末を失っても復元できます（Google アカウント侵害への追加防御にはなりません）。\
          設定画面の「本の鍵」から設定・変更・解除ができます。",
     ),
@@ -383,12 +383,12 @@ const NO_LICENSE_TEXT: &str =
 
 /// 説明画面のロゴの角丸（px）。
 ///
-/// ロゴ画像（アプリアイコン）は白地の内側に濃紺の枠線が描かれている。角丸を**枠線の
-/// 外側の丸み**に合わせないと、大きいと枠線の角が削れて見え、小さいと白い角が
-/// はみ出して見える。値はアセットから測った（画像サイズの 8%: 1024px で外側半径
-/// 81.9px → 128px へ縮小して 64px で表示するので 5.12px）。
+/// ロゴ画像（アプリアイコン）は濃紺の地に白い枠線が描かれている。角丸を**白枠の
+/// 外側の丸み**に合わせないと、大きいと白枠の角が削れて見え、小さいと濃紺の角が
+/// はみ出して見える。値はアセットから測った（1024px で外側半径 198.0px →
+/// 128px へ縮小して 64px で表示するので 12.38px）。
 /// `about_logo_radius_matches_the_icon_frame` がアセットと一致していることを見る。
-const APP_LOGO_RADIUS: f32 = 5.12;
+const APP_LOGO_RADIUS: f32 = 12.38;
 
 /// ライセンス一覧の行の高さの目安。
 /// 仮想化リストのスクロールバーを最初から正しい大きさで出すために使う（行の高さは
@@ -814,7 +814,7 @@ impl AboutView {
                                         div()
                                             .text_2xl()
                                             .font_weight(FontWeight::BOLD)
-                                            .child("Thundoku Shelf"),
+                                            .child("Ligrol"),
                                     )
                                     .child(
                                         div()
@@ -908,7 +908,7 @@ impl AboutView {
                                             .text_color(muted_fg)
                                             .line_height(relative(1.7))
                                             .child(
-                                                "Thundoku Shelf は、技術書典（TechBookFest）などのオンラインストアで購入した同人誌・技術書をデスクトップで閲覧できるアプリです。購入履歴や書籍ファイルなどのデータはお使いの PC のローカルフォルダに保存されます（外部のサーバーには送りません。Google Drive バックアップを ON にしたときだけ、取り込んだ書籍ファイル本体と本棚の DB が Google Drive に保存されます）。",
+                                                "Ligrol は、技術書典（TechBookFest）などのオンラインストアで購入した同人誌・技術書をデスクトップで閲覧できるアプリです。購入履歴や書籍ファイルなどのデータはお使いの PC のローカルフォルダに保存されます（外部のサーバーには送りません。Google Drive バックアップを ON にしたときだけ、取り込んだ書籍ファイル本体と本棚の DB が Google Drive に保存されます）。",
                                             ),
                                     ),
                             ),
@@ -1243,7 +1243,7 @@ impl AboutView {
                                     .text_sm()
                                     .text_color(muted_fg)
                                     .child(
-                                        "Thundoku Shelf — データはすべてお使いの PC のローカルフォルダに保存されます。",
+                                        "Ligrol — データはすべてお使いの PC のローカルフォルダに保存されます。",
                                     ),
                             )
                             .child(
@@ -1560,7 +1560,7 @@ mod tests {
             "暗号化",
             "乱数",
             "資格情報ストア",
-            "thundoku-keys.json",
+            "ligrol-keys.json",
             "パスフレーズ",
             "復元",
             "取り込み直",
@@ -1776,8 +1776,8 @@ mod tests {
 
     /// 説明画面のロゴの角丸は、**アイコン自身の枠線の外側の丸み**に合わせること。
     ///
-    /// ロゴ画像は白地の内側に濃紺の枠線が描かれている。角丸がこれより大きいと枠線の角が
-    /// 削れて見え、小さいと白い角がはみ出して見える。アイコンを差し替えたら気づけるよう、
+    /// ロゴ画像は濃紺の地に白い枠線が描かれている。角丸がこれより大きいと白枠の角が
+    /// 削れて見え、小さいと濃紺の角がはみ出して見える。アイコンを差し替えたら気づけるよう、
     /// アセットから測った値と定数の一致を見る。
     #[test]
     fn about_logo_radius_matches_the_icon_frame() {
@@ -1787,18 +1787,19 @@ mod tests {
                 .to_rgba8();
         let size = decoded.width();
         let raw = decoded.as_raw();
-        let is_ink = |x: u32, y: u32| {
+        // 白い枠線の画素（地は濃紺なので、白だけを拾う）
+        let is_frame = |x: u32, y: u32| {
             let i = ((y * size + x) * 4) as usize;
-            !(raw[i] > 230 && raw[i + 1] > 230 && raw[i + 2] > 230)
+            raw[i] > 230 && raw[i + 1] > 230 && raw[i + 2] > 230
         };
-        // 上辺の中央で、枠線の外側エッジまでの余白（直線部分）
+        // 上辺の中央で、白枠の外側エッジまでの余白（直線部分）
         let inset = (0..200)
-            .find(|&y| is_ink(size / 2, y))
-            .expect("アイコンに枠線が無い");
-        // 左上の角からの対角線で、枠線の外側エッジまでの距離
+            .find(|&y| is_frame(size / 2, y))
+            .expect("アイコンに白枠が無い");
+        // 左上の角からの対角線で、白枠の外側エッジまでの距離
         let diagonal = (0..300)
-            .find(|&t| is_ink(t, t))
-            .expect("アイコンに枠線が無い");
+            .find(|&t| is_frame(t, t))
+            .expect("アイコンに白枠が無い");
         // 角丸の外側半径: 角から対角線上の距離 d、直線部の余白 s のとき r = (d - s) / (1 - 1/√2)
         let radius = (diagonal as f32 - inset as f32) / (1.0 - std::f32::consts::FRAC_1_SQRT_2);
         // 表示は 64px（1024px のアセットを 128px へ縮小して 64px で描く = 1/16）
@@ -1807,7 +1808,7 @@ mod tests {
             (APP_LOGO_RADIUS - expected).abs() < 0.5,
             "ロゴの角丸がアイコンの枠線と合っていない: 定数 {APP_LOGO_RADIUS} / 実測 {expected:.2}"
         );
-        // 角丸が実質 0（白い四角）に戻ると上の一致で落ちる（実測は 5px 前後）
+        // 角丸が実質 0（角が立った四角）に戻ると上の一致で落ちる（実測は 12px 前後）
     }
 
     /// 初めて使う人向けの 3 ステップが、実装どおりの操作を案内していること。

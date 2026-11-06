@@ -5,7 +5,7 @@
 //!
 //! ```sh
 //! mise run licenses
-//! # = cargo run -p thundoku-shelf --example regen_licenses
+//! # = cargo run -p ligrol --example regen_licenses
 //! ```
 //!
 //! 生成の材料は `Cargo.lock` と、ローカルの cargo キャッシュに展開されたクレートの

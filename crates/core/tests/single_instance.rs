@@ -5,13 +5,13 @@
 
 use std::path::PathBuf;
 
-use thundoku_core::single_instance::{InstanceError, InstanceGuard};
+use ligrol_core::single_instance::{InstanceError, InstanceGuard};
 
 /// テストごとに独立したロックファイルのパス（親ディレクトリは無い状態から始める）。
 fn lock_path(tag: &str) -> PathBuf {
     std::env::temp_dir()
         .join(format!(
-            "thundoku-instance-test-{}-{tag}",
+            "ligrol-instance-test-{}-{tag}",
             std::process::id()
         ))
         .join("instance.lock")

@@ -1,15 +1,15 @@
-//! Import pipeline tests: PDF / EPUB / image ZIP -> .opfspack packs, DB rows
+//! Import pipeline tests: PDF / EPUB / image ZIP -> .nartik packs, DB rows
 //! and generated tags.
 
 use std::path::PathBuf;
 
-use opfspack::{PackBuilder, PackReader, PackRootKey};
-use thundoku_core::db;
-use thundoku_core::import::{
+use nartik::{PackBuilder, PackReader, PackRootKey};
+use ligrol_core::db;
+use ligrol_core::import::{
     ImportError, ImportSource, MAX_NESTED_ENTRIES, MediaKind, analyze_zip, import_file,
     import_pdf_bytes, import_zip_bytes, rebuild_from_pack,
 };
-use thundoku_core::tags;
+use ligrol_core::tags;
 
 const PDF_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -18,17 +18,17 @@ const PDF_FIXTURE: &str = concat!(
 
 struct TestEnv {
     root: PathBuf,
-    pool: thundoku_core::db::SqlitePool,
+    pool: ligrol_core::db::SqlitePool,
 }
 
 impl TestEnv {
     fn new(tag: &str) -> Self {
         let root =
-            std::env::temp_dir().join(format!("thundoku-import-test-{}-{tag}", std::process::id()));
+            std::env::temp_dir().join(format!("ligrol-import-test-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("packs")).unwrap();
-        let pool = thundoku_core::db::test_pool();
-        thundoku_core::db::migrate(&pool).unwrap();
+        let pool = ligrol_core::db::test_pool();
+        ligrol_core::db::migrate(&pool).unwrap();
         Self { root, pool }
     }
 
@@ -120,7 +120,7 @@ fn solid_color_pdf(r: u8, g: u8, b: u8) -> Vec<u8> {
 /// PDF を描画するテストの前提。PDFium のライブラリが無い環境ではスキップする
 /// （`mise run pdfium` で取得できる。CI は取得してからテストする）。
 fn pdfium_ready() -> bool {
-    if thundoku_core::import::pdf::pdfium_library_path().is_some() {
+    if ligrol_core::import::pdf::pdfium_library_path().is_some() {
         return true;
     }
     eprintln!("skip: PDFium のライブラリがありません（`mise run pdfium` で取得してください）");
@@ -128,7 +128,7 @@ fn pdfium_ready() -> bool {
 }
 
 fn center_rgb(pdf: &[u8]) -> (u8, u8, u8) {
-    let pages = thundoku_core::import::pdf::render_pdf_pages(pdf, &mut no_progress).unwrap();
+    let pages = ligrol_core::import::pdf::render_pdf_pages(pdf, &mut no_progress).unwrap();
     assert_eq!(pages.len(), 1);
     let img = image::load_from_memory(&pages[0].data).unwrap();
     let rgba = img.to_rgba8();
@@ -155,7 +155,7 @@ fn pdf_rendering_is_safe_from_multiple_threads() {
             scope.spawn(move || {
                 for _ in 0..5 {
                     let mut progress = no_progress;
-                    let pages = thundoku_core::import::pdf::render_pdf_pages(bytes, &mut progress)
+                    let pages = ligrol_core::import::pdf::render_pdf_pages(bytes, &mut progress)
                         .expect("render");
                     assert_eq!(pages.len(), 1);
                     assert!(
@@ -224,7 +224,7 @@ fn webp_keeps_dark_red_stable() {
         *pixel = image::Rgb([183, 42, 39]);
     }
     let webp =
-        thundoku_core::import::encode_webp(&image::DynamicImage::ImageRgb8(img), 80).unwrap();
+        ligrol_core::import::encode_webp(&image::DynamicImage::ImageRgb8(img), 80).unwrap();
     let decoded = image::load_from_memory(&webp).unwrap().to_rgb8();
     let p = decoded.get_pixel(50, 50);
     for (name, original, got) in [("r", 183, p[0]), ("g", 42, p[1]), ("b", 39, p[2])] {
@@ -243,7 +243,7 @@ fn webp_encode_preserves_vivid_red() {
         *pixel = image::Rgb([255, 0, 0]);
     }
     let webp =
-        thundoku_core::import::encode_webp(&image::DynamicImage::ImageRgb8(img), 80).unwrap();
+        ligrol_core::import::encode_webp(&image::DynamicImage::ImageRgb8(img), 80).unwrap();
     let decoded = image::load_from_memory(&webp).unwrap().to_rgb8();
     let p = decoded.get_pixel(50, 50);
     assert!(
@@ -270,7 +270,7 @@ fn pdf_rendering_preserves_red_color() {
     // 回帰: 赤い矩形の PDF をレンダリングし、中心ピクセルの RGB が
     // 赤（R 優位・G/B ほぼゼロ）であることを検証する。
     let pdf = solid_color_pdf(255, 0, 0);
-    let pages = thundoku_core::import::pdf::render_pdf_pages(&pdf, &mut no_progress).unwrap();
+    let pages = ligrol_core::import::pdf::render_pdf_pages(&pdf, &mut no_progress).unwrap();
     assert_eq!(pages.len(), 1);
     let img = image::load_from_memory(&pages[0].data).unwrap();
     let rgba = img.to_rgba8();
@@ -301,7 +301,7 @@ fn pdf_pages_have_clean_white_backgrounds() {
     // ページ内容だけを描画すると背景・余白に前ページの残骸（未初期化メモリ）
     // が残り「画像が重なって見える」。描画前の白クリアを検証する。
     let bytes = std::fs::read(PDF_FIXTURE).unwrap();
-    let pages = thundoku_core::import::pdf::render_pdf_pages(&bytes, &mut no_progress).unwrap();
+    let pages = ligrol_core::import::pdf::render_pdf_pages(&bytes, &mut no_progress).unwrap();
     assert!(pages.len() >= 2, "fixture should have multiple pages");
     for (index, page) in pages.iter().enumerate() {
         let img = image::load_from_memory(&page.data).unwrap();
@@ -359,7 +359,7 @@ fn pdf_fixture_imports_pages_text_and_db_rows() {
 
     // pack written and readable; pages + thumbnail + cover + metadata
     let pack_bytes =
-        std::fs::read(env.packs().join(format!("{}.opfspack", imported.book.id))).unwrap();
+        std::fs::read(env.packs().join(format!("{}.nartik", imported.book.id))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     let paths: Vec<&str> = reader.entries().iter().map(|e| e.path.as_str()).collect();
     assert!(paths.contains(&"thumbnail.webp"));
@@ -375,7 +375,7 @@ fn pdf_fixture_imports_pages_text_and_db_rows() {
     assert_eq!(&page0[8..12], b"WEBP");
 
     // document_images rows match pack entries
-    let image_count: i64 = thundoku_core::db::block_on(async {
+    let image_count: i64 = ligrol_core::db::block_on(async {
         sqlx::query_scalar("SELECT COUNT(*) FROM document_images WHERE document_id = ?1")
             .bind(&imported.document.id)
             .fetch_one(&env.pool)
@@ -385,7 +385,7 @@ fn pdf_fixture_imports_pages_text_and_db_rows() {
     assert_eq!(image_count as usize, page_count + 1); // pages + thumbnail
 
     // text extraction produced rows
-    let text_count: i64 = thundoku_core::db::block_on(async {
+    let text_count: i64 = ligrol_core::db::block_on(async {
         sqlx::query_scalar("SELECT COUNT(*) FROM document_text WHERE document_id = ?1")
             .bind(&imported.document.id)
             .fetch_one(&env.pool)
@@ -412,7 +412,7 @@ fn epub_imports_as_single_raw_entry() {
     assert_eq!(imported.document.total_pages, 0);
 
     let pack_bytes =
-        std::fs::read(env.packs().join(format!("{}.opfspack", imported.book.id))).unwrap();
+        std::fs::read(env.packs().join(format!("{}.nartik", imported.book.id))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     let entry = reader.entry("sample-book.epub").unwrap();
     assert_eq!(entry.size, 4096);
@@ -474,7 +474,7 @@ fn image_zip_imports_sorted_pages() {
     assert_eq!(imported.document.total_pages, 3);
 
     let pack_bytes =
-        std::fs::read(env.packs().join(format!("{}.opfspack", imported.book.id))).unwrap();
+        std::fs::read(env.packs().join(format!("{}.nartik", imported.book.id))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     let paths: Vec<&str> = reader.entries().iter().map(|e| e.path.as_str()).collect();
     assert!(paths.contains(&"pages/page_0001.webp"));
@@ -518,7 +518,7 @@ fn reimport_replaces_pages_instead_of_appending_them() {
 
     // 再取得相当（同じ book_id を再利用して取り込み直す）
     let bytes = std::fs::read(&zip_path).unwrap();
-    let again = thundoku_core::import::import_zip_bytes(
+    let again = ligrol_core::import::import_zip_bytes(
         &env.pool,
         "pages.zip",
         &bytes,
@@ -562,7 +562,7 @@ fn zip_with_pdf_reuses_book_id_without_duplicate() {
     zip.finish().unwrap();
     let bytes = std::fs::read(&zip_path).unwrap();
 
-    let first = thundoku_core::import::import_zip_bytes(
+    let first = ligrol_core::import::import_zip_bytes(
         &env.pool,
         "mixed.zip",
         &bytes,
@@ -584,7 +584,7 @@ fn zip_with_pdf_reuses_book_id_without_duplicate() {
     db::books::set_favorite(&env.pool, &first.book.id, true).unwrap();
 
     // 再ダウンロード（同一 book_id の再利用）で重複本を作らない
-    let second = thundoku_core::import::import_zip_bytes(
+    let second = ligrol_core::import::import_zip_bytes(
         &env.pool,
         "mixed.zip",
         &bytes,
@@ -670,7 +670,7 @@ fn single_image_imports_as_one_page_book() {
     let env = TestEnv::new("single-image");
     // BOOTH のダウンロードが画像ファイル（イラスト等）の場合
     let png = make_png(64, 96, [200, 100, 50]);
-    let imported = thundoku_core::import::import_image_bytes(
+    let imported = ligrol_core::import::import_image_bytes(
         &env.pool,
         "illust.png",
         &png,
@@ -684,7 +684,7 @@ fn single_image_imports_as_one_page_book() {
     assert_eq!(imported.document.total_pages, 1);
 
     let pack_bytes =
-        std::fs::read(env.packs().join(format!("{}.opfspack", imported.book.id))).unwrap();
+        std::fs::read(env.packs().join(format!("{}.nartik", imported.book.id))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     let paths: Vec<&str> = reader.entries().iter().map(|e| e.path.as_str()).collect();
     assert!(paths.contains(&"pages/page_0001.webp"));
@@ -698,7 +698,7 @@ fn image_reuses_book_id_without_duplicate() {
     let env = TestEnv::new("image-reuse");
     let png = make_png(64, 96, [200, 100, 50]);
 
-    let first = thundoku_core::import::import_image_bytes(
+    let first = ligrol_core::import::import_image_bytes(
         &env.pool,
         "illust.png",
         &png,
@@ -711,7 +711,7 @@ fn image_reuses_book_id_without_duplicate() {
     db::books::set_favorite(&env.pool, &first.book.id, true).unwrap();
 
     // 再ダウンロード（同一 book_id の再利用）で重複本を作らない
-    let second = thundoku_core::import::import_image_bytes(
+    let second = ligrol_core::import::import_image_bytes(
         &env.pool,
         "illust.png",
         &png,
@@ -845,7 +845,7 @@ fn image_zip_with_export_text_imports_page_text() {
 
     // マーカーのページ番号がそのまま document_text に入る（2 ページ目は欠番）。
     // 本文は平文で保存されない（セキュリティ評価 F02）ので、生の列を復号して確かめる。
-    let rows: Vec<(String, i64, String)> = thundoku_core::db::block_on(async {
+    let rows: Vec<(String, i64, String)> = ligrol_core::db::block_on(async {
         sqlx::query_as(
             "SELECT id, page_number, text_content FROM document_text \
              WHERE document_id = ?1 ORDER BY page_number",
@@ -855,17 +855,17 @@ fn image_zip_with_export_text_imports_page_text() {
         .await
     })
     .unwrap();
-    let key = thundoku_core::db::column_crypto::db_key().unwrap();
+    let key = ligrol_core::db::column_crypto::db_key().unwrap();
     let rows: Vec<(i64, String)> = rows
         .into_iter()
         .map(|(id, page_number, stored)| {
             assert!(
-                stored.starts_with(thundoku_core::db::column_crypto::PREFIX),
+                stored.starts_with(ligrol_core::db::column_crypto::PREFIX),
                 "本文が平文で保存されている: {stored}"
             );
-            let text = thundoku_core::db::column_crypto::decrypt(
+            let text = ligrol_core::db::column_crypto::decrypt(
                 &key,
-                &thundoku_core::db::column_crypto::aad_document_text(&id, "text_content"),
+                &ligrol_core::db::column_crypto::aad_document_text(&id, "text_content"),
                 &stored,
             )
             .expect("復号できること");
@@ -927,7 +927,7 @@ fn corrupted_image_is_skipped_with_warning() {
 
     // ページ番号は連番のまま（欠番を作らない）
     let pack_bytes =
-        std::fs::read(env.packs().join(format!("{}.opfspack", imported.book.id))).unwrap();
+        std::fs::read(env.packs().join(format!("{}.nartik", imported.book.id))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     let paths: Vec<&str> = reader.entries().iter().map(|e| e.path.as_str()).collect();
     assert!(paths.contains(&"pages/page_0001.webp"));
@@ -972,13 +972,13 @@ fn analyze_zip_plans_without_writing() {
     assert!(plan.skip_reason.is_none());
 
     // DB には何も書かない
-    let books: i64 = thundoku_core::db::block_on(async {
+    let books: i64 = ligrol_core::db::block_on(async {
         sqlx::query_scalar("SELECT COUNT(*) FROM books")
             .fetch_one(&env.pool)
             .await
     })
     .unwrap();
-    let documents: i64 = thundoku_core::db::block_on(async {
+    let documents: i64 = ligrol_core::db::block_on(async {
         sqlx::query_scalar("SELECT COUNT(*) FROM imported_documents")
             .fetch_one(&env.pool)
             .await
@@ -1033,7 +1033,7 @@ fn zip_with_directory_entries_imports_folder_contents() {
 
     // 名前順に並ぶ（001 が 1 ページ目）
     let pack_bytes =
-        std::fs::read(env.packs().join(format!("{}.opfspack", imported.book.id))).unwrap();
+        std::fs::read(env.packs().join(format!("{}.nartik", imported.book.id))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     assert!(
         reader
@@ -1065,7 +1065,7 @@ fn reimport_preserves_custom_content_name_and_id() {
     zip.finish().unwrap();
     let bytes = std::fs::read(&zip_path).unwrap();
 
-    let first = thundoku_core::import::import_zip_bytes(
+    let first = ligrol_core::import::import_zip_bytes(
         &env.pool,
         "multi.zip",
         &bytes,
@@ -1088,7 +1088,7 @@ fn reimport_preserves_custom_content_name_and_id() {
     );
 
     // 再取り込み（同じ book_id = 再取得相当）
-    let again = thundoku_core::import::import_zip_bytes(
+    let again = ligrol_core::import::import_zip_bytes(
         &env.pool,
         "multi.zip",
         &bytes,
@@ -1116,7 +1116,7 @@ fn reimport_preserves_custom_content_name_and_id() {
 
     // pack の metadata.json もカスタム名になっている（Drive 復元でも戻らない）
     let pack_bytes =
-        std::fs::read(env.packs().join(format!("{}.opfspack", first.book.id))).unwrap();
+        std::fs::read(env.packs().join(format!("{}.nartik", first.book.id))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     let meta: serde_json::Value =
         serde_json::from_slice(&reader.read_entry("metadata.json", None).unwrap()).unwrap();
@@ -1216,7 +1216,7 @@ fn zip_with_two_folder_contents_persists_structure() {
         db::contents::formats_for_content(&env.pool, &secondary.content_id).unwrap();
     let prefix = secondary_formats[0].pack_entry_prefix.clone().unwrap();
     let pack_bytes =
-        std::fs::read(env.packs().join(format!("{}.opfspack", imported.book.id))).unwrap();
+        std::fs::read(env.packs().join(format!("{}.nartik", imported.book.id))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     let paths: Vec<&str> = reader.entries().iter().map(|e| e.path.as_str()).collect();
     assert!(paths.contains(&"pages/page_0001.webp"));
@@ -1234,7 +1234,7 @@ fn zip_with_two_folder_contents_persists_structure() {
     );
 
     // 再取り込みしてもコンテンツが二重化しない
-    let again = thundoku_core::import::import_zip_bytes(
+    let again = ligrol_core::import::import_zip_bytes(
         &env.pool,
         "multi.zip",
         &std::fs::read(&zip_path).unwrap(),
@@ -1373,7 +1373,7 @@ fn import_with_root_key_writes_an_encrypted_v3_pack() {
     let env = TestEnv::new("encrypted-import");
     let root = PackRootKey::generate();
     let png = make_png(64, 96, [10, 20, 30]);
-    let imported = thundoku_core::import::import_image_bytes(
+    let imported = ligrol_core::import::import_image_bytes(
         &env.pool,
         "locked.png",
         &png,
@@ -1385,11 +1385,11 @@ fn import_with_root_key_writes_an_encrypted_v3_pack() {
     .unwrap();
 
     let pack_bytes =
-        std::fs::read(env.packs().join(format!("{}.opfspack", imported.book.id))).unwrap();
+        std::fs::read(env.packs().join(format!("{}.nartik", imported.book.id))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     assert_eq!(reader.header().version, 3, "v3 で書き出す");
     assert!(
-        reader.header().flags & opfspack::pack_flags::ENCRYPTED != 0,
+        reader.header().flags & nartik::pack_flags::ENCRYPTED != 0,
         "鍵ありの取り込みは暗号化する"
     );
     // metadata.json もページも鍵なしでは読めない（平文で書かれていない）。
@@ -1442,10 +1442,10 @@ fn pdf_import_binds_identity_when_provided() {
     )
     .unwrap();
     assert_eq!(imported.book.id, book_id);
-    let pack_bytes = std::fs::read(env.packs().join(format!("{book_id}.opfspack"))).unwrap();
+    let pack_bytes = std::fs::read(env.packs().join(format!("{book_id}.nartik"))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     assert_eq!(reader.header().version, 3, "v3 で書き出す");
-    assert!(reader.header().flags & opfspack::pack_flags::ENCRYPTED != 0);
+    assert!(reader.header().flags & nartik::pack_flags::ENCRYPTED != 0);
     // 鍵が無い / 違う鍵では読めない（PRK から冊ごとに導出した鍵でのみ読める）
     assert!(reader.read_entry("pages/page_0001.webp", None).is_err());
     let wrong = PackRootKey::generate().derive_pack_key(&book_id);
@@ -1528,7 +1528,7 @@ fn rename_content_in_pack_rewrites_only_that_content() {
     );
     let pack = builder.build(None, false).unwrap();
 
-    let renamed = thundoku_core::import::rename_content_in_pack(&pack, "b1", "c2", "続編", None)
+    let renamed = ligrol_core::import::rename_content_in_pack(&pack, "b1", "c2", "続編", None)
         .unwrap()
         .expect("metadata が変わった pack は Some を返す");
 
@@ -1575,7 +1575,7 @@ fn rename_content_in_pack_keeps_identity_binding() {
     );
     let pack = builder.build(Some(&key), true).unwrap();
 
-    let renamed = thundoku_core::import::rename_content_in_pack(
+    let renamed = ligrol_core::import::rename_content_in_pack(
         &pack,
         pack_id,
         "c1",
@@ -1611,7 +1611,7 @@ fn rename_content_in_pack_returns_none_when_unknown_or_missing() {
     );
     let pack = builder.build(None, false).unwrap();
     assert!(
-        thundoku_core::import::rename_content_in_pack(&pack, "b1", "missing", "x", None)
+        ligrol_core::import::rename_content_in_pack(&pack, "b1", "missing", "x", None)
             .unwrap()
             .is_none()
     );
@@ -1621,7 +1621,7 @@ fn rename_content_in_pack_returns_none_when_unknown_or_missing() {
     bare.add_entry("pages/page_0001.webp", b"p".to_vec(), "image/webp", false);
     let bare = bare.build(None, false).unwrap();
     assert!(
-        thundoku_core::import::rename_content_in_pack(&bare, "b1", "c1", "x", None)
+        ligrol_core::import::rename_content_in_pack(&bare, "b1", "c1", "x", None)
             .unwrap()
             .is_none()
     );
@@ -1642,9 +1642,9 @@ fn build_zip(entries: impl IntoIterator<Item = (String, Vec<u8>)>) -> Vec<u8> {
 }
 
 fn planned_content<'a>(
-    plan: &'a thundoku_core::import::ImportPlan,
+    plan: &'a ligrol_core::import::ImportPlan,
     display_name: &str,
-) -> &'a thundoku_core::import::PlannedContent {
+) -> &'a ligrol_core::import::PlannedContent {
     plan.contents
         .iter()
         .find(|content| content.display_name == display_name)
@@ -1684,7 +1684,7 @@ fn nested_zip_contents_are_imported() {
     );
     assert!(plan.warnings.is_empty(), "warnings: {:?}", plan.warnings);
 
-    let imported = thundoku_core::import::import_zip_bytes(
+    let imported = ligrol_core::import::import_zip_bytes(
         &env.pool,
         "outer.zip",
         &outer,
@@ -1713,7 +1713,7 @@ fn nested_zip_contents_are_imported() {
 
     // pack にもページが入る
     let pack_bytes =
-        std::fs::read(env.packs().join(format!("{}.opfspack", imported.book.id))).unwrap();
+        std::fs::read(env.packs().join(format!("{}.nartik", imported.book.id))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     let paths: Vec<&str> = reader.entries().iter().map(|e| e.path.as_str()).collect();
     assert!(paths.contains(&"pages/page_0001.webp"));
@@ -1744,7 +1744,7 @@ fn nested_zip_depth_two_is_not_expanded() {
         plan.warnings
     );
 
-    let imported = thundoku_core::import::import_zip_bytes(
+    let imported = ligrol_core::import::import_zip_bytes(
         &env.pool,
         "outer.zip",
         &outer,
@@ -1771,7 +1771,7 @@ fn nested_zip_over_entry_limit_is_skipped_with_warning() {
         ("同梱.zip".to_string(), nested),
     ]);
 
-    let imported = thundoku_core::import::import_zip_bytes(
+    let imported = ligrol_core::import::import_zip_bytes(
         &env.pool,
         "outer.zip",
         &outer,
@@ -1804,7 +1804,7 @@ fn zip_without_readable_content_is_not_a_readable_work() {
     // 読めるコンテンツ（画像 / PDF / EPUB）が無い ZIP は型付きで返す（R3）。
     let env = TestEnv::new("not-readable-zip");
     let bytes = build_zip([("readme.txt".to_string(), b"hello".to_vec())]);
-    let error = thundoku_core::import::import_zip_bytes(
+    let error = ligrol_core::import::import_zip_bytes(
         &env.pool,
         "text.zip",
         &bytes,
@@ -1855,7 +1855,7 @@ fn image_pages_keep_their_order_with_parallel_rendering() {
     assert_eq!(imported.document.total_pages, count as i64);
 
     let pack_bytes =
-        std::fs::read(env.packs().join(format!("{}.opfspack", imported.book.id))).unwrap();
+        std::fs::read(env.packs().join(format!("{}.nartik", imported.book.id))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     for page in 1..=count as i64 {
         let data = reader
@@ -1884,7 +1884,7 @@ fn import_file_rejects_a_source_larger_than_the_limit_without_reading_it() {
     let path = env.root.join("huge.zip");
 
     // 実データを書かずに長さだけ大きくする（読み込めばゼロ埋めが返る）。
-    let limit = thundoku_core::import::MAX_IMPORT_SOURCE_BYTES;
+    let limit = ligrol_core::import::MAX_IMPORT_SOURCE_BYTES;
     {
         let file = std::fs::File::create(&path).unwrap();
         file.set_len(limit + 1024 * 1024).unwrap();
@@ -1920,7 +1920,7 @@ fn analyze_zip_rejects_more_entries_than_the_limit() {
     {
         let mut writer = zip::ZipWriter::new(&mut buffer);
         let options = zip::write::SimpleFileOptions::default();
-        for index in 0..=opfspack::MAX_ENTRY_COUNT {
+        for index in 0..=nartik::MAX_ENTRY_COUNT {
             writer
                 .start_file(format!("pages/{index:05}.txt"), options)
                 .unwrap();
@@ -1981,7 +1981,7 @@ fn analyze_zip_rejects_a_declared_total_over_the_limit() {
 #[test]
 fn import_pdf_rejects_more_pages_than_the_limit() {
     let env = TestEnv::new("too-many-pages");
-    let pages = thundoku_core::import::MAX_PDF_PAGES + 1;
+    let pages = ligrol_core::import::MAX_PDF_PAGES + 1;
     let kids: Vec<String> = (0..pages).map(|index| format!("{} 0 R", index + 3)).collect();
     let mut objects: Vec<Vec<u8>> = Vec::new();
     objects.push(b"<< /Type /Catalog /Pages 2 0 R >>".to_vec());
@@ -2042,7 +2042,7 @@ fn render_pdf_pages_into_emits_pages_in_order() {
 
     let mut heights: Vec<u32> = Vec::new();
     let mut seen: Vec<usize> = Vec::new();
-    let total = thundoku_core::import::pdf::render_pdf_pages_into(
+    let total = ligrol_core::import::pdf::render_pdf_pages_into(
         &multi,
         &mut no_progress,
         &mut |page| {
@@ -2077,7 +2077,7 @@ fn render_pdf_pages_into_stops_on_error() {
     ];
     let pdf = build_pdf(&objects);
     let mut calls = 0;
-    let error = thundoku_core::import::pdf::render_pdf_pages_into(
+    let error = ligrol_core::import::pdf::render_pdf_pages_into(
         &pdf,
         &mut no_progress,
         &mut |_| {
@@ -2166,7 +2166,7 @@ fn token_rows(pool: &db::SqlitePool, document_id: &str) -> Vec<(i64, String)> {
 /// pack の本文エントリ（`documents/text.jsonl`）を `(ページ番号, 本文)` で読む。
 fn read_text_entry(
     reader: &PackReader,
-    key: Option<&opfspack::PackKey>,
+    key: Option<&nartik::PackKey>,
 ) -> Vec<(i64, String)> {
     let raw = reader
         .read_entry("documents/text.jsonl", key)
@@ -2207,7 +2207,7 @@ fn import_writes_source_into_pack_metadata() {
     .unwrap();
 
     let pack_bytes =
-        std::fs::read(env.packs().join(format!("{}.opfspack", imported.book.id))).unwrap();
+        std::fs::read(env.packs().join(format!("{}.nartik", imported.book.id))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     let meta: serde_json::Value =
         serde_json::from_slice(&reader.read_entry("metadata.json", None).unwrap()).unwrap();
@@ -2232,7 +2232,7 @@ fn import_writes_source_into_pack_metadata() {
     )
     .unwrap();
     let pack_bytes =
-        std::fs::read(env.packs().join(format!("{}.opfspack", imported.book.id))).unwrap();
+        std::fs::read(env.packs().join(format!("{}.nartik", imported.book.id))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     let meta: serde_json::Value =
         serde_json::from_slice(&reader.read_entry("metadata.json", None).unwrap()).unwrap();
@@ -2242,7 +2242,7 @@ fn import_writes_source_into_pack_metadata() {
     );
 }
 
-/// pack だけで復元（[`thundoku_core::import::rebuild_from_pack`]）したとき、ページ本文
+/// pack だけで復元（[`ligrol_core::import::rebuild_from_pack`]）したとき、ページ本文
 /// （`documents/text.jsonl`）から `document_text` が戻り、`token_analysis` は取り込み時と
 /// 同じ解析（`tags::extract_nouns`）で再生成される。
 #[test]
@@ -2282,7 +2282,7 @@ fn pack_rebuild_restores_document_text_and_regenerates_tokens() {
 
     // pack に本文エントリ（1 ページ 1 行の JSON Lines）が入っている。
     let pack_bytes =
-        std::fs::read(env.packs().join(format!("{}.opfspack", imported.book.id))).unwrap();
+        std::fs::read(env.packs().join(format!("{}.nartik", imported.book.id))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     assert_eq!(
         read_text_entry(&reader, None),
@@ -2334,7 +2334,7 @@ fn pack_rebuild_reads_text_entry_from_encrypted_pack() {
     )
     .unwrap();
     let pack_bytes =
-        std::fs::read(env.packs().join(format!("{}.opfspack", imported.book.id))).unwrap();
+        std::fs::read(env.packs().join(format!("{}.nartik", imported.book.id))).unwrap();
     let reader = PackReader::open(&pack_bytes).unwrap();
     let key = root.derive_pack_key(&imported.book.id);
     // 鍵なしでは読めない（平文で入っていない）。
@@ -2370,9 +2370,9 @@ fn pack_rebuild_without_text_entry_keeps_text_empty() {
             author: String::new(),
             circle_name: String::new(),
             purchase_date: None,
-            file_name: "old-pack.opfspack".to_string(),
+            file_name: "old-pack.nartik".to_string(),
             file_size: 0,
-            opfs_path: "old-pack.opfspack".to_string(),
+            opfs_path: "old-pack.nartik".to_string(),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,

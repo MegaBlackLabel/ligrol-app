@@ -20,14 +20,14 @@ pub const PAGE_LIMIT: usize = 20;
 /// ストアへ送る UA。**クライアントを名乗る**。以前は「非ブラウザ UA を 403 で弾く」観測が
 /// あったため Mac の Chrome を名乗っていたが、購入一覧 API が自認 UA でも 200 を返すことを
 /// 実機で確認した（未ログインでは UA に関わらず 401）。
-/// 弾かれるようになったら `THUNDOKU_FANZA_UA` でブラウザ UA に戻せる（`crate::ua`）。
+/// 弾かれるようになったら `LIGROL_FANZA_UA` でブラウザ UA に戻せる（`crate::ua`）。
 const USER_AGENT: &str = concat!(
-    "ThundokuShelf/",
+    "Ligrol/",
     env!("CARGO_PKG_VERSION"),
-    " (+https://github.com/MegaBlackLabel/thundoku-shelf-app)"
+    " (+https://github.com/MegaBlackLabel/ligrol-app)"
 );
 
-/// 送る UA。既定は上の定数（`THUNDOKU_FANZA_UA` で差し替えられる → `crate::ua`）。
+/// 送る UA。既定は上の定数（`LIGROL_FANZA_UA` で差し替えられる → `crate::ua`）。
 fn user_agent() -> String {
     crate::ua::for_store(USER_AGENT, crate::ua::ENV_FANZA)
 }
@@ -1292,7 +1292,7 @@ mod tests {
     /// CDN を通し、CDN がセッション Cookie 無し（署名 Cookie だけ）で受け付けるかを確認する。
     ///
     /// `FANZA_TEST_COOKIE` に Cookie（`name=value; ...`）を設定して実行する:
-    /// `FANZA_TEST_COOKIE='...' mise exec -- cargo test -p thundoku-core --lib live_download_probe -- --ignored --nocapture`
+    /// `FANZA_TEST_COOKIE='...' mise exec -- cargo test -p ligrol-core --lib live_download_probe -- --ignored --nocapture`
     /// 403 になる場合は、CDN が www のセッション Cookie を要求している（送る必要がある）。
     #[test]
     #[ignore]

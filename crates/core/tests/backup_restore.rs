@@ -3,7 +3,7 @@
 //! Drive バックアップ（JSON）を新規 DB に復元する経路は「別 PC への復元」の
 //! 主経路なので、FK 順序・原子性・スキーマ差異・ユーザーデータの網羅を検証する。
 
-use thundoku_core::db::{backup, block_on, books};
+use ligrol_core::db::{backup, block_on, books};
 
 fn book(id: &str) -> books::Book {
     books::Book {
@@ -14,7 +14,7 @@ fn book(id: &str) -> books::Book {
         purchase_date: None,
         file_name: format!("{id}.pdf"),
         file_size: 1,
-        opfs_path: format!("{id}.opfspack"),
+        opfs_path: format!("{id}.nartik"),
         cover_thumbnail: None,
         tbf_product_id: None,
         site_id: None,
@@ -39,7 +39,7 @@ fn book(id: &str) -> books::Book {
 
 /// 技術書典のイベントに紐づく本棚アイテムとチェックリスト項目を持つ DB を組む。
 fn seed_source_pool() -> sqlx::SqlitePool {
-    let pool = thundoku_core::db::test_pool();
+    let pool = ligrol_core::db::test_pool();
     block_on(async {
         sqlx::query(
             "INSERT INTO tbf_events (id, site_id, event_name) \
@@ -75,7 +75,7 @@ fn restore_into_fresh_db_keeps_event_children() {
     let src = seed_source_pool();
     let json = backup::export_json(&src, None, None, false).unwrap();
 
-    let dst = thundoku_core::db::test_pool(); // 空の新規 DB（sites のみ seed 済み）
+    let dst = ligrol_core::db::test_pool(); // 空の新規 DB（sites のみ seed 済み）
     backup::import_json(&dst, &json, None).expect("restore into a fresh DB should succeed");
 
     let count =
@@ -102,11 +102,11 @@ fn restore_into_fresh_db_keeps_event_children() {
 /// 付箋は再生成できないユーザーデータなので、復元で消えてはならない。
 #[test]
 fn restore_keeps_user_page_notes() {
-    let src = thundoku_core::db::test_pool();
+    let src = ligrol_core::db::test_pool();
     books::insert(&src, &book("b1")).unwrap();
-    thundoku_core::db::notes::upsert(
+    ligrol_core::db::notes::upsert(
         &src,
-        &thundoku_core::db::notes::PageNoteInput {
+        &ligrol_core::db::notes::PageNoteInput {
             id: "n1",
             book_id: "b1",
             content_id: "",
@@ -123,9 +123,9 @@ fn restore_keeps_user_page_notes() {
         "エクスポートに page_notes が含まれること"
     );
 
-    let dst = thundoku_core::db::test_pool();
+    let dst = ligrol_core::db::test_pool();
     backup::import_json(&dst, &json, None).unwrap();
-    let notes = thundoku_core::db::notes::list_newest_first(&dst).unwrap();
+    let notes = ligrol_core::db::notes::list_newest_first(&dst).unwrap();
     assert_eq!(notes.len(), 1, "付箋が復元されること");
     assert_eq!(notes[0].memo, "ここ重要");
 }
@@ -134,7 +134,7 @@ fn restore_keeps_user_page_notes() {
 /// NULL で上書きされないこと。
 #[test]
 fn old_backup_does_not_null_out_newer_columns() {
-    let src = thundoku_core::db::test_pool();
+    let src = ligrol_core::db::test_pool();
     books::insert(&src, &book("b1")).unwrap();
     let mut json: serde_json::Value =
         serde_json::from_str(&backup::export_json(&src, None, None, false).unwrap()).unwrap();
@@ -148,14 +148,14 @@ fn old_backup_does_not_null_out_newer_columns() {
     let old_json = serde_json::to_string(&json).unwrap();
 
     // 復元先には既にローカルの新しい値がある
-    let dst = thundoku_core::db::test_pool();
+    let dst = ligrol_core::db::test_pool();
     let mut local = book("b1");
     local.release_date = Some("2020-01-01".into());
     books::insert(&dst, &local).unwrap();
     books::set_owner_sub(
         &dst,
         "b1",
-        Some(thundoku_core::owner::encrypt(&[7u8; 32], "sub-1")),
+        Some(ligrol_core::owner::encrypt(&[7u8; 32], "sub-1")),
     )
     .unwrap();
 
@@ -183,7 +183,7 @@ fn old_backup_does_not_null_out_newer_columns() {
 /// 「DRM なしと確認済み」という**嘘のメタ**になるので、「不明（2）」として補う。
 #[test]
 fn old_backup_missing_is_drm_restores_as_unknown() {
-    let src = thundoku_core::db::test_pool();
+    let src = ligrol_core::db::test_pool();
     books::insert(&src, &book("b1")).unwrap();
     let mut json: serde_json::Value =
         serde_json::from_str(&backup::export_json(&src, None, None, false).unwrap()).unwrap();
@@ -192,12 +192,12 @@ fn old_backup_missing_is_drm_restores_as_unknown() {
     }
     let old_json = serde_json::to_string(&json).unwrap();
 
-    let dst = thundoku_core::db::test_pool();
+    let dst = ligrol_core::db::test_pool();
     backup::import_json(&dst, &old_json, None).expect("old backup should import");
     let after = books::get(&dst, "b1").unwrap().unwrap();
     assert_eq!(
         after.is_drm,
-        thundoku_core::drm::DrmStatus::Unknown.as_db(),
+        ligrol_core::drm::DrmStatus::Unknown.as_db(),
         "列の DEFAULT（0 = 確認済みの「なし」）ではなく「不明」として復元すること"
     );
 }
@@ -212,7 +212,7 @@ fn old_backup_missing_is_drm_restores_as_unknown() {
 fn legacy_backup_without_format_version_treats_is_drm_zero_as_unknown() {
     // 旧仕様の形（`format_version` を持たない）のバックアップを組む。実データを
     // エクスポートして版の印だけ外すので、列の過不足で結果が変わらない。
-    let src = thundoku_core::db::test_pool();
+    let src = ligrol_core::db::test_pool();
     books::insert(&src, &book("b0")).unwrap(); // is_drm = 0（旧仕様では「未確認」の意味）
     let mut drm_book = book("b1");
     drm_book.is_drm = 1;
@@ -226,7 +226,7 @@ fn legacy_backup_without_format_version_treats_is_drm_zero_as_unknown() {
         .expect("エクスポートには format_version が入っているはず");
     let legacy = value.to_string();
 
-    let dst = thundoku_core::db::test_pool();
+    let dst = ligrol_core::db::test_pool();
     backup::import_json(&dst, &legacy, None).expect("旧バックアップの復元に失敗した");
 
     let is_drm = |id: &str| -> i64 {
@@ -245,7 +245,7 @@ fn legacy_backup_without_format_version_treats_is_drm_zero_as_unknown() {
 /// （= 「DRM なしと確認できた」）。
 #[test]
 fn current_backup_keeps_is_drm_zero_as_verified_none() {
-    let src = thundoku_core::db::test_pool();
+    let src = ligrol_core::db::test_pool();
     books::insert(&src, &book("b0")).unwrap();
     let json = backup::export_json(&src, None, None, false).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -254,7 +254,7 @@ fn current_backup_keeps_is_drm_zero_as_verified_none() {
         "エクスポートに format_version が含まれること"
     );
 
-    let dst = thundoku_core::db::test_pool();
+    let dst = ligrol_core::db::test_pool();
     backup::import_json(&dst, &json, None).unwrap();
     let value: i64 =
         block_on(sqlx::query_scalar("SELECT is_drm FROM books WHERE id = 'b0'").fetch_one(&dst))
@@ -276,7 +276,7 @@ fn failed_restore_rolls_back_completely() {
     }
     let broken = serde_json::to_string(&json).unwrap();
 
-    let dst = thundoku_core::db::test_pool();
+    let dst = ligrol_core::db::test_pool();
     let err = backup::import_json(&dst, &broken, None);
     assert!(err.is_err(), "FK 違反で復元は失敗すること");
 
@@ -294,11 +294,11 @@ fn failed_restore_rolls_back_completely() {
 /// 付箋を二重登録しようとして UNIQUE 違反 → トランザクション全体がロールバックする。
 #[test]
 fn restore_merges_page_notes_that_differ_only_by_id() {
-    let src = thundoku_core::db::test_pool();
+    let src = ligrol_core::db::test_pool();
     books::insert(&src, &book("b1")).unwrap();
-    thundoku_core::db::notes::upsert(
+    ligrol_core::db::notes::upsert(
         &src,
-        &thundoku_core::db::notes::PageNoteInput {
+        &ligrol_core::db::notes::PageNoteInput {
             id: "note-from-device-a",
             book_id: "b1",
             content_id: "",
@@ -311,11 +311,11 @@ fn restore_merges_page_notes_that_differ_only_by_id() {
     let json = backup::export_json(&src, None, None, false).unwrap();
 
     // 復元先には同じページの付箋が別 id で存在する
-    let dst = thundoku_core::db::test_pool();
+    let dst = ligrol_core::db::test_pool();
     books::insert(&dst, &book("b1")).unwrap();
-    thundoku_core::db::notes::upsert(
+    ligrol_core::db::notes::upsert(
         &dst,
-        &thundoku_core::db::notes::PageNoteInput {
+        &ligrol_core::db::notes::PageNoteInput {
             id: "note-from-device-b",
             book_id: "b1",
             content_id: "",
@@ -328,7 +328,7 @@ fn restore_merges_page_notes_that_differ_only_by_id() {
 
     backup::import_json(&dst, &json, None).expect("restore should merge page notes by natural key");
 
-    let notes = thundoku_core::db::notes::list_newest_first(&dst).unwrap();
+    let notes = ligrol_core::db::notes::list_newest_first(&dst).unwrap();
     assert_eq!(notes.len(), 1, "同じページの付箋は 1 件に統合されること");
     assert_eq!(
         notes[0].memo, "端末Aのメモ",

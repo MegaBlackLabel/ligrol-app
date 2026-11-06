@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1254" height="1254" viewBox="0 0 1254 1254"
+     role="img" aria-label="ligrol icon G — monogram L">
+  <title>ligrol icon G — monogram L</title>
+  <rect width="1254" height="1254" fill="#ffffff"/>
+  <rect x="46" y="46" width="1162" height="1162" rx="230"
+        fill="none" stroke="#01214b" stroke-width="28"/>
+  <text x="627" y="300" text-anchor="middle"
+        font-family="'Arial Hebrew','Noto Sans Hebrew','David',Arial,sans-serif"
+        font-size="90" font-weight="400"
+        fill="#01214b" opacity="0.55" direction="rtl">לגלול</text>
+  <g fill="#01214b">
+    <rect x="470" y="400" width="110" height="440" rx="16"/>
+    <rect x="470" y="730" width="330" height="110" rx="16"/>
+  </g>
+  <rect x="500" y="440" width="8" height="330" rx="4" fill="#ffffff" opacity="0.5"/>
+  <line x1="380" y1="900" x2="874" y2="900" stroke="#01214b" stroke-width="12" stroke-linecap="round"/>
+</svg>

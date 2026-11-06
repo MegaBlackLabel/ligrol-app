@@ -18,11 +18,11 @@ use gpui_kit::{ReadGlobal as _, Styled as _};
 use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName};
-use thundoku_core::db;
-use thundoku_core::drive::sync;
-use thundoku_core::drive::{DriveClient, SYNC_FOLDER_NAME, ensure_folder};
-use thundoku_core::secrets;
-use thundoku_core::tbf::UreqTransport;
+use ligrol_core::db;
+use ligrol_core::drive::sync;
+use ligrol_core::drive::{DriveClient, SYNC_FOLDER_NAME, ensure_folder};
+use ligrol_core::secrets;
+use ligrol_core::tbf::UreqTransport;
 
 use crate::actions::OpenAuthProvider;
 use crate::app_state::AppState;
@@ -42,7 +42,7 @@ pub struct SettingsView {
     busy: bool,
     error: Option<String>,
     /// 非表示にした本の一覧（設定画面で表示解除できる）
-    hidden_items: Vec<thundoku_core::db::bookshelf::BookshelfItem>,
+    hidden_items: Vec<ligrol_core::db::bookshelf::BookshelfItem>,
     /// 非表示リストの表紙取得の進行中フラグ（二重実行防止）
     fetch_covers_in_progress: bool,
     /// 表紙を再取得中のサイト（設定の「表紙更新」。二重実行防止）
@@ -113,7 +113,7 @@ pub struct SettingsView {
     key_has_passphrase: bool,
     /// 未アップロードの鍵 bundle の `owner_id`（あれば警告する。仕様 §5.1）。
     key_pending_owner: Option<String>,
-    /// 表紙バンドル（`thundoku-thumbs.json`）の作成に失敗した印（設定に残る）
+    /// 表紙バンドル（`ligrol-thumbs.json`）の作成に失敗した印（設定に残る）
     thumbs_failed: bool,
     /// 鍵の操作（設定 / 解除 / アップロード）の実行中フラグ。
     key_busy: bool,
@@ -1272,7 +1272,7 @@ impl SettingsView {
                 .spawn(async move {
                     let deleted = store.delete(secrets::USER_GOOGLE);
                     // プロフィール（sub）の控えも消す（残ると所有者判定だけ生き残る）。
-                    let _ = thundoku_core::google::delete_saved_profile(&store);
+                    let _ = ligrol_core::google::delete_saved_profile(&store);
                     deleted
                 })
                 .await;
@@ -1317,7 +1317,7 @@ impl SettingsView {
             let state = AppState::global(cx);
             let session = state.booth_session.lock().clone();
             if let Some(ref session) = session {
-                thundoku_core::booth::BoothClient::new(session).logout()
+                ligrol_core::booth::BoothClient::new(session).logout()
             } else {
                 Ok(())
             }
@@ -1403,7 +1403,7 @@ impl SettingsView {
 
     /// 書籍 pack のバックアップ ON/OFF（`drive.sync.books`）。
     ///
-    /// OFF でも DB バックアップ（`thundoku-backup.json`）と鍵 bundle（`thundoku-keys.json`）は
+    /// OFF でも DB バックアップ（`ligrol-backup.json`）と鍵 bundle（`ligrol-keys.json`）は
     /// 同期する（本のファイルとは失うものが別のため）。
     pub fn toggle_drive_books(&mut self, cx: &mut Context<Self>, enabled: bool) {
         {
@@ -1477,7 +1477,7 @@ impl SettingsView {
         let db = state.db_pool.clone();
         let packs_dir = state.packs_dir.clone();
         let downloads_dir = state.downloads_dir.clone();
-        let db_path = state.data_dir.join("thundoku-shelf.db");
+        let db_path = state.data_dir.join("ligrol.db");
         let thumbnails_dir = state.data_dir.join("thumbnails");
         let google_sub = state.google_profile.lock().as_ref().map(|p| p.sub.clone());
         let db_key = state.secrets.db_key().ok();
@@ -1543,7 +1543,7 @@ impl SettingsView {
                 && let (Some(sub), Some(key)) = (google_sub.as_deref(), db_key.as_ref())
             {
                 let book_ids = db::books::owned_book_ids(&db, key, Some(sub)).unwrap_or_default();
-                let owner = thundoku_core::db::backup::OwnerFilter {
+                let owner = ligrol_core::db::backup::OwnerFilter {
                     key,
                     sub: Some(sub),
                 };
@@ -1751,7 +1751,7 @@ impl SettingsView {
     /// フォルダ選択ダイアログで新しいデータ保存先を選ぶ。
     pub fn pick_data_dir(&mut self, cx: &mut Context<Self>) {
         // サンプル（デモ）モードは保存先を変更しない。変更すると本物の設定ファイル
-        // （`<config>/thundoku-shelf/settings.json`）を書き換えて、次回の通常起動が
+        // （`<config>/ligrol/settings.json`）を書き換えて、次回の通常起動が
         // 空のフォルダを指し、本物の本棚が消えたように見えてしまう。
         if AppState::global(cx).demo {
             return;
@@ -1799,13 +1799,13 @@ impl SettingsView {
         let current_dir = state.data_dir.clone();
         // 新しい保存先に移動する（packs / thumbnails / downloads / DB）
         let (db_path, packs, thumbnails, downloads) = (
-            current_dir.join("thundoku-shelf.db"),
+            current_dir.join("ligrol.db"),
             current_dir.join("packs"),
             current_dir.join("thumbnails"),
             current_dir.join("downloads"),
         );
         let (ndb, npacks, nthumbs, ndl) = (
-            new_dir.join("thundoku-shelf.db"),
+            new_dir.join("ligrol.db"),
             new_dir.join("packs"),
             new_dir.join("thumbnails"),
             new_dir.join("downloads"),
@@ -1921,7 +1921,7 @@ impl SettingsView {
                 "zenn_tag_metadata",
             ] {
                 let pool = db.clone();
-                let _ = thundoku_core::db::block_on(async {
+                let _ = ligrol_core::db::block_on(async {
                     sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
                         .execute(&pool)
                         .await
@@ -2267,7 +2267,7 @@ impl SettingsView {
     fn account_settings_card(
         &self,
         cx: &Context<Self>,
-        google_profile: Option<thundoku_core::google::GoogleProfile>,
+        google_profile: Option<ligrol_core::google::GoogleProfile>,
         google_logged_in: bool,
         tbf_logged_in: bool,
         booth_logged_in: bool,
@@ -2955,7 +2955,7 @@ impl Render for SettingsView {
                                         div()
                                             .text_xs()
                                             .text_color(muted_fg)
-                                            .child("OFF にすると、本のファイル（.opfspack）のアップロードとダウンロードを行いません。本棚・進捗のデータと本の鍵はこれまでどおりバックアップします。"),
+                                            .child("OFF にすると、本のファイル（.nartik）のアップロードとダウンロードを行いません。本棚・進捗のデータと本の鍵はこれまでどおりバックアップします。"),
                                     ),
                             )
                             .child(
@@ -3197,7 +3197,7 @@ impl Render for SettingsView {
                 )
                 .child(div().text_sm().text_color(muted_fg).child(
                     "本の鍵は Google アカウントごとに 1 つで、この端末（OS の資格情報ストア）と \
-                     Google Drive の thundoku-keys.json に保存します。パスフレーズを設定しておくと、\
+                     Google Drive の ligrol-keys.json に保存します。パスフレーズを設定しておくと、\
                      端末を失ってもパスフレーズだけで本を復号できます。",
                 ));
             // 未アップロードの鍵がある場合は警告する（端末故障で復元できなくなるため）
@@ -3356,7 +3356,7 @@ impl Render for SettingsView {
                             )
                             .child(div().text_xs().text_color(muted_fg).child(if mode {
                                 "Google ログイン（sub）だけでは本の鍵を復元できません。Drive の \
-                                 thundoku-keys.json と sub を奪われても本は復号できません。\
+                                 ligrol-keys.json と sub を奪われても本は復号できません。\
                                  パスフレーズを忘れると復元できません。"
                             } else {
                                 "オンにすると、Google ログインだけでは本の鍵を復元できなくなります\
@@ -4028,9 +4028,9 @@ impl Render for SettingsView {
 mod tests {
     use gpui_kit::AppContext as _;
     use gpui_kit::TestAppContext;
-    use thundoku_core::drive::sync::{SyncPhase, SyncProgress};
+    use ligrol_core::drive::sync::{SyncPhase, SyncProgress};
 
-    use thundoku_core::db;
+    use ligrol_core::db;
 
     use super::*;
 
@@ -4121,12 +4121,12 @@ mod tests {
     /// こと・メモリと永続値の両方が落ちることを固定する。
     #[gpui_kit::test]
     async fn tbf_session_is_stored_in_the_vault_and_cleared_on_logout(cx: &mut TestAppContext) {
-        use thundoku_core::session_store::StoreSession;
+        use ligrol_core::session_store::StoreSession;
 
         cx.update(gpui_kit::component::init);
         cx.update(AppState::init_test);
 
-        let session = thundoku_core::tbf::TbfSession::from_cookies(vec![(
+        let session = ligrol_core::tbf::TbfSession::from_cookies(vec![(
             "session".to_string(),
             "secret-cookie-value".to_string(),
         )]);
@@ -4171,12 +4171,12 @@ mod tests {
     /// と対になる）。
     #[gpui_kit::test]
     async fn tbf_logout_failure_marks_the_session_for_the_next_start(cx: &mut TestAppContext) {
-        use thundoku_core::session_store::StoreSession;
+        use ligrol_core::session_store::StoreSession;
 
         cx.update(gpui_kit::component::init);
         cx.update(AppState::init_test);
 
-        let session = thundoku_core::tbf::TbfSession::from_cookies(vec![(
+        let session = ligrol_core::tbf::TbfSession::from_cookies(vec![(
             "session".to_string(),
             "secret-cookie-value".to_string(),
         )]);
@@ -4523,7 +4523,7 @@ mod tests {
                     purchase_date: None,
                     file_name: "b1.pdf".into(),
                     file_size: 1,
-                    opfs_path: "b1.opfspack".into(),
+                    opfs_path: "b1.nartik".into(),
                     cover_thumbnail: None,
                     tbf_product_id: None,
                     site_id: None,
@@ -4742,7 +4742,7 @@ mod tests {
     fn sync_progress_label_and_percent_are_readable() {
         let progress = SyncProgress {
             phase: SyncPhase::Download,
-            name: "pack-1.opfspack".into(),
+            name: "pack-1.nartik".into(),
             index: 2,
             count: 5,
             bytes: 3 * 1024 * 1024,
@@ -4750,7 +4750,7 @@ mod tests {
         };
         assert_eq!(
             sync_progress_label(&progress),
-            "pack-1.opfspack を取得中（2/5・3.0 MB / 9.0 MB）"
+            "pack-1.nartik を取得中（2/5・3.0 MB / 9.0 MB）"
         );
         assert_eq!(sync_progress_percent(&progress), Some(33));
 
@@ -4761,7 +4761,7 @@ mod tests {
         };
         assert_eq!(
             sync_progress_label(&unknown),
-            "pack-1.opfspack を取得中（2/5・512 KB 受信）"
+            "pack-1.nartik を取得中（2/5・512 KB 受信）"
         );
         assert_eq!(
             sync_progress_percent(&unknown),
@@ -4772,7 +4772,7 @@ mod tests {
         // アップロード・バックアップは段階の開始だけを報告する（進捗の割合は無い）
         let upload = SyncProgress {
             phase: SyncPhase::Upload,
-            name: "pack-2.opfspack".into(),
+            name: "pack-2.nartik".into(),
             index: 0,
             count: 0,
             bytes: 0,
@@ -4780,7 +4780,7 @@ mod tests {
         };
         assert_eq!(
             sync_progress_label(&upload),
-            "pack-2.opfspack をアップロード中（0 KB 送信）"
+            "pack-2.nartik をアップロード中（0 KB 送信）"
         );
         assert_eq!(sync_progress_percent(&upload), None);
 
@@ -4792,13 +4792,13 @@ mod tests {
         };
         assert_eq!(
             sync_progress_label(&uploading),
-            "pack-2.opfspack をアップロード中（3.0 MB / 9.0 MB）"
+            "pack-2.nartik をアップロード中（3.0 MB / 9.0 MB）"
         );
         assert_eq!(sync_progress_percent(&uploading), Some(33));
 
         let backup = SyncProgress {
             phase: SyncPhase::Backup,
-            name: "thundoku-backup.json".into(),
+            name: "ligrol-backup.json".into(),
             index: 0,
             count: 0,
             bytes: 0,
@@ -4852,7 +4852,7 @@ mod tests {
             view.update(cx, |this, cx| {
                 this.sync_progress = Some(SyncProgress {
                     phase: SyncPhase::Download,
-                    name: "pack-1.opfspack".into(),
+                    name: "pack-1.nartik".into(),
                     index: 1,
                     count: 3,
                     bytes: 1024 * 1024,
@@ -4963,7 +4963,7 @@ mod tests {
         cx.update(gpui_kit::component::init);
         cx.update(AppState::init_test);
         let view = cx.new(SettingsView::new);
-        let temp_target = std::env::temp_dir().join("thundoku-shelf-guard-test");
+        let temp_target = std::env::temp_dir().join("ligrol-guard-test");
         cx.update(|cx| {
             view.update(cx, |this, cx| {
                 this.pending_data_dir = Some(temp_target.clone());
@@ -5002,7 +5002,7 @@ mod tests {
         // 同じパスを指していると、テスト実行が**本物のデータ**を消してしまう（実測で発生）。
         // テストごとに一意な名前を使い、実データディレクトリと衝突させない。
         let new_dir = std::env::temp_dir()
-            .join("thundoku-shelf-test")
+            .join("ligrol-test")
             .join(format!("demo-move-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&new_dir);
         cx.update(|cx| {

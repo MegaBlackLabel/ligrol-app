@@ -2,7 +2,7 @@
 rust = "1.97"
 
 [tasks.run]
-run = "cargo run -p thundoku-shelf"
+run = "cargo run -p ligrol"
 
 [tasks.test]
 run = "cargo test --workspace"
@@ -17,9 +17,9 @@ run = "cargo fmt --all"
 run = "cargo clippy --workspace --all-targets -- -D warnings"
 
 # 依存を変えたらライセンス一覧（crates/app/assets/third-party/licenses.json）を作り直す。
-# 作り忘れは `cargo test -p thundoku-shelf` が検出する。
+# 作り忘れは `cargo test -p ligrol` が検出する。
 [tasks.licenses]
-run = "cargo run -p thundoku-shelf --example regen_licenses"
+run = "cargo run -p ligrol --example regen_licenses"
 
 # PDFium の動的ライブラリを crates/core/ に取得する（リポジトリにはコミットしない）。
 # PDF を描画するテストは、これが無いとスキップされる。

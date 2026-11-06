@@ -20,7 +20,7 @@ use gpui_kit::{
     Render, StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
 use gpui_webview::WebView;
-use thundoku_core::fantia::client::{FantiaSession, SITE_HOST};
+use ligrol_core::fantia::client::{FantiaSession, SITE_HOST};
 
 /// セッション Cookie を集める起点（Fantia は 1 ホストに集約されている）。
 const SESSION_ORIGINS: [&str; 1] = ["https://fantia.jp"];
@@ -83,7 +83,7 @@ impl FantiaLoginView {
             webview: None,
             check_generation: 0,
             visible: false,
-            verify: thundoku_core::fantia::client::me_is_authenticated,
+            verify: ligrol_core::fantia::client::me_is_authenticated,
             last_verify: None,
         };
         // 生成は App の借用外（Windows はタスク）で行われる。理由は
@@ -350,7 +350,7 @@ mod tests {
     use gpui_kit::AppContext as _;
     use gpui_kit::ReadGlobal as _;
     use gpui_kit::TestAppContext;
-    use thundoku_core::session_cookies::CookieEntry;
+    use ligrol_core::session_cookies::CookieEntry;
 
     /// テスト用のウィンドウルート（描くものは無い）。
     struct TestRoot;

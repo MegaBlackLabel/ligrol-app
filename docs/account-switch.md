@@ -30,7 +30,7 @@
 - **暗号化は必須**：平文 sub を DB に置くと、`owner_id`（keyring のスロット名・ラップの AAD）と
   `sub` ラップの KEK（`PBKDF2(sub + APP_SALT)`）を導出でき、鍵 bundle と pack を入手していれば
   復号経路を渡すことになる（旧 v2 は `pack key = PBKDF2(sub + APP_SALT) → HKDF(salt = pack_id)`
-  を直接導出できた）。→ keyring のローカル鍵（例 `thundoku-shelf.db-key`）で AES 暗号化して保存。
+  を直接導出できた）。→ keyring のローカル鍵（例 `ligrol.db-key`）で AES 暗号化して保存。
 - `NULL` = 未ログイン時 DL（未暗号化 pack）→ **そのまま保有**
 - `値` = その sub で暗号化された pack（所有者）
 
@@ -108,7 +108,7 @@
   `owner_sub = 現在sub` をセットする。
   - **所有者確認（metadata プローブ）は行わない**。`folder_id` でフォルダが
     アカウントごとに分離されている前提で帰属を信頼する（複数アカウント対応は内部実装）。
-- **DB バックアップ**（`thundoku-backup.json`）は **owner == 現在 sub のデータだけ**にフィルタして
+- **DB バックアップ**（`ligrol-backup.json`）は **owner == 現在 sub のデータだけ**にフィルタして
   現在 sub の Drive にアップロード → **真にアカウントごとに独立**（他アカウント・未所属のメタは混ぜない）。
 - **現在 sub は起動直後から必要**：アップロードの所有者フィルタだけでなく、起動時の復元確認
   （ローカルと Drive バックアップの差分判定）も「現在 sub の本」を範囲にする必要がある。
@@ -135,11 +135,11 @@
 
 - `owner_sub` は暗号化して保存。**DB だけでは pack キーを導出できない**（v3 の鍵材料は乱数）。
 - **`sub` はログに出さない**: v3 でも `sub` は `owner_id`（keyring のスロット名とラップの AAD）と
-  `sub` ラップの KEK の材料で、実質の復号経路。ログ（Windows は `%TEMP%/thundoku-shelf/thundoku.log`
+  `sub` ラップの KEK の材料で、実質の復号経路。ログ（Windows は `%TEMP%/ligrol/ligrol.log`
   に既定 debug レベルで残る）へ書くと、鍵 bundle と pack を入手した第三者に復号材料を渡すことに
   なる。`google::profile_log_label` は有無だけを返し、値は含めない。
 - **v3 の鍵は乱数ルート鍵（PRK）+ ラップ**（`docs/spec/10-pack-keys.md`）: PRK は keyring と
-  Drive の `thundoku-keys.json`（`sub` / 任意のパスフレーズでラップ）に置く。したがって
+  Drive の `ligrol-keys.json`（`sub` / 任意のパスフレーズでラップ）に置く。したがって
   **`sub` を知っているだけでは pack は解けない**（ラップの入った bundle が要る）。パスフレーズを
   設定していれば、bundle が漏れてもパスフレーズを知らない相手には解けない。`sub` ラップは
   仕様上は削除できる（`PackKeyBundle::remove_wrap`）が、core の `PackKeyStore` に公開操作はまだ無い。
@@ -180,7 +180,7 @@
 
 - **暗号化形式**：AES-256-GCM。`IV（12byte）|| ciphertext || tag` を BASE64 にして
   `books.owner_sub`（TEXT）に保存。`NULL` = 未所属（未暗号化）。
-- **DB-key**：keyring の `thundoku-shelf.db-key`（ランダム 32 byte。初回使用時に生成）。
+- **DB-key**：keyring の `ligrol.db-key`（ランダム 32 byte。初回使用時に生成）。
   - **起動時に無い場合 → 新規生成**する（dev 版・既存データ削除予定なので、古い `owner_sub` は復号不能になるが許容）。
   - 復号不能な `owner_sub` は「未知の所有者」として**未所属（NULL）扱いにはしない**（表示は非表示に留める）。
 
@@ -224,7 +224,7 @@
 
 ## P6. id はファイルパスになるため復元時に検証する
 
-- `books.id` / `books.pack_id` は `packs/{id}.opfspack` のファイル名になる。Drive の JSON
+- `books.id` / `books.pack_id` は `packs/{id}.nartik` のファイル名になる。Drive の JSON
   バックアップから復元できるため、復元時に検証しないと `../other/book` のような id で
   保存領域の外を読み書き・削除できてしまう（CWE-22）。
 - 検証は `pack_path` モジュールに集約する（`is_safe_id` / `pack_path` / `conflict_backup_path`）。

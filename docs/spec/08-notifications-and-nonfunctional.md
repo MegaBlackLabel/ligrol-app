@@ -77,7 +77,7 @@
 | テスト用プール | `max_connections(1)`（メモリ DB を共有するため） | `crates/core/src/db/mod.rs:465-471`, `crates/app/src/app_state.rs:273-275` |
 | マイグレーション | `sqlx::migrate!("./migrations")` + `_sqlx_migrations` 管理。加えて `PRAGMA table_info` で列の有無を確認して `ALTER TABLE ... ADD COLUMN` する冪等マイグレーション群（`bookshelf_items.hidden_at` / `author`、`books.owner_sub`、`tbf_events.poll_sync_enabled`、`page_notes.is_active` 等） | `crates/core/src/db/mod.rs:192-300`, `:62-84` |
 | 同期 API | 全リポジトリ関数が `block_on` でプロセス共有ランタイム上で sqlx を実行 | `crates/core/src/db/mod.rs:1-5`, `:42-46` |
-| DB ファイルの場所 | `{data_dir}/thundoku-shelf.db`（既定 `dirs::data_dir()/thundoku-shelf/`） | `crates/app/src/app_state.rs:138-147` |
+| DB ファイルの場所 | `{data_dir}/ligrol.db`（既定 `dirs::data_dir()/ligrol/`） | `crates/app/src/app_state.rs:138-147` |
 | 同期中の DB アクセス | メインの DB プールを同期タスクでもそのまま使う（WAL により並行可能） | `crates/app/src/views/settings.rs:820-822` |
 
 ### 5.2 Tokio ランタイム
@@ -149,7 +149,7 @@
   2. `File::options().create(true).read(true).write(true).truncate(false)` で開く（**truncate しない**: 起動中インスタンスの状態を壊さないため）。
   3. `try_lock()` 成功 → ガード返却。`TryLockError::WouldBlock` → `InstanceError::AlreadyRunning(path)`。その他 I/O エラー → `InstanceError::Io`。
 - `InstanceGuard` は `drop`（= プロセス終了）でロック解放。クラッシュ・強制終了でも OS が解放するため「古いロックで起動できない」ことはない（ロックファイル自体は残る）`crates/core/src/single_instance.rs:9-12`, `:32-38`。
-- ロックファイルの場所: `dirs::config_dir()/thundoku-shelf/instance.lock`。データ保存先（変更可能）ではなく config ディレクトリに置くことで、保存先を変えても「同時に動くアプリは 1 つ」を保つ `crates/app/src/main.rs:172-178`。
+- ロックファイルの場所: `dirs::config_dir()/ligrol/instance.lock`。データ保存先（変更可能）ではなく config ディレクトリに置くことで、保存先を変えても「同時に動くアプリは 1 つ」を保つ `crates/app/src/main.rs:172-178`。
 - `main` の挙動 `crates/app/src/main.rs:25-46`:
   - **ログ初期化より先に**ガード取得（ログ初期化が `File::create` で切り詰めるため、2 個目が起動中インスタンスのログを壊すのを防ぐ）。ガードは `main` の間ずっと保持。
   - `AlreadyRunning` → `note_second_launch(&lock_path)` でログに追記し、**何も表示せず終了**。
@@ -174,7 +174,7 @@
 | 項目 | 値 | アンカー |
 |---|---|---|
 | ロガー | `env_logger` + `log`（`RUST_LOG` で制御可） | `crates/app/src/logging.rs`, `docs/features.md:75` |
-| 出力先 | **`<データディレクトリ>/logs/thundoku.log`**（全 OS 共通。データディレクトリは保存先の設定で変わる）。Windows は `%APPDATA%\thundoku-shelf\logs\thundoku.log` | `crates/app/src/logging.rs`（`log_dir` / `log_file`）, `crates/app/src/main.rs:48-52` |
+| 出力先 | **`<データディレクトリ>/logs/ligrol.log`**（全 OS 共通。データディレクトリは保存先の設定で変わる）。Windows は `%APPDATA%\ligrol\logs\ligrol.log` | `crates/app/src/logging.rs`（`log_dir` / `log_file`）, `crates/app/src/main.rs:48-52` |
 | 出力先の表示と導線 | レポート画面の「ログ」カードが同じパスを表示し、「ログの格納先を開く」でファイルマネージャー（エクスプローラー / Finder）を開く（issue #8） | `crates/app/src/views/report.rs`（`open_log_folder` / `report-log-path` / `report-log-open`）, `crates/core/src/shell.rs`（`open_path`） |
 | 既定フィルタ | `default_filter_or("debug")`（全 OS。`RUST_LOG` があればそちらが優先） | `crates/app/src/logging.rs`（`DEFAULT_FILTER`） |
 | 書き込み先 | **ファイル + 標準エラー**（GUI 起動では標準エラーが見えないためファイルにも出し、ターミナル起動ではその場でも読める） | `crates/app/src/logging.rs`（`TeeWriter`） |

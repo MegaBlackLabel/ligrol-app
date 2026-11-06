@@ -27,14 +27,14 @@ use gpui_kit::{
     App, Context, Entity, Hsla, IntoElement, KeyDownEvent, ParentElement, Render, RenderImage,
     Rgba, SharedString, Window, div, img, px, relative,
 };
-use thundoku_core::booth::BoothClient;
-use thundoku_core::db;
-use thundoku_core::db::{books, bookshelf, documents, progress};
-use thundoku_core::dlsite::client::DlsiteClient;
-use thundoku_core::fantia::client::FantiaClient;
-use thundoku_core::fanza::client::FanzaClient;
-use thundoku_core::import::ImportSource;
-use thundoku_core::tbf::{self, TBF_DOWNLOAD_BASE, UreqTransport};
+use ligrol_core::booth::BoothClient;
+use ligrol_core::db;
+use ligrol_core::db::{books, bookshelf, documents, progress};
+use ligrol_core::dlsite::client::DlsiteClient;
+use ligrol_core::fantia::client::FantiaClient;
+use ligrol_core::fanza::client::FanzaClient;
+use ligrol_core::import::ImportSource;
+use ligrol_core::tbf::{self, TBF_DOWNLOAD_BASE, UreqTransport};
 
 use crate::actions::{
     CancelDownload, DeleteBackupFromDrive, DeleteBook, EditBookTags, HideBook, OpenAuth,
@@ -1372,7 +1372,7 @@ pub(crate) struct PendingFileChoice {
     /// 選択前のアイテム（`start_download` に渡されたもの）
     pub(crate) item: bookshelf::BookshelfItem,
     /// 選ばせる候補（文書順。2 件以上）
-    pub(crate) options: Vec<thundoku_core::booth::DownloadOption>,
+    pub(crate) options: Vec<ligrol_core::booth::DownloadOption>,
     /// 選択中の候補（矢印 / j k で動かし、Enter かクリックで確定する。初期値は先頭）
     pub(crate) selected: usize,
 }
@@ -1455,7 +1455,7 @@ const FILE_CHOICE_MAX_H: f32 = 360.0;
 const FILE_CHOICE_ROW_H: f32 = 40.0;
 
 /// 複数ダウンロードの選択肢に出す名前（ファイル名が取れなければ連番）。
-fn file_choice_label(option: &thundoku_core::booth::DownloadOption, index: usize) -> String {
+fn file_choice_label(option: &ligrol_core::booth::DownloadOption, index: usize) -> String {
     option
         .name
         .clone()
@@ -1464,7 +1464,7 @@ fn file_choice_label(option: &thundoku_core::booth::DownloadOption, index: usize
 }
 
 /// 確認モーダルを出すか（§6.3: 形式が複数 / コンテンツが複数 / 差分セット）。
-fn import_needs_confirmation(plan: &thundoku_core::import::ImportPlan) -> bool {
+fn import_needs_confirmation(plan: &ligrol_core::import::ImportPlan) -> bool {
     let renditions: usize = plan
         .contents
         .iter()
@@ -1474,7 +1474,7 @@ fn import_needs_confirmation(plan: &thundoku_core::import::ImportPlan) -> bool {
 }
 
 /// 計画から確認モーダルの要約を作る。
-fn import_choices(plan: &thundoku_core::import::ImportPlan) -> Vec<ImportChoice> {
+fn import_choices(plan: &ligrol_core::import::ImportPlan) -> Vec<ImportChoice> {
     plan.contents
         .iter()
         .map(|content| ImportChoice {
@@ -1501,7 +1501,7 @@ fn ask_import_confirmation(
     prompt_tx: &std::sync::mpsc::Sender<PendingImport>,
     database_id: &str,
     title: &str,
-    plan: &thundoku_core::import::ImportPlan,
+    plan: &ligrol_core::import::ImportPlan,
 ) -> Option<usize> {
     let (reply, answer) = std::sync::mpsc::channel();
     let request = PendingImport {
@@ -1534,19 +1534,19 @@ enum ImportFailure {
 /// **転送の前に**「取り込み元の上限を超える」ことを断る（無駄なダウンロードをしない）。
 ///
 /// 取り込みは `import_*_bytes` がソース全体をメモリへ読む設計で、上限は
-/// [`thundoku_core::import::MAX_IMPORT_SOURCE_BYTES`]。超える本は落としても取り込めないので、
+/// [`ligrol_core::import::MAX_IMPORT_SOURCE_BYTES`]。超える本は落としても取り込めないので、
 /// ストアが申告するサイズが分かるときは**ここで止める**（以前は 4.7 GB を全部落としてから
 /// 「取り込めません」と出ていた）。申告サイズが不明なら従来どおり進む（転送後に同じ判定をする）。
 fn reject_declared_too_large(declared_size: Option<u64>) -> Result<(), ImportFailure> {
     let Some(size) = declared_size else {
         return Ok(());
     };
-    let limit = thundoku_core::import::MAX_IMPORT_SOURCE_BYTES;
+    let limit = ligrol_core::import::MAX_IMPORT_SOURCE_BYTES;
     if size > limit {
         return Err(ImportFailure::Message(format!(
             "この本は大きすぎて取り込めません（約 {}。上限は {}）",
-            thundoku_core::store_size::format_size_gb(size),
-            thundoku_core::store_size::format_size_gb(limit),
+            ligrol_core::store_size::format_size_gb(size),
+            ligrol_core::store_size::format_size_gb(limit),
         )));
     }
     Ok(())
@@ -1613,9 +1613,9 @@ fn demo_download(
 }
 
 /// 取り込みエラーを UI 用の失敗種別に変換する（`NotAReadableWork` だけ特別扱い）。
-fn import_failure(error: thundoku_core::import::ImportError) -> ImportFailure {
+fn import_failure(error: ligrol_core::import::ImportError) -> ImportFailure {
     match error {
-        thundoku_core::import::ImportError::NotAReadableWork => ImportFailure::NotAReadable,
+        ligrol_core::import::ImportError::NotAReadableWork => ImportFailure::NotAReadable,
         // 鍵が無いときは復元（パスフレーズ入力）への導線を含む文言にする
         other => ImportFailure::Message(crate::pack_keys::import_error_message(&other)),
     }
@@ -1723,7 +1723,7 @@ fn visible_tag_fetch_notice(fetched: usize, skipped: usize, remaining: usize) ->
 ///
 /// 「同期のついでにタグが増えた」ことを伝えるのが目的なので、失敗だけ・打ち切りだけの
 /// ときは出さない（同期そのものの失敗は別の通知が受け持つ）。
-fn tag_fetch_notice(outcome: &thundoku_core::fanza::sync::TagFetchOutcome) -> Option<String> {
+fn tag_fetch_notice(outcome: &ligrol_core::fanza::sync::TagFetchOutcome) -> Option<String> {
     (outcome.fetched > 0).then(|| {
         let mut notice = format!(
             "FANZA の未ダウンロードのタグ情報を {} 件取得しました",
@@ -3724,7 +3724,7 @@ impl BookshelfView {
                                                 .insert(item.item_id, first.clone());
                                         }
                                     }
-                                    Err(thundoku_core::booth::BoothError::NotFound) => {
+                                    Err(ligrol_core::booth::BoothError::NotFound) => {
                                         vanished.lock().unwrap().push(item.item_id);
                                     }
                                     Err(_) => {}
@@ -3761,7 +3761,7 @@ impl BookshelfView {
                             download_url: item.download_url.clone(),
                             // 1 商品に複数ファイル（PDF + 画像 ZIP 等）がある本は
                             // 候補を全部保存し、ダウンロード時に選ばせる
-                            download_options: thundoku_core::booth::encode_download_options(
+                            download_options: ligrol_core::booth::encode_download_options(
                                 &item.download_options,
                             ),
                             is_downloadable: 1,
@@ -3779,7 +3779,7 @@ impl BookshelfView {
                             media_category: None,
                             ai_type: None,
                             // BOOTH は DRM の情報を返さない（「不明」として保存する）
-                            is_drm: thundoku_core::drm::DrmStatus::Unknown.as_db(),
+                            is_drm: ligrol_core::drm::DrmStatus::Unknown.as_db(),
                             release_date: None,
                             description: None,
                             theme: None,
@@ -3792,7 +3792,7 @@ impl BookshelfView {
                     .map_err(|e| e.to_string())?;
                 }
                 // ライブラリに DL URL が無くなった商品は本棚から取り除く
-                let _ = thundoku_core::db::block_on(async {
+                let _ = ligrol_core::db::block_on(async {
                     sqlx::query(
                     "DELETE FROM bookshelf_items WHERE site_id = 'booth'                      AND (download_url IS NULL OR download_url = '')",
                 )
@@ -3804,8 +3804,8 @@ impl BookshelfView {
                 let current_ids: Vec<String> =
                     library.iter().map(|i| i.item_id.to_string()).collect();
                 let delete_not_in_library =
-                    |pool: &thundoku_core::db::SqlitePool, ids: &[String]| {
-                        thundoku_core::db::block_on(async {
+                    |pool: &ligrol_core::db::SqlitePool, ids: &[String]| {
+                        ligrol_core::db::block_on(async {
                             if ids.is_empty() {
                                 sqlx::query(
                             "DELETE FROM bookshelf_items WHERE site_id = 'booth'                              AND database_id NOT IN                              (SELECT tbf_product_id FROM books WHERE site_id = 'booth')",
@@ -3838,7 +3838,7 @@ impl BookshelfView {
                     for id in &vanished {
                         query = query.bind(id.to_string());
                     }
-                    let _ = thundoku_core::db::block_on(async { query.execute(&db).await });
+                    let _ = ligrol_core::db::block_on(async { query.execute(&db).await });
                 }
                 Ok::<_, String>(library.len())
             })();
@@ -3919,18 +3919,18 @@ impl BookshelfView {
         let db = state.db_pool.clone();
         let owner = crate::app_state::owner_token(state);
         let (tx, rx) =
-            std::sync::mpsc::channel::<Result<thundoku_core::fanza::sync::PurchaseBatch, String>>();
+            std::sync::mpsc::channel::<Result<ligrol_core::fanza::sync::PurchaseBatch, String>>();
         std::thread::spawn(move || {
-            let result = (|| -> Result<thundoku_core::fanza::sync::PurchaseBatch, String> {
+            let result = (|| -> Result<ligrol_core::fanza::sync::PurchaseBatch, String> {
                 let session = session.ok_or_else(|| "FANZA セッションがありません".to_string())?;
                 let mut client =
                     FanzaClient::with_transport(Box::new(UreqTransport::new()), session);
-                thundoku_core::fanza::sync::save_purchases_batch(
+                ligrol_core::fanza::sync::save_purchases_batch(
                     &db,
                     &mut client,
                     owner.as_deref(),
                     cursor,
-                    thundoku_core::fanza::sync::PURCHASE_PAGES_PER_RUN,
+                    ligrol_core::fanza::sync::PURCHASE_PAGES_PER_RUN,
                 )
                 .map_err(|e| e.to_string())
             })();
@@ -4018,15 +4018,15 @@ impl BookshelfView {
         };
         let db = state.db_pool.clone();
         let handle = cx.entity();
-        let (tx, rx) = std::sync::mpsc::channel::<thundoku_core::fanza::sync::TagFetchOutcome>();
+        let (tx, rx) = std::sync::mpsc::channel::<ligrol_core::fanza::sync::TagFetchOutcome>();
         // 直列 + 間隔を空けるので、GPUI のワーカーを占有しないよう専用スレッドで実行する
         std::thread::spawn(move || {
             let mut client = FanzaClient::with_transport(Box::new(UreqTransport::new()), session);
-            match thundoku_core::fanza::sync::fetch_pending_tags(
+            match ligrol_core::fanza::sync::fetch_pending_tags(
                 &db,
                 &mut client,
-                thundoku_core::fanza::sync::TAG_FETCH_PER_RUN,
-                thundoku_core::fanza::sync::TAG_FETCH_INTERVAL,
+                ligrol_core::fanza::sync::TAG_FETCH_PER_RUN,
+                ligrol_core::fanza::sync::TAG_FETCH_INTERVAL,
             ) {
                 Ok(outcome) => {
                     let _ = tx.send(outcome);
@@ -4165,11 +4165,11 @@ impl BookshelfView {
                     Some(session) => {
                         let mut client =
                             FanzaClient::with_transport(Box::new(UreqTransport::new()), session);
-                        match thundoku_core::fanza::sync::fetch_tags_for(
+                        match ligrol_core::fanza::sync::fetch_tags_for(
                             &db,
                             &mut client,
                             &fanza_ids,
-                            thundoku_core::fanza::sync::TAG_FETCH_INTERVAL,
+                            ligrol_core::fanza::sync::TAG_FETCH_INTERVAL,
                         ) {
                             Ok(outcome) => {
                                 fetched += outcome.fetched;
@@ -4191,7 +4191,7 @@ impl BookshelfView {
                     Some(session) => {
                         let mut client =
                             DlsiteClient::with_transport(Box::new(UreqTransport::new()), session);
-                        match thundoku_core::dlsite::sync::fetch_tags_for(
+                        match ligrol_core::dlsite::sync::fetch_tags_for(
                             &db,
                             &mut client,
                             &dlsite_ids,
@@ -4274,20 +4274,20 @@ impl BookshelfView {
         let db = state.db_pool.clone();
         let owner = crate::app_state::owner_token(state);
         let (tx, rx) = std::sync::mpsc::channel::<
-            Result<thundoku_core::dlsite::sync::PurchaseBatch, String>,
+            Result<ligrol_core::dlsite::sync::PurchaseBatch, String>,
         >();
         std::thread::spawn(move || {
-            let result = (|| -> Result<thundoku_core::dlsite::sync::PurchaseBatch, String> {
+            let result = (|| -> Result<ligrol_core::dlsite::sync::PurchaseBatch, String> {
                 let session = session.ok_or_else(|| "DLsite セッションがありません".to_string())?;
                 let mut client =
                     DlsiteClient::with_transport(Box::new(UreqTransport::new()), session);
-                thundoku_core::dlsite::sync::save_purchases_batch(
+                ligrol_core::dlsite::sync::save_purchases_batch(
                     &db,
                     &mut client,
                     owner.as_deref(),
                     cursor,
-                    thundoku_core::dlsite::sync::PURCHASE_PAGES_PER_RUN,
-                    thundoku_core::dlsite::sync::PAGE_INTERVAL,
+                    ligrol_core::dlsite::sync::PURCHASE_PAGES_PER_RUN,
+                    ligrol_core::dlsite::sync::PAGE_INTERVAL,
                 )
                 .map_err(|e| e.to_string())
             })();
@@ -4384,19 +4384,19 @@ impl BookshelfView {
         let db = state.db_pool.clone();
         let owner = crate::app_state::owner_token(state);
         let (tx, rx) = std::sync::mpsc::channel::<
-            Result<thundoku_core::fantia::sync::PurchaseBatch, String>,
+            Result<ligrol_core::fantia::sync::PurchaseBatch, String>,
         >();
         std::thread::spawn(move || {
-            let result = (|| -> Result<thundoku_core::fantia::sync::PurchaseBatch, String> {
+            let result = (|| -> Result<ligrol_core::fantia::sync::PurchaseBatch, String> {
                 let session = session.ok_or_else(|| "Fantia セッションがありません".to_string())?;
                 let mut client =
                     FantiaClient::with_transport(Box::new(UreqTransport::new()), session);
-                thundoku_core::fantia::sync::save_purchases_batch(
+                ligrol_core::fantia::sync::save_purchases_batch(
                     &db,
                     &mut client,
                     owner.as_deref(),
                     cursor,
-                    thundoku_core::fantia::sync::PURCHASE_PAGES_PER_RUN,
+                    ligrol_core::fantia::sync::PURCHASE_PAGES_PER_RUN,
                 )
                 .map_err(|e| e.to_string())
             })();
@@ -4738,11 +4738,11 @@ impl BookshelfView {
                     // 判定できた結果を本棚へ記録する（同期は「不明」で入れている）。
                     // 記録に失敗しても取り込みは続ける（メタデータの話で、止める理由がない）。
                     let status = if detail.is_drm {
-                        thundoku_core::drm::DrmStatus::Protected
+                        ligrol_core::drm::DrmStatus::Protected
                     } else {
-                        thundoku_core::drm::DrmStatus::NoDrm
+                        ligrol_core::drm::DrmStatus::NoDrm
                     };
-                    if let Err(error) = thundoku_core::db::bookshelf::set_drm_status(
+                    if let Err(error) = ligrol_core::db::bookshelf::set_drm_status(
                         &db,
                         "fanza",
                         &product_id,
@@ -4759,11 +4759,11 @@ impl BookshelfView {
                     let declared_size = detail
                         .file_size
                         .as_deref()
-                        .and_then(thundoku_core::store_size::parse_store_size);
+                        .and_then(ligrol_core::store_size::parse_store_size);
                     // 上限を超える本は**転送の前に**断る（落としても取り込めない）
                     reject_declared_too_large(declared_size)?;
                     if !large_confirmed
-                        && thundoku_core::store_size::needs_large_download_confirmation(
+                        && ligrol_core::store_size::needs_large_download_confirmation(
                             declared_size,
                         )
                     {
@@ -4828,7 +4828,7 @@ impl BookshelfView {
                     // 上限を超える本は**転送の前に**断る（落としても取り込めない）
                     reject_declared_too_large(page_meta.file_size)?;
                     if !large_confirmed
-                        && thundoku_core::store_size::needs_large_download_confirmation(
+                        && ligrol_core::store_size::needs_large_download_confirmation(
                             page_meta.file_size,
                         )
                     {
@@ -4940,11 +4940,11 @@ impl BookshelfView {
                 // 取り込み元の上限はコアと同じ値を使う。**変換の前**に見るので、
                 // 大きすぎる本で PDF レンダリングや伸長を始めない（セキュリティ評価 F06）。
                 let source_bytes = temp.size()?;
-                if source_bytes > thundoku_core::import::MAX_IMPORT_SOURCE_BYTES {
+                if source_bytes > ligrol_core::import::MAX_IMPORT_SOURCE_BYTES {
                     return Err(import_failure(
-                        thundoku_core::import::ImportError::SourceTooLarge {
+                        ligrol_core::import::ImportError::SourceTooLarge {
                             size: source_bytes,
-                            limit: thundoku_core::import::MAX_IMPORT_SOURCE_BYTES,
+                            limit: ligrol_core::import::MAX_IMPORT_SOURCE_BYTES,
                         },
                     ));
                 }
@@ -5003,7 +5003,7 @@ impl BookshelfView {
                     // 中で レンダリング → pack → DB の順に進む）。**1 ページずつ** pack へ
                     // 入れるので、全ページをメモリに持たない（以前は全ページを集めてから
                     // clone していた）。
-                    let imported = thundoku_core::import::import_pdf_path(
+                    let imported = ligrol_core::import::import_pdf_path(
                         &db,
                         &file_name,
                         temp.path(),
@@ -5055,7 +5055,7 @@ impl BookshelfView {
                         let _ = books::set_owner_sub(
                             &db,
                             &imported.book.id,
-                            Some(thundoku_core::owner::encrypt(key, sub)),
+                            Some(ligrol_core::owner::encrypt(key, sub)),
                         );
                     }
                     Ok::<_, ImportFailure>(imported)
@@ -5064,7 +5064,7 @@ impl BookshelfView {
                         "epub" => {
                             // EPUB は pack に 1 エントリとして入れるだけなので全体を読む
                             let bytes = temp.read_all()?;
-                            thundoku_core::import::import_epub_bytes(
+                            ligrol_core::import::import_epub_bytes(
                                 &db,
                                 &file_name,
                                 &bytes,
@@ -5077,7 +5077,7 @@ impl BookshelfView {
                         "zip" => {
                             // §6.3: 曖昧な構造（コンテンツが複数 / 形式が複数）は
                             // サマリー付きモーダルで既定表示を選んでもらってから取り込む
-                            let mut plan = thundoku_core::import::analyze_zip_path(temp.path())
+                            let mut plan = ligrol_core::import::analyze_zip_path(temp.path())
                                 .map_err(import_failure)?;
                             if import_needs_confirmation(&plan) {
                                 match ask_import_confirmation(
@@ -5095,7 +5095,7 @@ impl BookshelfView {
                                     None => return Err(ImportFailure::Cancelled),
                                 }
                             }
-                            thundoku_core::import::commit_zip_path(
+                            ligrol_core::import::commit_zip_path(
                                 &db,
                                 &file_name,
                                 temp.path(),
@@ -5111,7 +5111,7 @@ impl BookshelfView {
                         "jpg" | "jpeg" | "png" | "webp" | "gif" => {
                             // 単体画像は小さいので全体を読む
                             let bytes = temp.read_all()?;
-                            thundoku_core::import::import_image_bytes(
+                            ligrol_core::import::import_image_bytes(
                                 &db,
                                 &file_name,
                                 &bytes,
@@ -5121,7 +5121,7 @@ impl BookshelfView {
                                 import_source.as_ref(),
                             )
                         }
-                        other => Err(thundoku_core::import::ImportError::UnsupportedType(
+                        other => Err(ligrol_core::import::ImportError::UnsupportedType(
                             other.to_string(),
                         )),
                     };
@@ -5183,7 +5183,7 @@ impl BookshelfView {
                             let _ = books::set_owner_sub(
                                 &db,
                                 &imported.book.id,
-                                Some(thundoku_core::owner::encrypt(key, sub)),
+                                Some(ligrol_core::owner::encrypt(key, sub)),
                             );
                         }
                     }
@@ -5274,7 +5274,7 @@ impl BookshelfView {
                             format!(
                                 "「{}」は {} のため自動での取り込みを見送りました（カードから実行できます）",
                                 item_for_large.title,
-                                thundoku_core::store_size::format_size_gb(*size),
+                                ligrol_core::store_size::format_size_gb(*size),
                             ),
                         );
                     } else {
@@ -5518,11 +5518,11 @@ impl BookshelfView {
                     .ok_or_else(|| "Google にログインしてください".to_string())?;
                 client.access_token().map_err(|e| e.to_string())?
             };
-            let mut drive = thundoku_core::drive::DriveClient::new(
-                Box::new(thundoku_core::tbf::UreqTransport::new()),
+            let mut drive = ligrol_core::drive::DriveClient::new(
+                Box::new(ligrol_core::tbf::UreqTransport::new()),
                 token,
             );
-            thundoku_core::drive::sync::delete_pack_from_drive(
+            ligrol_core::drive::sync::delete_pack_from_drive(
                 &db, &mut drive, &folder_id, &pack_id,
             )
             .map_err(|error| error.to_string())
@@ -5570,7 +5570,7 @@ impl BookshelfView {
         {
             let state = Self::app_state(cx);
             // 保存領域の外を指す id では削除しない。
-            if let Ok(path) = thundoku_core::pack_path::pack_path(&state.packs_dir, book_id) {
+            if let Ok(path) = ligrol_core::pack_path::pack_path(&state.packs_dir, book_id) {
                 let _ = std::fs::remove_file(path);
             }
         }
@@ -5964,7 +5964,7 @@ impl BookshelfView {
     }
 
     /// ローカル book（id または tbf_product_id）を解決する。
-    fn resolve_local_book_id(db: &thundoku_core::db::SqlitePool, book_id: &str) -> Option<String> {
+    fn resolve_local_book_id(db: &ligrol_core::db::SqlitePool, book_id: &str) -> Option<String> {
         books::list(db)
             .unwrap_or_default()
             .into_iter()
@@ -9538,7 +9538,7 @@ impl Render for BookshelfView {
                     let yes_handle = handle.clone();
                     let no_handle = handle.clone();
                     let title = item.title.clone();
-                    let label = thundoku_core::store_size::format_size_gb(size);
+                    let label = ligrol_core::store_size::format_size_gb(size);
                     Dialog::new(cx)
                         .bg(cx.theme().colors.popover)
                         .title(div().child("この本は 2 GB を超えています"))
@@ -9820,7 +9820,7 @@ impl Render for BookshelfView {
 /// - 技術書典: 公開 URL を直接。失敗時のみセッション付きクライアントで再試行
 pub(crate) fn cover_url_candidates(site_id: &str, stored_url: &str) -> Vec<String> {
     if site_id == "fanza" {
-        let full = thundoku_core::fanza::sync::full_size_thumb(stored_url);
+        let full = ligrol_core::fanza::sync::full_size_thumb(stored_url);
         if full != stored_url {
             return vec![full, stored_url.to_string()];
         }
@@ -10156,8 +10156,8 @@ pub(crate) fn fetch_cover_bytes(
     site_id: &str,
     database_id: &str,
     stored_url: &str,
-    booth_session: Option<&thundoku_core::booth::BoothSession>,
-    tbf_client: &parking_lot::Mutex<thundoku_core::tbf::TbfClient>,
+    booth_session: Option<&ligrol_core::booth::BoothSession>,
+    tbf_client: &parking_lot::Mutex<ligrol_core::tbf::TbfClient>,
 ) -> Option<Vec<u8>> {
     // プロトコル相対（`//img.dlsite.jp/...`）とサイト相対を絶対化する
     let resolved = if stored_url.starts_with("//") {
@@ -10215,7 +10215,7 @@ pub(crate) fn fetch_cover_bytes(
 /// 保存できたら、Drive の表紙バンドル用の共有キャッシュ（`core::thumbs`）も
 /// ここで作る（次の同期でエンコードし直さないため）。
 pub(crate) fn write_cover_cache(
-    pool: &thundoku_core::db::SqlitePool,
+    pool: &ligrol_core::db::SqlitePool,
     thumbnails_dir: &std::path::Path,
     site_id: &str,
     database_id: &str,
@@ -10226,7 +10226,7 @@ pub(crate) fn write_cover_cache(
         let _ = std::fs::write(&path, &cached);
         remove_legacy_cover_cache(thumbnails_dir, site_id, database_id);
         if let Err(error) =
-            thundoku_core::thumbs::cache_shelf_cover(pool, thumbnails_dir, site_id, database_id)
+            ligrol_core::thumbs::cache_shelf_cover(pool, thumbnails_dir, site_id, database_id)
         {
             log::warn!("表紙の共有キャッシュを作れない: {site_id} / {database_id}: {error}");
         }
@@ -10234,11 +10234,11 @@ pub(crate) fn write_cover_cache(
 }
 
 /// 表紙取得の UA。**クライアントを名乗る**（実測で CDN は UA を見ていなかった）。
-/// 実機で問題が出たら `THUNDOKU_COVER_UA` でブラウザ UA に戻せる（`thundoku_core::ua`）。
+/// 実機で問題が出たら `LIGROL_COVER_UA` でブラウザ UA に戻せる（`ligrol_core::ua`）。
 const COVER_USER_AGENT: &str = concat!(
-    "ThundokuShelf/",
+    "Ligrol/",
     env!("CARGO_PKG_VERSION"),
-    " (+https://github.com/MegaBlackLabel/thundoku-shelf-app)"
+    " (+https://github.com/MegaBlackLabel/ligrol-app)"
 );
 
 /// タイムアウト付きで画像をダウンロードする（ハング防止）。
@@ -10248,7 +10248,7 @@ fn fetch_bytes(agent: &ureq::Agent, url: &str) -> Option<Vec<u8>> {
         .get(url)
         .header(
             "User-Agent",
-            &thundoku_core::ua::for_store(COVER_USER_AGENT, thundoku_core::ua::ENV_COVER),
+            &ligrol_core::ua::for_store(COVER_USER_AGENT, ligrol_core::ua::ENV_COVER),
         )
         .call()
     {
@@ -10526,7 +10526,7 @@ pub(crate) fn format_event_label(event_name: &str) -> String {
 /// 保存領域の外を指す id（改変バックアップ由来）では `None`。
 fn cover_pack_path(packs_dir: &std::path::Path, book: &books::Book) -> Option<std::path::PathBuf> {
     let pack_id = book.pack_id.as_deref().unwrap_or(&book.id);
-    thundoku_core::pack_path::pack_path(packs_dir, pack_id).ok()
+    ligrol_core::pack_path::pack_path(packs_dir, pack_id).ok()
 }
 
 /// 表紙をディスクから読んで 448px へ縮小する（キャッシュファイル → pack の順）。
@@ -10550,11 +10550,11 @@ pub(crate) fn load_cover_image(
 ) -> Option<Arc<RenderImage>> {
     let pack_id = book.pack_id.as_deref().unwrap_or(&book.id);
     // 保存領域の外を指す id（改変バックアップ由来）では読まない。
-    let path = thundoku_core::pack_path::pack_path(packs_dir, pack_id).ok()?;
+    let path = ligrol_core::pack_path::pack_path(packs_dir, pack_id).ok()?;
     // pack 全体（この環境には 354 MB のものがある）を読まずに、ヘッダ + インデックス +
     // 表紙エントリだけを読む。表紙は表示サイズ（448px）へ縮小してから保持する
     // （リモート表紙と同じ経路・同じ解像度に揃える）。
-    let reader = opfspack::PackFileReader::open(&path).ok()?;
+    let reader = nartik::PackFileReader::open(&path).ok()?;
     for entry in ["thumbnail.webp", "cover.webp"] {
         if let Ok(data) = reader.read_entry_with_key(entry, None)
             && let Some(image) = decode_and_resize(&data, 448)
@@ -10695,9 +10695,9 @@ mod tests {
     };
     use gpui_kit::AppContext as _;
     use gpui_kit::TestAppContext;
-    use thundoku_core::import::{ImportPlan, MediaKind, PlannedContent, PlannedRendition};
+    use ligrol_core::import::{ImportPlan, MediaKind, PlannedContent, PlannedRendition};
 
-    use thundoku_core::db::{books, progress, view_history};
+    use ligrol_core::db::{books, progress, view_history};
 
     use super::*;
 
@@ -10709,7 +10709,7 @@ mod tests {
     fn login_google_for_import(cx: &mut TestAppContext) {
         cx.update(|cx| {
             *AppState::global(cx).google_profile.lock() =
-                Some(thundoku_core::google::GoogleProfile {
+                Some(ligrol_core::google::GoogleProfile {
                     sub: "sub-1".to_string(),
                     email: "user@example.com".to_string(),
                     name: "ユーザー".to_string(),
@@ -10979,7 +10979,7 @@ mod tests {
         );
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE bookshelf_items SET release_date = '2025-06-17 16:00:00' WHERE database_id = 'db-2'")
                     .execute(db)
                     .await
@@ -11009,7 +11009,7 @@ mod tests {
         // 発売日を消すと出なくなる
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE bookshelf_items SET release_date = NULL")
                     .execute(db)
                     .await
@@ -11347,7 +11347,7 @@ mod tests {
         seed_shelf_item_for_site(cx, "fantia", "111111", "Fantia の本", "");
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE bookshelf_items SET causedAt = '2026/07/30' WHERE database_id = '111111'")
                     .execute(db)
                     .await
@@ -11583,7 +11583,7 @@ mod tests {
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
             // ローカル本と本棚アイテムを紐づける（カードがローカルとして認識される）
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'book-1'")
                     .execute(db)
                     .await
@@ -11596,7 +11596,7 @@ mod tests {
             books::set_owner_sub(
                 db,
                 "book-1",
-                Some(thundoku_core::owner::encrypt(&key, "sub-1")),
+                Some(ligrol_core::owner::encrypt(&key, "sub-1")),
             )
             .unwrap();
         });
@@ -11749,7 +11749,7 @@ mod tests {
                     purchase_date: None,
                     file_name: format!("{id}.pdf"),
                     file_size: 10,
-                    opfs_path: format!("{id}.opfspack"),
+                    opfs_path: format!("{id}.nartik"),
                     cover_thumbnail: None,
                     tbf_product_id: None,
                     site_id: None,
@@ -11789,7 +11789,7 @@ mod tests {
                     purchase_date: None,
                     file_name: format!("{id}.pdf"),
                     file_size: 10,
-                    opfs_path: format!("{id}.opfspack"),
+                    opfs_path: format!("{id}.nartik"),
                     cover_thumbnail: None,
                     tbf_product_id: None,
                     site_id: Some(site_id.into()),
@@ -11875,7 +11875,7 @@ mod tests {
     fn link_book_to_shelf(cx: &mut TestAppContext, book_id: &str, database_id: &str) {
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = ?1 WHERE id = ?2")
                     .bind(database_id)
                     .bind(book_id)
@@ -11929,7 +11929,7 @@ mod tests {
         seed_sort_item(cx, "fanza", "db-1", "未ダウンロード本", None, None);
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query(
                     "UPDATE bookshelf_items SET tags_json = '[\"タグA\"]' WHERE database_id = 'db-1'",
                 )
@@ -13094,7 +13094,7 @@ mod tests {
     fn link_shelf_item_to_book(cx: &mut TestAppContext, database_id: &str, book_id: &str) {
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = ?1 WHERE id = ?2")
                     .bind(database_id)
                     .bind(book_id)
@@ -13116,13 +13116,13 @@ mod tests {
         image::DynamicImage::ImageRgb8(rgb)
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
-        let mut builder = opfspack::PackBuilder::new(1_728_000_000_000);
+        let mut builder = nartik::PackBuilder::new(1_728_000_000_000);
         builder.add_entry("thumbnail.webp", png, "image/webp", false);
         let bytes = builder.build(None, false).unwrap();
         cx.update(|cx| {
             let path = AppState::global(cx)
                 .packs_dir
-                .join(format!("{book_id}.opfspack"));
+                .join(format!("{book_id}.nartik"));
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, bytes).unwrap();
         });
@@ -13815,7 +13815,7 @@ mod tests {
     fn booth_item_with_options(
         database_id: &str,
         title: &str,
-        options: &[thundoku_core::booth::DownloadOption],
+        options: &[ligrol_core::booth::DownloadOption],
     ) -> bookshelf::BookshelfItem {
         bookshelf::BookshelfItem {
             site_id: "booth".into(),
@@ -13832,7 +13832,7 @@ mod tests {
             // 既存列は先頭の候補（同期と同じ）
             file_name: options.first().and_then(|option| option.name.clone()),
             download_url: options.first().map(|option| option.url.clone()),
-            download_options: thundoku_core::booth::encode_download_options(options),
+            download_options: ligrol_core::booth::encode_download_options(options),
             is_downloadable: 1,
             is_checked: 0,
             is_purchased: 1,
@@ -13863,7 +13863,7 @@ mod tests {
         cx: &mut TestAppContext,
         database_id: &str,
         title: &str,
-        options: &[thundoku_core::booth::DownloadOption],
+        options: &[ligrol_core::booth::DownloadOption],
     ) {
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
@@ -13882,7 +13882,7 @@ mod tests {
             cx,
             "100",
             "1 ファイルの本",
-            &[thundoku_core::booth::DownloadOption {
+            &[ligrol_core::booth::DownloadOption {
                 name: Some("book.pdf".into()),
                 url: "https://booth.pm/downloadables/111".into(),
             }],
@@ -13928,11 +13928,11 @@ mod tests {
             "100",
             "2 ファイルの本",
             &[
-                thundoku_core::booth::DownloadOption {
+                ligrol_core::booth::DownloadOption {
                     name: Some("book.pdf".into()),
                     url: "https://booth.pm/downloadables/111".into(),
                 },
-                thundoku_core::booth::DownloadOption {
+                ligrol_core::booth::DownloadOption {
                     name: Some("images.zip".into()),
                     url: "https://booth.pm/downloadables/222".into(),
                 },
@@ -14001,11 +14001,11 @@ mod tests {
             "100",
             "2 ファイルの本",
             &[
-                thundoku_core::booth::DownloadOption {
+                ligrol_core::booth::DownloadOption {
                     name: Some("book.pdf".into()),
                     url: "https://booth.pm/downloadables/111".into(),
                 },
-                thundoku_core::booth::DownloadOption {
+                ligrol_core::booth::DownloadOption {
                     name: Some("images.zip".into()),
                     url: "https://booth.pm/downloadables/222".into(),
                 },
@@ -14102,11 +14102,11 @@ mod tests {
             "100",
             "2 ファイルの本",
             &[
-                thundoku_core::booth::DownloadOption {
+                ligrol_core::booth::DownloadOption {
                     name: Some("book.pdf".into()),
                     url: "https://booth.pm/downloadables/111".into(),
                 },
-                thundoku_core::booth::DownloadOption {
+                ligrol_core::booth::DownloadOption {
                     name: Some("images.zip".into()),
                     url: "https://booth.pm/downloadables/222".into(),
                 },
@@ -14187,11 +14187,11 @@ mod tests {
     #[test]
     fn choose_download_replaces_the_url_and_name() {
         let options = [
-            thundoku_core::booth::DownloadOption {
+            ligrol_core::booth::DownloadOption {
                 name: Some("book.pdf".into()),
                 url: "https://booth.pm/downloadables/111".into(),
             },
-            thundoku_core::booth::DownloadOption {
+            ligrol_core::booth::DownloadOption {
                 name: Some("images.zip".into()),
                 url: "https://booth.pm/downloadables/222".into(),
             },
@@ -14215,7 +14215,7 @@ mod tests {
             "名前なしの本",
             &[
                 options[0].clone(),
-                thundoku_core::booth::DownloadOption {
+                ligrol_core::booth::DownloadOption {
                     name: None,
                     url: "https://booth.pm/downloadables/333".into(),
                 },
@@ -14245,11 +14245,11 @@ mod tests {
             "100",
             "2 ファイルの本",
             &[
-                thundoku_core::booth::DownloadOption {
+                ligrol_core::booth::DownloadOption {
                     name: Some("book.pdf".into()),
                     url: "https://booth.pm/downloadables/111".into(),
                 },
-                thundoku_core::booth::DownloadOption {
+                ligrol_core::booth::DownloadOption {
                     name: Some("images.zip".into()),
                     url: "https://booth.pm/downloadables/222".into(),
                 },
@@ -14583,7 +14583,7 @@ mod tests {
         seed_shelf_item(cx, "db-2", "本2", "サークルA", None);
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
                     .execute(db)
                     .await
@@ -15231,7 +15231,7 @@ mod tests {
     /// 一時ファイルは **drop で必ず消える**（成功・失敗・中止のどの経路でも残さない）。
     #[test]
     fn temp_download_is_removed_on_drop_and_reads_head() {
-        let dir = std::env::temp_dir().join("thundoku-temp-download-test");
+        let dir = std::env::temp_dir().join("ligrol-temp-download-test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = {
@@ -15259,7 +15259,7 @@ mod tests {
     /// （2026-09-26 の実機報告）。申告サイズが分かるストアではここで止める。
     #[test]
     fn declared_size_over_the_import_limit_is_rejected_before_downloading() {
-        let limit = thundoku_core::import::MAX_IMPORT_SOURCE_BYTES;
+        let limit = ligrol_core::import::MAX_IMPORT_SOURCE_BYTES;
         // 申告サイズが不明なら進む（転送後に同じ判定をする）
         assert!(super::reject_declared_too_large(None).is_ok());
         // 上限ちょうどは進む（境界）
@@ -15446,7 +15446,7 @@ mod tests {
     #[test]
     fn tag_fetch_notice_reports_only_when_books_were_fetched() {
         let notice = |fetched: usize, skipped: usize, stopped: bool, remaining: usize| {
-            tag_fetch_notice(&thundoku_core::fanza::sync::TagFetchOutcome {
+            tag_fetch_notice(&ligrol_core::fanza::sync::TagFetchOutcome {
                 fetched,
                 skipped,
                 stopped,
@@ -15624,19 +15624,19 @@ mod tests {
         cx.update(|cx| {
             let state = AppState::global(cx);
             let db = &state.db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
                     .execute(db)
                     .await
             })
             .unwrap();
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-2' WHERE id = 'b2'")
                     .execute(db)
                     .await
             })
             .unwrap();
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-3' WHERE id = 'b3'")
                     .execute(db)
                     .await
@@ -16026,7 +16026,7 @@ mod tests {
             cx.update(|cx| {
                 let state = AppState::global(cx);
                 let db = &state.db_pool;
-                thundoku_core::db::block_on(async {
+                ligrol_core::db::block_on(async {
                     sqlx::query("UPDATE books SET tbf_product_id = ?1 WHERE id = ?2")
                         .bind(format!("db-{i}"))
                         .bind(format!("b{i}"))
@@ -16093,19 +16093,19 @@ mod tests {
             db::tags::set_for_book(db, "b1", &[("react", "manual")]).unwrap();
             db::tags::set_for_book(db, "b2", &[("rust", "manual")]).unwrap();
             db::tags::set_for_book(db, "b3", &[("rust", "manual"), ("react", "manual")]).unwrap();
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
                     .execute(db)
                     .await
             })
             .unwrap();
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-2' WHERE id = 'b2'")
                     .execute(db)
                     .await
             })
             .unwrap();
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-3' WHERE id = 'b3'")
                     .execute(db)
                     .await
@@ -16143,7 +16143,7 @@ mod tests {
         seed_shelf_item(cx, "db-1", "本1", "サークルA", None);
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
                     .execute(db)
                     .await
@@ -16236,7 +16236,7 @@ mod tests {
         seed_shelf_item(cx, "db-1", "本1", "サークルA", None);
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
                     .execute(db)
                     .await
@@ -16310,7 +16310,7 @@ mod tests {
         seed_shelf_item(cx, "db-1", "本1", "サークルA", None);
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
                     .execute(db)
                     .await
@@ -16358,7 +16358,7 @@ mod tests {
         seed_shelf_item(cx, "db-1", "本1", "サークルA", None);
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
                     .execute(db)
                     .await
@@ -16442,13 +16442,13 @@ mod tests {
         seed_progress(cx, "b2", 8, Some(10)); // 途中
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
                     .execute(db)
                     .await
             })
             .unwrap();
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-2' WHERE id = 'b2'")
                     .execute(db)
                     .await
@@ -16627,7 +16627,7 @@ mod tests {
         seed_shelf_item(cx, "db-1", "本1", "サークルA", None);
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
                     .execute(db)
                     .await
@@ -16756,7 +16756,7 @@ mod tests {
         seed_shelf_item(cx, "db-1", "本1", "サークルA", None);
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
                     .execute(db)
                     .await
@@ -16815,7 +16815,7 @@ mod tests {
             db::tags::set_for_book(db, "b1", &[("react", "manual")]).unwrap();
             db::tags::set_for_book(db, "b2", &[("rust", "manual")]).unwrap();
             for (id, product) in [("b1", "db-1"), ("b2", "db-2")] {
-                thundoku_core::db::block_on(async {
+                ligrol_core::db::block_on(async {
                     sqlx::query("UPDATE books SET tbf_product_id = ?1 WHERE id = ?2")
                         .bind(product)
                         .bind(id)
@@ -16897,7 +16897,7 @@ mod tests {
         seed_shelf_item(cx, "db-1", "本1", "サークルA", None);
         cx.update(|cx| {
             let db = &AppState::global(cx).db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
                     .execute(db)
                     .await
@@ -17603,7 +17603,7 @@ mod tests {
                     purchase_date: None,
                     file_name: "local-1.pdf".into(),
                     file_size: 10,
-                    opfs_path: "local-1.opfspack".into(),
+                    opfs_path: "local-1.nartik".into(),
                     cover_thumbnail: None,
                     tbf_product_id: None,
                     site_id: None,
@@ -17761,7 +17761,7 @@ mod tests {
         // create a pack file
         let packs_dir = cx.read(|cx| AppState::global(cx).packs_dir.clone());
         std::fs::create_dir_all(&packs_dir).unwrap();
-        std::fs::write(packs_dir.join("b1.opfspack"), b"fake-pack").unwrap();
+        std::fs::write(packs_dir.join("b1.nartik"), b"fake-pack").unwrap();
 
         let view = cx.new(BookshelfView::new);
         cx.update(|cx| view.update(cx, |this, cx| this.delete_book(cx, "b1")));
@@ -17771,7 +17771,7 @@ mod tests {
             books::list(db).unwrap().len()
         });
         assert_eq!(count, 0);
-        assert!(!packs_dir.join("b1.opfspack").exists());
+        assert!(!packs_dir.join("b1.nartik").exists());
     }
 
     #[test]
@@ -17818,7 +17818,7 @@ mod tests {
         cx.update(|cx| {
             let state = AppState::global(cx);
             let db = &state.db_pool;
-            thundoku_core::db::block_on(async {
+            ligrol_core::db::block_on(async {
                 sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
                     .execute(db)
                     .await
@@ -17842,7 +17842,7 @@ mod tests {
         cx.update(|cx| {
             let state = AppState::global(cx);
             let db = &state.db_pool;
-            thundoku_core::db::bookshelf::set_favorite(db, "techbookfest", "db-1", true).unwrap();
+            ligrol_core::db::bookshelf::set_favorite(db, "techbookfest", "db-1", true).unwrap();
         });
         let view = cx.new(BookshelfView::new);
         cx.update(|cx| {
@@ -17869,7 +17869,7 @@ mod tests {
         cx.update(|cx| {
             let state = AppState::global(cx);
             let db = &state.db_pool;
-            thundoku_core::db::bookshelf::set_hidden(db, "techbookfest", "db-1", true).unwrap();
+            ligrol_core::db::bookshelf::set_hidden(db, "techbookfest", "db-1", true).unwrap();
         });
         let view = cx.new(BookshelfView::new);
         let visible = view.read_with(cx, |this, cx| {
@@ -18972,9 +18972,9 @@ mod tests {
     /// pack の鍵も使わない）。
     #[test]
     fn demo_download_reports_progress_and_promotes_the_book() {
-        let pool = thundoku_core::db::test_pool();
+        let pool = ligrol_core::db::test_pool();
         let dir = std::env::temp_dir().join(format!(
-            "thundoku-shelf-demo-download-{}",
+            "ligrol-demo-download-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);

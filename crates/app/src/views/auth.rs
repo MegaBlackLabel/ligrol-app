@@ -9,7 +9,7 @@ use gpui_kit::{
     Context, Entity, FontWeight, InteractiveElement as _, IntoElement, ParentElement, Render,
     StatefulInteractiveElement as _, Window, deferred, div, px,
 };
-use thundoku_core::google::GoogleProfile;
+use ligrol_core::google::GoogleProfile;
 
 use crate::app_state::AppState;
 use crate::views::booth_login::{BoothLoginCancelled, BoothLoginDone, BoothLoginView};

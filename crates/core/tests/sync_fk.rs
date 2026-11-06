@@ -2,12 +2,12 @@
 //! that do not yet exist in `tbf_events` must not raise FK constraint errors.
 //! (The Web resolves the event first; the desktop now ensures the row.)
 
-use thundoku_core::db;
-use thundoku_core::tbf::sync::{save_bookshelf, save_checklist};
-use thundoku_core::tbf::{TbfChecklistEntry, TbfShelfItem};
+use ligrol_core::db;
+use ligrol_core::tbf::sync::{save_bookshelf, save_checklist};
+use ligrol_core::tbf::{TbfChecklistEntry, TbfShelfItem};
 
-fn db() -> thundoku_core::db::SqlitePool {
-    thundoku_core::db::test_pool()
+fn db() -> ligrol_core::db::SqlitePool {
+    ligrol_core::db::test_pool()
 }
 
 #[test]

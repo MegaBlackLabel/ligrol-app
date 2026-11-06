@@ -1,6 +1,6 @@
 //! pack の鍵（v3 = ランダムなルート鍵 PRK + ラップ）を UI とつなぐ配線。
 //!
-//! 解決順序・ラップの形式は core（`thundoku_core::pack_keys` / 仕様
+//! 解決順序・ラップの形式は core（`ligrol_core::pack_keys` / 仕様
 //! `docs/spec/10-pack-keys.md` §4.1）が正で、ここは
 //!
 //! 1. **判定**（keyring に鍵があるか / bundle に `kind=passphrase` のラップがあるか）を
@@ -18,19 +18,19 @@ use std::sync::mpsc::{Sender, channel};
 use std::time::Duration;
 
 use gpui_kit::ReadGlobal as _;
-use opfspack::{PackKeyBundle, PackRootKey, WrapKind, derive_owner_id};
+use nartik::{PackKeyBundle, PackRootKey, WrapKind, derive_owner_id};
 use parking_lot::Mutex;
-use thundoku_core::db::{self, SqlitePool};
-use thundoku_core::drive::{DriveApi, DriveClient, SYNC_FOLDER_NAME, ensure_folder};
-use thundoku_core::google::{GoogleClient, GoogleProfile};
-use thundoku_core::import::{ImportError, pack_root_key_for_import};
-use thundoku_core::pack_keys::{PackKeyStore, PackKeysError};
-use thundoku_core::secrets::SecretStore;
-use thundoku_core::tbf::UreqTransport;
+use ligrol_core::db::{self, SqlitePool};
+use ligrol_core::drive::{DriveApi, DriveClient, SYNC_FOLDER_NAME, ensure_folder};
+use ligrol_core::google::{GoogleClient, GoogleProfile};
+use ligrol_core::import::{ImportError, pack_root_key_for_import};
+use ligrol_core::pack_keys::{PackKeyStore, PackKeysError};
+use ligrol_core::secrets::SecretStore;
+use ligrol_core::tbf::UreqTransport;
 
 use crate::app_state::AppState;
 
-/// Drive の同期フォルダ（`thundoku-keys.json` を置く場所）の設定キー。
+/// Drive の同期フォルダ（`ligrol-keys.json` を置く場所）の設定キー。
 const DRIVE_FOLDER_KEY: &str = "drive.sync.folder_id";
 
 /// パスフレーズが違ったときの案内（解錠ダイアログに出す）。
@@ -231,7 +231,7 @@ pub fn keyring_root_key(secrets: &SecretStore, sub: &str) -> Option<PackRootKey>
 
 /// PRK を解決する（仕様 §4.1 の順序）。**背景スレッド専用**。
 ///
-/// keyring → Drive の bundle（`thundoku-keys.json`）→ 必要ならパスフレーズ入力、の順。
+/// keyring → Drive の bundle（`ligrol-keys.json`）→ 必要ならパスフレーズ入力、の順。
 /// 解けたら keyring に保存する（手順 4。次回起動では尋ねない）。
 /// この端末にも Drive にも鍵が無ければ `Ok(None)`（＝新規作成は取り込み時）。
 pub fn resolve_root_key(
@@ -249,7 +249,7 @@ pub fn resolve_root_key(
     let bundle = if keyring.is_some() {
         None
     } else {
-        thundoku_core::pack_keys::load_bundle(drive, folder_id, &owner_id)?
+        ligrol_core::pack_keys::load_bundle(drive, folder_id, &owner_id)?
     };
     // 3〜4. パスフレーズを尋ねるかどうかは `decide_root_key` が決める（純関数）
     let Some(root) = decide_root_key(keyring, bundle.as_ref(), sub, |error| {
@@ -663,12 +663,12 @@ pub fn pack_keys_error_message(error: &PackKeysError) -> String {
 ///
 /// v2 以前の pack は v3 の鍵階層では開けない（読めないのではなく**形式が違う**）ので、
 /// 再取り込みを案内する（仕様 §6）。
-pub fn pack_read_error_message(error: &opfspack::PackError) -> String {
+pub fn pack_read_error_message(error: &nartik::PackError) -> String {
     match error {
-        opfspack::PackError::Version(version) if *version != opfspack::FORMAT_VERSION => format!(
+        nartik::PackError::Version(version) if *version != nartik::FORMAT_VERSION => format!(
             "この本は旧形式（pack v{version}）のため開けません。お手数ですがストアから取り込み直してください"
         ),
-        opfspack::PackError::KeyRequired(_) => {
+        nartik::PackError::KeyRequired(_) => {
             "この本を復号する鍵がありません。Google にログインしてから、\
              設定画面の「本の鍵」でパスフレーズを入力して復元してください"
                 .to_string()
@@ -744,8 +744,8 @@ impl From<String> for SyncFailure {
 ///
 /// - v2 以前の pack（`UnsupportedPackVersion`）は再取り込みを案内する（仕様 §6）
 /// - 鍵が無い（`PackKeyRequired`）は復元導線を立てる
-pub fn sync_failure(error: &thundoku_core::drive::sync::SyncError) -> SyncFailure {
-    use thundoku_core::drive::sync::SyncError;
+pub fn sync_failure(error: &ligrol_core::drive::sync::SyncError) -> SyncFailure {
+    use ligrol_core::drive::sync::SyncError;
     match error {
         SyncError::UnsupportedPackVersion { pack_id, version } => SyncFailure {
             message: format!(
@@ -789,10 +789,10 @@ pub fn key_status_label(has_local_key: bool, has_passphrase: bool) -> &'static s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use opfspack::{PackRootKeyWrap, derive_owner_id};
+    use nartik::{PackRootKeyWrap, derive_owner_id};
     use std::collections::HashMap;
     use std::sync::mpsc::channel as std_channel;
-    use thundoku_core::drive::{DriveError, DriveFile};
+    use ligrol_core::drive::{DriveError, DriveFile};
 
     /// テストで使う `sub` と時刻。
     const SUB: &str = "sub-test-1";
@@ -1160,18 +1160,18 @@ mod tests {
     /// v2 以前の pack は「旧形式なので取り込み直す」と伝える（仕様 §6）。
     #[test]
     fn legacy_pack_errors_tell_the_user_to_reimport() {
-        let message = pack_read_error_message(&opfspack::PackError::Version(2));
+        let message = pack_read_error_message(&nartik::PackError::Version(2));
         assert!(message.contains("旧形式"), "{message}");
         assert!(message.contains("取り込み直"), "{message}");
         // 鍵が無いときは復元の導線を出す
-        let message = pack_read_error_message(&opfspack::PackError::KeyRequired("p".to_string()));
+        let message = pack_read_error_message(&nartik::PackError::KeyRequired("p".to_string()));
         assert!(message.contains("パスフレーズ"), "{message}");
     }
 
     /// 同期の失敗は v2 pack と鍵なしを区別する（前者は再取り込み、後者は復元導線）。
     #[test]
     fn sync_failures_map_to_actionable_messages() {
-        use thundoku_core::drive::sync::SyncError;
+        use ligrol_core::drive::sync::SyncError;
         let legacy = sync_failure(&SyncError::UnsupportedPackVersion {
             pack_id: "book-1".to_string(),
             version: 2,
@@ -1278,7 +1278,7 @@ mod tests {
         let bundle = bundle_with_passphrase(&root, "correct horse");
         let mut drive = FakeDrive::new();
         drive.seed(
-            thundoku_core::pack_keys::KEY_BUNDLE_NAME,
+            ligrol_core::pack_keys::KEY_BUNDLE_NAME,
             &bundle.to_json().unwrap(),
         );
         let prompt = Arc::new(PackKeyPrompt::default());
@@ -1324,7 +1324,7 @@ mod tests {
         bundle.upsert_wrap(PackRootKeyWrap::wrap_with_sub(&root, SUB, &owner_id, NOW));
         let mut drive = FakeDrive::new();
         drive.seed(
-            thundoku_core::pack_keys::KEY_BUNDLE_NAME,
+            ligrol_core::pack_keys::KEY_BUNDLE_NAME,
             &bundle.to_json().unwrap(),
         );
         let prompt = Arc::new(PackKeyPrompt::default());
@@ -1362,7 +1362,7 @@ mod tests {
 
         let created = ensure_import_root_key(&store, &mut drive, SUB, &prompt, "取り込み")
             .expect("鍵を作れる");
-        let bundles = drive.named(thundoku_core::pack_keys::KEY_BUNDLE_NAME);
+        let bundles = drive.named(ligrol_core::pack_keys::KEY_BUNDLE_NAME);
         assert_eq!(bundles.len(), 1, "bundle を Drive へ上げる");
         assert!(
             prompt.pending().is_none(),
@@ -1400,7 +1400,7 @@ mod tests {
     fn root_folder(id: &str, modified_time: &str) -> DriveFile {
         DriveFile {
             id: id.to_string(),
-            name: "thundoku-shelf".to_string(),
+            name: "ligrol".to_string(),
             size: None,
             md5_checksum: None,
             modified_time: Some(modified_time.to_string()),
@@ -1413,8 +1413,8 @@ mod tests {
     /// 14 個まで増えた（2026-09-27 に 13 個を手でゴミ箱へ入れた）。
     #[test]
     fn drive_folder_reuses_the_newest_existing_folder_and_saves_it() {
-        let pool = thundoku_core::db::test_pool();
-        thundoku_core::db::migrate(&pool).unwrap();
+        let pool = ligrol_core::db::test_pool();
+        ligrol_core::db::migrate(&pool).unwrap();
         let context = folder_context(pool.clone());
         let mut drive = FakeDrive::new();
         drive.root_folders = vec![
@@ -1440,13 +1440,13 @@ mod tests {
     /// 既存が無ければ従来どおり作り、その id を保存する。
     #[test]
     fn drive_folder_creates_and_saves_when_none_exists() {
-        let pool = thundoku_core::db::test_pool();
-        thundoku_core::db::migrate(&pool).unwrap();
+        let pool = ligrol_core::db::test_pool();
+        ligrol_core::db::migrate(&pool).unwrap();
         let context = folder_context(pool.clone());
         let mut drive = FakeDrive::new();
         let id = context.drive_folder(&mut drive).expect("確保できる");
         assert_eq!(id, "folder-1");
-        assert_eq!(drive.created_folders, vec!["thundoku-shelf".to_string()]);
+        assert_eq!(drive.created_folders, vec!["ligrol".to_string()]);
         assert_eq!(
             db::settings::get(&pool, DRIVE_FOLDER_KEY)
                 .unwrap()
@@ -1459,8 +1459,8 @@ mod tests {
     /// 設定に id があるときは Drive を探さない（保存済みの id が優先）。
     #[test]
     fn drive_folder_prefers_the_saved_id() {
-        let pool = thundoku_core::db::test_pool();
-        thundoku_core::db::migrate(&pool).unwrap();
+        let pool = ligrol_core::db::test_pool();
+        ligrol_core::db::migrate(&pool).unwrap();
         db::settings::set(&pool, DRIVE_FOLDER_KEY, "saved").unwrap();
         let context = folder_context(pool.clone());
         let mut drive = FakeDrive::new();
@@ -1483,8 +1483,8 @@ mod lock_tests {
     /// 再入待ちで永久に戻らなくなっていた（アプリが終了しない）。
     #[test]
     fn drive_gives_up_instead_of_waiting_forever_when_the_lock_is_held() {
-        let state = thundoku_core::db::test_pool();
-        thundoku_core::db::migrate(&state).unwrap();
+        let state = ligrol_core::db::test_pool();
+        ligrol_core::db::migrate(&state).unwrap();
         let secrets = SecretStore::new();
         let context = KeyContext {
             secrets,

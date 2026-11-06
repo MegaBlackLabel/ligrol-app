@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="16" height="16" viewBox="0 0 1254 1254"
+     role="img" aria-label="ligrol small 16 with L proof">
+  <title>ligrol small 16 with L proof</title>
+  <rect width="1254" height="1254" fill="#01214b"/>
+  <rect x="46" y="46" width="1162" height="1162" rx="230" fill="none" stroke="#ffffff" stroke-width="110"/>
+  <path d="M 660 60 H 960 V 360 L 810 300 L 660 360 Z" fill="#ffffff"/>
+  <text x="627" y="920" text-anchor="middle"
+        font-family="'Helvetica Neue','Arial',sans-serif" font-size="700" font-weight="700"
+        fill="#ffffff">L</text>
+</svg>

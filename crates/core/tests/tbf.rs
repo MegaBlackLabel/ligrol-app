@@ -2,7 +2,7 @@
 
 use parking_lot::Mutex;
 use std::sync::Arc;
-use thundoku_core::tbf::{RequestSpec, ResponseSpec, TbfClient, TbfError, Transport};
+use ligrol_core::tbf::{RequestSpec, ResponseSpec, TbfClient, TbfError, Transport};
 
 type MockFn = Box<dyn FnMut(RequestSpec) -> Result<ResponseSpec, TbfError> + Send>;
 
@@ -152,7 +152,7 @@ fn download_with_progress_aborts_when_the_callback_returns_false() {
             body: vec![1, 2, 3, 4, 5],
         })
     }))));
-    client.restore_session(thundoku_core::tbf::TbfSession {
+    client.restore_session(ligrol_core::tbf::TbfSession {
         cookies: vec![("session".into(), "s".into())],
         xsrf_raw: "x".into(),
         xsrf_token: "x".into(),
@@ -181,7 +181,7 @@ fn download_with_progress_reports_full_body_and_cookies() {
             body: vec![1, 2, 3, 4, 5],
         })
     }))));
-    client.restore_session(thundoku_core::tbf::TbfSession {
+    client.restore_session(ligrol_core::tbf::TbfSession {
         cookies: vec![("session".into(), "s".into())],
         xsrf_raw: "x".into(),
         xsrf_token: "x".into(),
@@ -253,7 +253,7 @@ fn bookshelf_paginates_and_maps_items() {
         let after = body["variables"]["after"].as_str().map(String::from);
         Ok(response(200, if after.is_none() { page1 } else { page2 }))
     }))));
-    client.restore_session(thundoku_core::tbf::TbfSession {
+    client.restore_session(ligrol_core::tbf::TbfSession {
         cookies: vec![
             ("session".into(), "s".into()),
             ("XSRF-TOKEN".into(), "abc123".into()),
@@ -295,7 +295,7 @@ fn bookshelf_paginates_and_maps_items() {
 #[test]
 fn bookshelf_401_is_session_expired() {
     let mut client = TbfClient::with_transport(Box::new(Mock(Box::new(|_| Ok(response(401, ""))))));
-    client.restore_session(thundoku_core::tbf::TbfSession {
+    client.restore_session(ligrol_core::tbf::TbfSession {
         cookies: vec![],
         xsrf_raw: "x".into(),
         xsrf_token: "x".into(),
@@ -318,7 +318,7 @@ fn resolve_download_url_follows_nothing_and_absolutizes() {
             body: vec![],
         })
     }))));
-    client.restore_session(thundoku_core::tbf::TbfSession {
+    client.restore_session(ligrol_core::tbf::TbfSession {
         cookies: vec![("session".into(), "s".into())],
         xsrf_raw: "x".into(),
         xsrf_token: "x".into(),
@@ -354,7 +354,7 @@ fn resolve_download_url_accepts_gcs_location() {
             body: vec![],
         })
     }))));
-    client.restore_session(thundoku_core::tbf::TbfSession {
+    client.restore_session(ligrol_core::tbf::TbfSession {
         cookies: vec![],
         xsrf_raw: "x".into(),
         xsrf_token: "x".into(),
@@ -377,7 +377,7 @@ fn resolve_download_url_rejects_untrusted_location() {
             body: vec![],
         })
     }))));
-    client.restore_session(thundoku_core::tbf::TbfSession {
+    client.restore_session(ligrol_core::tbf::TbfSession {
         cookies: vec![],
         xsrf_raw: "x".into(),
         xsrf_token: "x".into(),
@@ -392,7 +392,7 @@ fn resolve_download_url_rejects_untrusted_location() {
 #[test]
 fn resolve_download_url_401_is_session_expired() {
     let mut client = TbfClient::with_transport(Box::new(Mock(Box::new(|_| Ok(response(401, ""))))));
-    client.restore_session(thundoku_core::tbf::TbfSession {
+    client.restore_session(ligrol_core::tbf::TbfSession {
         cookies: vec![],
         xsrf_raw: "x".into(),
         xsrf_token: "x".into(),
@@ -417,7 +417,7 @@ fn sample_pages_map_and_absolutize_urls() {
         log.lock().push(spec.clone());
         Ok(response(200, body))
     }))));
-    client.restore_session(thundoku_core::tbf::TbfSession {
+    client.restore_session(ligrol_core::tbf::TbfSession {
         cookies: vec![],
         xsrf_raw: "x".into(),
         xsrf_token: "x".into(),
@@ -489,7 +489,7 @@ fn checklist_maps_circles_with_price_and_purchase_state() {
         assert_eq!(body["variables"]["eventID"], "Event:tbf20");
         Ok(response(200, payload))
     }))));
-    client.restore_session(thundoku_core::tbf::TbfSession {
+    client.restore_session(ligrol_core::tbf::TbfSession {
         cookies: vec![],
         xsrf_raw: "x".into(),
         xsrf_token: "x".into(),
@@ -514,7 +514,7 @@ fn checklist_maps_circles_with_price_and_purchase_state() {
 #[test]
 fn events_returns_canonical_list_without_network() {
     let mut client = TbfClient::with_transport(Box::new(Mock(Box::new(|_| Ok(response(404, ""))))));
-    client.restore_session(thundoku_core::tbf::TbfSession {
+    client.restore_session(ligrol_core::tbf::TbfSession {
         cookies: vec![],
         xsrf_raw: "x".into(),
         xsrf_token: "x".into(),

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1254" height="1254" viewBox="0 0 1254 1254"
+     role="img" aria-label="ligrol icon S — stamp">
+  <title>ligrol icon S — stamp</title>
+  <rect width="1254" height="1254" fill="#ffffff"/>
+  <rect x="46" y="46" width="1162" height="1162" rx="230"
+        fill="none" stroke="#01214b" stroke-width="28"/>
+  <rect x="120" y="120" width="1014" height="1014" rx="170" fill="none" stroke="#01214b" stroke-width="10"/>
+  <text x="627" y="650" text-anchor="middle"
+        font-family="'Helvetica Neue','Arial',sans-serif"
+        font-size="280" font-weight="700" letter-spacing="-6"
+        fill="#01214b" opacity="1.0">ligrol</text>
+  <text x="627" y="800" text-anchor="middle"
+        font-family="'Arial Hebrew','Noto Sans Hebrew','David',Arial,sans-serif"
+        font-size="90" font-weight="400"
+        fill="#01214b" opacity="0.6" direction="rtl">לגלול</text>
+  <line x1="430" y1="860" x2="824" y2="860" stroke="#01214b" stroke-width="8" stroke-linecap="round"/>
+</svg>

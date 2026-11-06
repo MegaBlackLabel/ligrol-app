@@ -14,13 +14,13 @@
 use std::sync::LazyLock;
 
 /// アプリの表示名（案内画面の見出しと同じ）。
-const APP_NAME: &str = "Thundoku Shelf";
+const APP_NAME: &str = "Ligrol";
 
 /// アプリ本体のライセンス全文（リポジトリ直下の `LICENSE`。配布物と同一）。
 const APP_LICENSE: &str = include_str!("../../../../LICENSE");
 
 /// 依存クレートの一覧。生成物なので手で直さない
-/// （`mise run licenses` = `cargo run -p thundoku-shelf --example regen_licenses` で更新する）。
+/// （`mise run licenses` = `cargo run -p ligrol --example regen_licenses` で更新する）。
 const GENERATED: &str = include_str!("../../assets/third-party/licenses.json");
 
 /// Rust クレートではない同梱物（クレートの `license` 表記では表せないもの）。
@@ -157,7 +157,7 @@ fn load() -> Catalog {
         name: APP_NAME.to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         license: "MIT".to_string(),
-        repository: "https://github.com/MegaBlackLabel/thundoku-shelf-app".to_string(),
+        repository: "https://github.com/MegaBlackLabel/ligrol-app".to_string(),
         note: String::new(),
         kind: Kind::App,
         texts: vec![("MIT".to_string(), texts.len())],
@@ -415,7 +415,7 @@ mod tests {
     fn lists_the_app_first_with_its_own_license_text() {
         let catalog = &*CATALOG;
         let entry = catalog.entries.first().expect("ライセンスの 1 件目が無い");
-        assert_eq!(entry.name, "Thundoku Shelf");
+        assert_eq!(entry.name, "Ligrol");
         assert_eq!(entry.kind, Kind::App);
         assert_eq!(entry.license, "MIT");
 

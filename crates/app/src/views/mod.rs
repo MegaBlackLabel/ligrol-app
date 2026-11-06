@@ -21,8 +21,8 @@ use std::collections::BTreeMap;
 use gpui_kit::AppContext as _;
 use gpui_kit::gpui::{App, Context, Entity, Window};
 use gpui_webview::{WebView, WebViewHandle};
-use thundoku_core::download_url::host_within;
-use thundoku_core::session_cookies::CookieEntry;
+use ligrol_core::download_url::host_within;
+use ligrol_core::session_cookies::CookieEntry;
 
 /// ホバー中の背景色。
 ///
@@ -47,7 +47,7 @@ pub(crate) fn url_is_on_host(url: &str, domain: &str) -> bool {
         .and_then(|parsed| {
             parsed
                 .host_str()
-                .map(|host| thundoku_core::download_url::host_within(host, domain))
+                .map(|host| ligrol_core::download_url::host_within(host, domain))
         })
         .unwrap_or(false)
 }
@@ -494,12 +494,12 @@ pub(crate) fn collect_session_cookies(
     // 起点のホスト（収集した Cookie をどの起点へ寄せるか / 関係ないサイトの Cookie を落とすか）
     let origin_hosts: Vec<String> = origins
         .iter()
-        .filter_map(|url| thundoku_core::download_url::parse(url).ok())
+        .filter_map(|url| ligrol_core::download_url::parse(url).ok())
         .map(|parsed| parsed.host)
         .collect();
     let fallback_host = origins
         .first()
-        .and_then(|url| thundoku_core::download_url::parse(url).ok())
+        .and_then(|url| ligrol_core::download_url::parse(url).ok())
         .map(|parsed| parsed.host.to_string())
         .unwrap_or_default();
     for cookie in all {
@@ -584,13 +584,13 @@ fn host_is_related_to_any(host: &str, origin_hosts: &[String]) -> bool {
 /// 期限は Unix 秒へ落とす（セッション Cookie は `None`）。
 pub(crate) fn cookie_entry(
     cookie: &lb_wry::cookie::Cookie<'_>,
-) -> thundoku_core::session_cookies::CookieEntry {
+) -> ligrol_core::session_cookies::CookieEntry {
     let expires = match cookie.expires() {
         Some(lb_wry::cookie::Expiration::DateTime(datetime)) => Some(datetime.unix_timestamp()),
         // `Session` / 期限なし = セッション Cookie
         _ => None,
     };
-    thundoku_core::session_cookies::CookieEntry::with_attributes(
+    ligrol_core::session_cookies::CookieEntry::with_attributes(
         cookie.value().to_string(),
         cookie.domain().map(str::to_string),
         cookie.path().map(str::to_string),

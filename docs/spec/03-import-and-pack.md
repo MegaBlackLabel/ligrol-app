@@ -1,9 +1,13 @@
-# 03. 取り込みパイプラインとファイル形式（.opfspack）
+# 03. 取り込みパイプラインとファイル形式（.nartik）
+
+> **名前について**: `nartik` はヘブライ語 נרתיק（＝ケース／鞘）をそのまま形式名にしたもの。
+> 読みは公開しない（カタカナ表記をドキュメント・ストア・README に書かない）。
+> アプリ名 `Ligrol`（לגלול の l→r 変異）とは、変異の有無が違う。
 
 > `docs/spec/README.md`（索引）から参照される設計仕様書の一部。
 > 本章は **入力判定 → コンテンツ/レンディション解決 → ページ画像生成 → pack 書き出し → DB 登録**。読み手は AI（別言語での再実装・Web 版への移植を想定）。
 > 事実にはアンカー付き。断定できない事項は章末の「不明点 / 推測」に分離してある。
-> 情報源: crates/core/src/import/**, crates/opfspack/**, crates/core/src/db/**
+> 情報源: crates/core/src/import/**, crates/nartik/**, crates/core/src/db/**
 >
 > **注（アンカーの状態）**: `crates/core/src/import/mod.rs` は v3 対応・本文エントリ対応で行番号が動いた。**§3.1・§3.5・§3.7（ページ 0 件の行）・§3.8・§3.9 と §4.8・§4.9・§6.1 のアンカーは 2026-09-27 時点の実測値に更新済み**。**それ以外（§3.2〜§3.4・§3.6・§3.7 の他行・§3.10・§5・§6.2〜§6.3 など）は古い値のまま**で、実際とは数十〜数百行ずれる（例: §3.6 の `upscale_if_small` は表の `:67-78` → 実際は `:138-159`、§3.10 の進捗コールバック型は `:1163` → 実際は `:1633`）。参照時は関数名・定数名で検索すること。
 
@@ -60,10 +64,10 @@
 | 合流規則 | 入れ子 ZIP のパス（拡張子除去）+ `/` + 内側エントリ名。外側の分類・グルーピングがそのまま効く | `import/mod.rs:336`, `:351-355` |
 | 上限超過時 | 半分だけ取り込まず**その入れ子全体をスキップ**し、`warnings` に 1 行積む（取り込み全体は失敗させない） | `import/mod.rs:357-364` |
 | 通常エントリの上限 | `MAX_ZIP_ENTRY_BYTES = 2 GiB`（**展開後**。宣言サイズではなく実際に読めたバイト数で判定）。超過は `ImportError::Zip`（部分的なデータで先へ進めない）。取り込み元ファイルの上限と同値にしてある: 512 MiB にしていたときは「142 MB の ZIP に含まれる PDF が展開後 512 MiB を超える」正当な本を弾いていた（2026-09-26） | `import/mod.rs`（`read_zip_entry_capped`） |
-| 外側 ZIP 全体の上限 | **展開の前**にエントリ数（`opfspack::MAX_ENTRY_COUNT` = 10000）と、中央ディレクトリが宣言する展開後サイズの合計（`opfspack::MAX_TOTAL_SIZE` = 10 GiB）を検査する。超過は `ImportError::ZipTooLarge { detail }`。宣言サイズは信用せず（実際の長さは個別上限で別途見る）、事前に弾ける分だけをここで弾く | `import/mod.rs`（`analyze_zip` / `EntryMeta::declared_size`） |
+| 外側 ZIP 全体の上限 | **展開の前**にエントリ数（`nartik::MAX_ENTRY_COUNT` = 10000）と、中央ディレクトリが宣言する展開後サイズの合計（`nartik::MAX_TOTAL_SIZE` = 10 GiB）を検査する。超過は `ImportError::ZipTooLarge { detail }`。宣言サイズは信用せず（実際の長さは個別上限で別途見る）、事前に弾ける分だけをここで弾く | `import/mod.rs`（`analyze_zip` / `EntryMeta::declared_size`） |
 | 取り込み元ファイルの上限 | `MAX_IMPORT_SOURCE_BYTES = 10 GiB`（pack の上限と同値）。**読む前に**メタデータで検査する。超過は `ImportError::SourceTooLarge { size, limit }`。アプリ側は①ストアが申告するサイズが分かるときは**転送の前**に断り（無駄なダウンロードをしない）②ダウンロード直後にも同じ値で検査する | `import/mod.rs`（`import_file`）、`crates/app/src/views/bookshelf.rs` |
 | 取り込み元の読み方 | **PDF と ZIP はファイルから読む**（`import_pdf_path` / `import_zip_path`。PDF は PDFium の `load_pdf_from_file`、ZIP は `ZipArchive<File>`）ので、取り込み元の大きさがそのまま RAM 使用量にはならない。EPUB（ビューアー非対応で 1 エントリとして入れるだけ）と単体画像は全体を読む（実データでは小さい）。**アプリのダウンロードも一時ファイル経由**（4 ストアの `download_to_file_with_progress` → `import_*_path`。`TempDownload` がどの経路でも消す） | | `crates/core/src/import/{mod,pdf}.rs` |
-| PDF の上限 | **描画の前**に総ページ数（`MAX_PDF_PAGES` = 9000。`MAX_ENTRY_COUNT` から metadata / サムネイル分を引いた値）を検査。描画中は 1 ページ 16MPix の検査に加えて**エンコード済みの累積出力**（`opfspack::MAX_TOTAL_SIZE` = 10 GiB）で打ち切る。ピークは 8 ページ窓分 | `import/pdf.rs`（`render_pdf_pages`） |
+| PDF の上限 | **描画の前**に総ページ数（`MAX_PDF_PAGES` = 9000。`MAX_ENTRY_COUNT` から metadata / サムネイル分を引いた値）を検査。描画中は 1 ページ 16MPix の検査に加えて**エンコード済みの累積出力**（`nartik::MAX_TOTAL_SIZE` = 10 GiB）で打ち切る。ピークは 8 ページ窓分 | `import/pdf.rs`（`render_pdf_pages`） |
 | 壊れた入れ子 | `warnings` に `"{name}: {error}"` を積んでスキップ | `import/mod.rs:326-333` |
 | 警告文言（実装値） | `"{name}: nested zip is larger than the size limit (536870912 bytes)"` / `"{name}: nested zip inside a nested zip is not expanded (depth limit 1)"` / `"{name}: nested zip exceeds the entry/size limit and was skipped"` | `import/mod.rs:314-317`, `:347-349`, `:358-361` |
 
@@ -98,12 +102,12 @@
 | サムネイル | `thumbnail.webp`（既定コンテンツ第 1 ページの 200px 版） | `false` | `import/mod.rs:2266-2272`, `:1801-1805`（単体 PDF）, `:1335`（DB 行が参照） |
 | ページ本文（PDF の抽出テキスト / `_export.txt`。既定コンテンツ以外のページ本文も含む） | `documents/text.jsonl`（`application/x-ndjson`。1 行 = `{"pageNumber":<int>,"text":"..."}`）。本文が 1 件以上あるときだけ作る | **`true`**（per-entry の deflate。テキストは圧縮が効く） | `import/mod.rs:212`, `:929-941`, `:1316-1333`, `:1365-1369` |
 | 音声・動画 | エントリを作らない（構造だけ DB に記録） | — | `import/mod.rs:2225-2226` |
-| pack レベル | `PackBuilder::build_to_file_streaming(..., true)` = pack フラグ `COMPRESSED` を常に立てる（**エントリ個別の compress は `documents/text.jsonl` だけ `true`**、他はすべて `false`。鍵を渡したときは `ENCRYPTED` も立つ）。エントリは `PackEntryStore` から**1 件ずつ**供給する（全ページを同時にメモリへ載せない）。**一時ファイルへ直接組み立ててから rename** し、pack 全体の SHA-256 はファイルを順に読んで計算する（`PackFileReader::source_sha256`） | — | `crates/opfspack/src/builder.rs`（`write_pack`）, `reader.rs:350`（`PackRead`） |
+| pack レベル | `PackBuilder::build_to_file_streaming(..., true)` = pack フラグ `COMPRESSED` を常に立てる（**エントリ個別の compress は `documents/text.jsonl` だけ `true`**、他はすべて `false`。鍵を渡したときは `ENCRYPTED` も立つ）。エントリは `PackEntryStore` から**1 件ずつ**供給する（全ページを同時にメモリへ載せない）。**一時ファイルへ直接組み立ててから rename** し、pack 全体の SHA-256 はファイルを順に読んで計算する（`PackFileReader::source_sha256`） | — | `crates/nartik/src/builder.rs`（`write_pack`）, `reader.rs:350`（`PackRead`） |
 
 ### 3.5.1 取り込み中のメモリ（`PackEntryStore`）
 
 ページデータは `PackEntryStore` が保持し、**受け取った合計が 64 MiB を超えたら以降は一時ファイル**
-（`std::env::temp_dir()/thundoku-import-spill-<pid>-<時刻>/`）へ書く。pack の組み立ては
+（`std::env::temp_dir()/ligrol-import-spill-<pid>-<時刻>/`）へ書く。pack の組み立ては
 `build_to_file_streaming` で 1 件ずつ供給し、必要なときだけ読み出す（メモリに残るのは
 64 MiB + 1 ページ分 + 組み立て中の 1 エントリ）。一時ファイルは `Drop` で必ず消す。
 
@@ -148,12 +152,12 @@ store へ直接入る。
 |---|---|---|
 | 1 | `book_id` 決定（`book_id_for`） / `title` = ファイル名から拡張子を除いたもの（`base_title`） | `import/mod.rs:1260-1261`, `:269`, `:867-872` |
 | 2 | 再取り込み時: 既存 `book_contents` と件数が一致するときだけ `content_id` と `display_name` を引き継ぎ、`page_rows[].content_id` も張り替える | `import/mod.rs:1270-1301` |
-| 3 | pack 構築（`metadata.json` → 追加エントリ → 本文エントリ）と `packs_dir/{book_id}.opfspack` への書き出し | `import/mod.rs:1304-1387`, `:1310-1314`, `:1316-1333`, `:1355-1380` |
-| 4 | `books` 行を組み立て（`file_name` = 取り込みファイル名、`file_size` = **元ファイルのバイト数**、`opfs_path` = `{book_id}.opfspack`、`cover_thumbnail` = `None`、`tbf_product_id`/`site_id` = `None`、`tags_fetched` = 1）。`site_id`/`tbf_product_id` はアプリ層が取り込み直後に `set_site_id` / `set_tbf_product_id` で入れる | `import/mod.rs:1403-1431`, `crates/app/src/views/bookshelf.rs:4590-4596` |
+| 3 | pack 構築（`metadata.json` → 追加エントリ → 本文エントリ）と `packs_dir/{book_id}.nartik` への書き出し | `import/mod.rs:1304-1387`, `:1310-1314`, `:1316-1333`, `:1355-1380` |
+| 4 | `books` 行を組み立て（`file_name` = 取り込みファイル名、`file_size` = **元ファイルのバイト数**、`opfs_path` = `{book_id}.nartik`、`cover_thumbnail` = `None`、`tbf_product_id`/`site_id` = `None`、`tags_fetched` = 1）。`site_id`/`tbf_product_id` はアプリ層が取り込み直後に `set_site_id` / `set_tbf_product_id` で入れる | `import/mod.rs:1403-1431`, `crates/app/src/views/bookshelf.rs:4590-4596` |
 | 5 | 再取り込み時は `is_favorite` / `is_hidden` / `created_at` を既存行から引き継ぎ、`documents::delete_for_book` + `contents::delete_for_book` の後に `books::upsert`。新規は `books::insert` | `import/mod.rs:1434-1453` |
 | 6 | `imported_documents` 行（`source_type` = `pdf`/`epub`/`image-set`/`image`、`file_hash` = pack の SHA-256、`status` = `"completed"`、`metadata` = `None`） | `import/mod.rs:1455-1466`, `:2275-2279` |
 | 7 | `book_contents` + `content_formats` を `contents::insert_batch`（1 トランザクション） | `import/mod.rs:1470-1503`, `db/contents.rs:41-84` |
-| 8 | `document_images`: ページ行（`image_type = "page"`、`opfs_path = {book_id}.opfspack`、`mime_type = "image/webp"`） | `import/mod.rs:1513-1544` |
+| 8 | `document_images`: ページ行（`image_type = "page"`、`opfs_path = {book_id}.nartik`、`mime_type = "image/webp"`） | `import/mod.rs:1513-1544` |
 | 9 | `document_images`: サムネイル行（`image_type = "thumbnail"`、`page_number = 1`、寸法は WebP をデコードして取得） | `import/mod.rs:1545-1568` |
 | 10 | `documents::insert_images_batch`（画像 200 件ずつ / 1 トランザクション） | `import/mod.rs:1569`, `db/documents.rs:281-322` |
 | 11 | `document_text`（PDF のページテキスト + `_export.txt` のパース結果）。200 件ずつ | `import/mod.rs:1572-1582`, `db/documents.rs:324-364` |
@@ -186,28 +190,28 @@ store へ直接入る。
 
 ---
 
-## 4. `.opfspack` ファイル形式
+## 4. `.nartik` ファイル形式
 
 ### 4.1 概要
 
 | 項目 | 値 | アンカー |
 |---|---|---|
-| 実装 | Rust 移植（TS 参照実装 `packages/opfspack`（thundoku-shelf Web 側）とバイト互換が要件） | `crates/opfspack/src/lib.rs:1-24` |
-| マジック | `OPFS` = `[0x4F, 0x50, 0x46, 0x53]`（offset 0） | `crates/opfspack/src/lib.rs:39` |
-| ヘッダサイズ | `HEADER_SIZE = 64` バイト固定 | `crates/opfspack/src/lib.rs:41` |
-| バージョン | `FORMAT_VERSION = 3`（**これ以外は `PackError::Version`**。v2 の pack は読めない＝再取り込み） | `crates/opfspack/src/lib.rs:43`, `reader.rs:22-24` |
-| エンディアン | すべて little-endian | `crates/opfspack/src/lib.rs:7-8`, `format.rs:34-53` |
-| レイアウト | `[header 64B][entry payload × N（8 バイト境界に整列）][index][index CRC 4B]` | `crates/opfspack/src/builder.rs:96-158` |
-| 圧縮 | RAW DEFLATE（RFC 1951、zlib ヘッダ無し。fflate `deflateSync` 互換）、`flate2::Compression::new(6)` | `crates/opfspack/src/builder.rs:176-181`, `:70` |
-| 暗号化 | 任意（`PackKey` を渡したときのみ＝**全エントリ**）。AES-256-GCM（AAD なし）、エントリ単位 | `crates/opfspack/src/builder.rs:74-80`, `crypto.rs:40-45` |
-| 鍵（v3） | アカウントごとの乱数ルート鍵（PRK）→ `HKDF(PRK, pack_id)` で冊ごとの pack 鍵。PRK はラップして keyring と Drive に置く | `crates/opfspack/src/keys.rs`, `docs/spec/10-pack-keys.md` §2〜§3 |
-| チェックサム | CRC-32（IEEE、`crc32fast`）。ヘッダ（0..60）と index の 2 か所 | `crates/opfspack/src/crypto.rs:19-21`, `format.rs:71-73`, `builder.rs:148-158` |
+| 実装 | Rust 移植（TS 参照実装 `packages/nartik`（ligrol Web 側）とバイト互換が要件） | `crates/nartik/src/lib.rs:1-24` |
+| マジック | `NRTK` = `[0x4F, 0x50, 0x46, 0x53]`（offset 0） | `crates/nartik/src/lib.rs:39` |
+| ヘッダサイズ | `HEADER_SIZE = 64` バイト固定 | `crates/nartik/src/lib.rs:41` |
+| バージョン | `FORMAT_VERSION = 3`（**これ以外は `PackError::Version`**。v2 の pack は読めない＝再取り込み） | `crates/nartik/src/lib.rs:43`, `reader.rs:22-24` |
+| エンディアン | すべて little-endian | `crates/nartik/src/lib.rs:7-8`, `format.rs:34-53` |
+| レイアウト | `[header 64B][entry payload × N（8 バイト境界に整列）][index][index CRC 4B]` | `crates/nartik/src/builder.rs:96-158` |
+| 圧縮 | RAW DEFLATE（RFC 1951、zlib ヘッダ無し。fflate `deflateSync` 互換）、`flate2::Compression::new(6)` | `crates/nartik/src/builder.rs:176-181`, `:70` |
+| 暗号化 | 任意（`PackKey` を渡したときのみ＝**全エントリ**）。AES-256-GCM（AAD なし）、エントリ単位 | `crates/nartik/src/builder.rs:74-80`, `crypto.rs:40-45` |
+| 鍵（v3） | アカウントごとの乱数ルート鍵（PRK）→ `HKDF(PRK, pack_id)` で冊ごとの pack 鍵。PRK はラップして keyring と Drive に置く | `crates/nartik/src/keys.rs`, `docs/spec/10-pack-keys.md` §2〜§3 |
+| チェックサム | CRC-32（IEEE、`crc32fast`）。ヘッダ（0..60）と index の 2 か所 | `crates/nartik/src/crypto.rs:19-21`, `format.rs:71-73`, `builder.rs:148-158` |
 
 ### 4.2 ヘッダ（64 バイト）フィールド表
 
 | オフセット (byte) | サイズ | 型 | 内容 | アンカー |
 |---|---|---|---|---|
-| 0 | 4 | bytes | マジック `OPFS` | `format.rs:58` |
+| 0 | 4 | bytes | マジック `NRTK` | `format.rs:58` |
 | 4 | 4 | u32 LE | `version`（= 3） | `format.rs:59` |
 | 8 | 4 | u32 LE | `flags`（pack レベル） | `format.rs:60` |
 | 12 | 4 | — | 予約（0） | `format.rs:61` |
@@ -235,7 +239,7 @@ store へ直接入る。
 | パディング | 0-7 | zero | エントリ長を 8 バイト境界へ（`align8`） | `format.rs:30-32`, `:114-117` |
 
 計算式（そのまま再実装可能）: 生サイズ = `2 + path.len() + 2 + mime.len() + 8 + 8 + 8 + 4 + 12` = `44 + path.len() + mime.len()`、保存サイズ = `align8(生サイズ)`。
-検算（フィクスチャ）: `metadata.json`(13) + `application/json`(16) → 44+29 = 73 → align8 = **80 バイト**（`crates/opfspack/tests/interop.rs:77` の `index_size = 80+80+80+4` と一致）。
+検算（フィクスチャ）: `metadata.json`(13) + `application/json`(16) → 44+29 = 73 → align8 = **80 バイト**（`crates/nartik/tests/interop.rs:77` の `index_size = 80+80+80+4` と一致）。
 
 インデックス全体 = 全エントリの整列済みエントリ連結 + 末尾 CRC-32 4 バイト（CRC は エントリ連結部のみを対象、`index_size` に含む）: `builder.rs:143-158`, `reader.rs:38-46`。
 
@@ -267,15 +271,15 @@ Drive に置く。ラップの形式・保管・解決順序は `docs/spec/10-pa
 | PRK（ルート鍵） | 32 バイトの乱数（アカウント = `owner_id` ごとに 1 個）。`PackRootKey::generate()` が `OsRng` で作る | `keys.rs:66-72`, `:84-89` |
 | pack 鍵 | `HKDF-SHA256(ikm = PRK, salt = UTF8(pack_id), info = HKDF_INFO, 32 bytes)` → `PackKey` | `keys.rs:103-110`, `crypto.rs:31-37` |
 | `pack_id` | 本の id（`book_id`）。**先に `book_id` を決めてから** `PRK.derive_pack_key(&book_id)` を呼ぶ | `import/mod.rs:214-227`, `:1008-1009`, `drive/sync.rs:107-109` |
-| HKDF info | `HKDF_INFO = b"opfspack-entry-key"`（v2 と同一） | `crypto.rs:16` |
+| HKDF info | `HKDF_INFO = b"nartik-entry-key"`（v2 と同一） | `crypto.rs:16` |
 | `sub` ラップの KEK | `PBKDF2-SHA256(password = UTF8(sub) ‖ APP_SALT, salt = APP_SALT, iterations = 100_000, 32 bytes)` ＝ **v2 の master key と同式**（Web 版の既存 `deriveMasterKey` をそのまま使える） | `keys.rs:45-49`, `APP_SALT` = `lib.rs:46`, `SUB_WRAP_ITERATIONS` = `lib.rs:48` |
 | パスフレーズラップの KEK | `PBKDF2-SHA256(password = NFKC(passphrase) の UTF-8, salt = ラップごとの乱数 16B, iterations = ラップに記録した値（既定 600_000）, 32 bytes)` | `keys.rs:54-57`, `PASSPHRASE_WRAP_ITERATIONS` = `lib.rs:51` |
-| ラップ | `AES-256-GCM(KEK)(PRK)`。nonce は 12 バイト乱数、暗号文 = 32 + 16（tag）= **48 バイト固定**。AAD = `UTF8("thundoku-pack-root:1:" + owner_id)`（別アカウントのラップへの差し替えを検出） | `keys.rs:158-278`, `keys.rs:28-29`, `:40` |
-| ラップの保存 | 端末 = OS keyring の **`thundoku-shelf.pack-root-key:<owner_id>`**（値は PRK の base64）／Drive = **`thundoku-keys.json`**（`owner_id` ごとの bundle。`thundoku-backup.json` と同じフォルダ） | `secrets.rs`（`save_pack_root_key` / `load_pack_root_key`）, `crates/core/src/pack_keys.rs:23`, `docs/spec/10-pack-keys.md` §3 |
+| ラップ | `AES-256-GCM(KEK)(PRK)`。nonce は 12 バイト乱数、暗号文 = 32 + 16（tag）= **48 バイト固定**。AAD = `UTF8("ligrol-pack-root:1:" + owner_id)`（別アカウントのラップへの差し替えを検出） | `keys.rs:158-278`, `keys.rs:28-29`, `:40` |
+| ラップの保存 | 端末 = OS keyring の **`ligrol.pack-root-key:<owner_id>`**（値は PRK の base64）／Drive = **`ligrol-keys.json`**（`owner_id` ごとの bundle。`ligrol-backup.json` と同じフォルダ） | `secrets.rs`（`save_pack_root_key` / `load_pack_root_key`）, `crates/core/src/pack_keys.rs:23`, `docs/spec/10-pack-keys.md` §3 |
 | エントリ暗号 | `AES-256-GCM(key = pack 鍵, AAD なし)`、IV は `OsRng` で毎回 12 バイト乱数、暗号文 = `ciphertext ‖ tag`（tag 16 バイト。フィクスチャ検算: `compressed_size = size + 16`） | `builder.rs:74-80`, `crypto.rs:40-45`, `tests/interop.rs:325-331` |
 | 鍵のキャッシュ用 API | `PackRootKey::derive_pack_key(&self, pack_id) -> PackKey`（本ごとに 1 回導出して使い回す。ページごとの再計算を避ける） | `keys.rs:103-110`（呼び出し: `import/mod.rs:1008`, `drive/sync.rs:108`） |
-| 所有者 ID | `SHA-256("opfspack:v1:{sub}")` の小文字 hex（TS `deriveOwnerId` と一致。keyring のスロット名とラップの AAD に使う）。テストベクタ: `derive_owner_id("test-sub") == "6366bfc3b6ab37feaf2adb385aeaa515c4aa52cf09e70cac890d888e4409f3b0"` | `lib.rs:158-162`, `tests/interop.rs:381-386` |
-| テストベクタ | `pack_key v3 = HKDF(PRK, "test-pack")` = `9c65c870…058f7cd6`、`sub` ラップの暗号文 = `9c7b7700…e0e094fa`（`docs/spec/10-pack-keys.md` §8 の表）。`tests/keys_v3.rs` がこの値を固定している | `tests/keys_v3.rs`, `docs/spec/10-pack-keys.md` §8 |
+| 所有者 ID | `SHA-256("nartik:v1:{sub}")` の小文字 hex（TS `deriveOwnerId` と一致。keyring のスロット名とラップの AAD に使う）。テストベクタ: `derive_owner_id("test-sub") == "27b44245034c0ede5be981b0d5d07ab78ce95311defd60ce9d9e8fe2bc25ab7d"` | `lib.rs:158-162`, `tests/interop.rs:381-386` |
+| テストベクタ | `pack_key v3 = HKDF(PRK, "test-pack")` = `d31e08ee…28bccc`、`sub` ラップの暗号文 = `75665521…533daf33`（`docs/spec/10-pack-keys.md` §8 の表）。`tests/keys_v3.rs` がこの値を固定している | `tests/keys_v3.rs`, `docs/spec/10-pack-keys.md` §8 |
 
 - **v2 の導出（`sub` → master key → `HKDF(master, pack_id)`）は廃止**。v2 の pack は読めない
   （`PackError::Version(2)`。§10 §6 も同じ）。旧 pack の再暗号化はせず、**再取り込み**を案内する
@@ -286,7 +290,7 @@ Drive に置く。ラップの形式・保管・解決順序は `docs/spec/10-pa
   `Corrupted("decryption failed: {path}")`）。
 - `sub` ラップは「Google ログインだけで読める」ための利便性の経路で、**bundle が漏れれば
   `sub` を知る相手に解ける**。強度を決めるのはパスフレーズラップの有無（正直な強度の表は
-  §10 §1.2）。`thundoku-keys.json` に `sub` そのものは入らない（`owner_id` は一方向のハッシュ）。
+  §10 §1.2）。`ligrol-keys.json` に `sub` そのものは入らない（`owner_id` は一方向のハッシュ）。
 
 
 ### 4.6 検証順序（`PackReader::open`）
@@ -294,7 +298,7 @@ Drive に置く。ラップの形式・保管・解決順序は `docs/spec/10-pa
 | 順 | 検証 | 失敗時 | アンカー |
 |---|---|---|---|
 | 1 | バッファ長 ≧ 64 | `Corrupted("buffer too small for header")` | `format.rs:80-82` |
-| 2 | マジック一致 | `Corrupted("invalid magic number: expected OPFS")` | `format.rs:83-87` |
+| 2 | マジック一致 | `Corrupted("invalid magic number: expected NRTK")` | `format.rs:83-87` |
 | 3 | ヘッダ CRC-32 | `Corrupted("header checksum mismatch: stored=…, computed=…")` | `format.rs:88-94` |
 | 4 | pack フラグに未知ビットが無い（`pack_flags::KNOWN_MASK`） | `Corrupted("unknown pack flags: …")` | `format.rs:95-102` |
 | 5 | `version == 3`（**v2 は `Version(2)` で拒否**＝再取り込みを案内） | `Version(stored)` | `reader.rs:22-24` |
@@ -319,13 +323,13 @@ index の `size` / `compressed_size` / `entry_count` は攻撃者が自由に書
 
 | 定数 | 値 | 対象 | 正常な本を通す根拠 |
 |---|---|---|---|
-| 書き出し側の検査 | `PackBuilder` も同じ上限（`MAX_ENTRY_COUNT` / `MAX_ENTRY_SIZE` / `MAX_STORED_ENTRY_SIZE` / `MAX_TOTAL_SIZE`）を検査する。これが無いと「書けたのに開けない pack」ができる | - | `crates/opfspack/src/builder.rs`（`write_pack` / `check_entry_limits`） |
+| 書き出し側の検査 | `PackBuilder` も同じ上限（`MAX_ENTRY_COUNT` / `MAX_ENTRY_SIZE` / `MAX_STORED_ENTRY_SIZE` / `MAX_TOTAL_SIZE`）を検査する。これが無いと「書けたのに開けない pack」ができる | - | `crates/nartik/src/builder.rs`（`write_pack` / `check_entry_limits`） |
 | `MAX_ENTRY_SIZE` | `512 * 1024 * 1024`（512 MiB） | 1 エントリの展開後 `size` | 1 エントリ = 1 ページで、既知の実データ（外側 ZIP の展開後 1.33 GB。`import/mod.rs:265`, `:1585`）でも 1 ページは数 MB 級 |
 | `MAX_TOTAL_SIZE` | `2 * 1024 * 1024 * 1024`（2 GiB） | 1 pack の展開後合計（`checked_add` で積算） | 上記 1.33 GB を上回り、かつ上限として意味のある範囲 |
 | `MAX_STORED_ENTRY_SIZE` | `2 * 1024 * 1024 * 1024`（2 GiB） | 1 エントリの保存サイズ `compressed_size` | 展開上限 512 MiB に AES-GCM タグ 16 バイトと DEFLATE の膨張余地を足しても収まる |
 | `MAX_ENTRY_COUNT` | `10_000` | index のエントリ数 | 既知の最大 3,321 ページ本（`crates/app/src/components/image_viewer/mod.rs:948`）は 1 ページ = 1 エントリ（§4.8）なので 3,000 件超。その約 3 倍を許す |
 
-`raw_inflate` が宣言サイズ + 1 バイトで打ち切る（§4.6 の読み出し時）ことと併せて、小さな DEFLATE 入力から数 GB を展開させる細工への防波堤になる。回帰テストは `crates/opfspack/tests/limits.rs`（展開爆弾 / 宣言サイズの不一致（大・小）/ 切断 DEFLATE / 未知フラグ / 暗号化の不整合 / 件数・サイズ上限の境界と上限ちょうど / 正常な多ページ pack）。
+`raw_inflate` が宣言サイズ + 1 バイトで打ち切る（§4.6 の読み出し時）ことと併せて、小さな DEFLATE 入力から数 GB を展開させる細工への防波堤になる。回帰テストは `crates/nartik/tests/limits.rs`（展開爆弾 / 宣言サイズの不一致（大・小）/ 切断 DEFLATE / 未知フラグ / 暗号化の不整合 / 件数・サイズ上限の境界と上限ちょうど / 正常な多ページ pack）。
 
 > **取り込み側の上限とは別物**: §3.3 の `MAX_ZIP_ENTRY_BYTES = 2 GiB` / `MAX_NESTED_BYTES = 512 MiB` / `MAX_NESTED_ENTRIES = 2000`（`crates/core/src/import/mod.rs`）は **ZIP 取り込み時**の上限で、こちらは **pack 読み出し時**の検証。判定対象（ZIP エントリ / 入れ子の合流 vs pack の index）も失敗の扱い（警告を積んでスキップ vs `Corrupted` を返す）も異なる。値を揃えたのは 1 エントリあたり 512 MiB だけで、件数上限は **`MAX_NESTED_ENTRIES = 2000` に合わせられない**（`MAX_NESTED_ENTRIES` は入れ子 ZIP の合流件数であって pack のエントリ数ではなく、3,321 ページの pack は 3,000 件超のエントリを持つため、2000 で切ると正常本が読めなくなる）。
 
@@ -348,7 +352,7 @@ index の `size` / `compressed_size` / `entry_count` は攻撃者が自由に書
 | `PackKey::as_bytes(&self) -> &[u8; 32]` | AES-256-GCM の鍵。`Debug` は中身を出さない | `keys.rs:115-127` |
 | `sub_wrap_kek(sub) -> [u8; 32]` | `sub` ラップの KEK（v2 の master key と同式。§4.5） | `keys.rs:45-49` |
 | `PackRootKeyWrap`（`wrap_with_kek` / `wrap_with_sub` / `wrap_with_passphrase` / `unwrap` / `unwrap_with_passphrase` / `kind` / `iterations` / `nonce` / `ciphertext`） | PRK を KEK で包んだ 1 個のラップ（仕様 §3.2）。`ciphertext` は常に 48 バイト | `keys.rs:131-278` |
-| `PackKeyBundle`（`new` / `format_version` / `owner_id` / `created_at` / `updated_at` / `wraps` / `wrap` / `has_wrap` / `upsert_wrap` / `remove_wrap` / `touch` / `unwrap_with_sub` / `unwrap_with_passphrase` / `to_json` / `from_json`） | Drive の `thundoku-keys.json`（仕様 §3.2）。`from_json` は `format_version != 1` で `UnsupportedKeyBundle`、構造不正で `Corrupted` | `keys.rs:280-400`, `KEY_BUNDLE_FORMAT_VERSION` = `keys.rs:24` |
+| `PackKeyBundle`（`new` / `format_version` / `owner_id` / `created_at` / `updated_at` / `wraps` / `wrap` / `has_wrap` / `upsert_wrap` / `remove_wrap` / `touch` / `unwrap_with_sub` / `unwrap_with_passphrase` / `to_json` / `from_json`） | Drive の `ligrol-keys.json`（仕様 §3.2）。`from_json` は `format_version != 1` で `UnsupportedKeyBundle`、構造不正で `Corrupted` | `keys.rs:280-400`, `KEY_BUNDLE_FORMAT_VERSION` = `keys.rs:24` |
 | `derive_owner_id(sub)` | 所有者 ID（hex）。keyring のスロット名とラップの AAD に使う | `lib.rs:158-162` |
 | `PackHeader { version, flags, index_offset, index_size, entry_count, created_at }` | — | `lib.rs:110-117` |
 | `PackEntry { path, mime_type, offset, size, compressed_size, flags, iv }` | — | `lib.rs:121-133` |
@@ -360,7 +364,7 @@ index の `size` / `compressed_size` / `entry_count` は攻撃者が自由に書
 |---|---|---|
 | `import::pack_root_key_for_import(profile, resolve_root)` | 取り込みで使う PRK を決める（**fail-closed**）。未ログイン（`profile` = `None`）→ `ImportError::LoginRequired`（**平文 pack を作らない** — セキュリティ評価 F03）、ログイン済み + 鍵なし → `ImportError::IdentityKeyUnavailable`、`sub` 空 → `ImportError::IdentitySubMissing` | `crates/core/src/import/mod.rs:248-261` |
 | `PackKeyStore`（`resolve` / `ensure` / `set_passphrase` / `remove_passphrase` / `has_passphrase` / `pending_owner` / `retry_pending_upload`） | PRK の解決（keyring → パスフレーズラップ → `sub` ラップ）と bundle の Drive 反映（仕様 §4〜§5）。**パスフレーズはコールバックで受け取る**（core は UI を知らない） | `crates/core/src/pack_keys.rs:61-345` |
-| `pack_keys::{KEY_BUNDLE_NAME, PENDING_UPLOAD_KEY}` | `"thundoku-keys.json"` / `"drive.pack_keys.pending"` | `crates/core/src/pack_keys.rs:23`, `:29` |
+| `pack_keys::{KEY_BUNDLE_NAME, PENDING_UPLOAD_KEY}` | `"ligrol-keys.json"` / `"drive.pack_keys.pending"` | `crates/core/src/pack_keys.rs:23`, `:29` |
 | `PackKeysError` | `Unavailable` / `PassphraseFailed` / `OwnerMismatch` / `Secret` / `Drive` / `Pack` / `Db`。`ImportError` への変換は `IdentityKeyUnavailable` / `PassphraseFailed` / `KeyStore` | `crates/core/src/pack_keys.rs:37-58`, `crates/core/src/import/mod.rs:98-109` |
 
 ### 4.8 アプリが書き出すエントリ構成（実データ）
@@ -379,7 +383,7 @@ index の `size` / `compressed_size` / `entry_count` は攻撃者が自由に書
 | pack レベルフラグ | 常に `pack_flags::COMPRESSED`（`build_to_file_streaming(..., true, ...)`）、鍵があるとき（＝ログイン中の取り込み）のみ `ENCRYPTED`（**全エントリ**） | `import/mod.rs:1355-1360`, `builder.rs:278-290` |
 | エントリの compress | **`documents/text.jsonl` だけ `true`**（per-entry deflate）。他はすべて `false`（metadata.json / ページ / 表紙 / サムネ / EPUB 生データ） | `import/mod.rs:1327-1333`, `:1313`, `:1774`, `:1797-1805`, `:2217-2222`, `:2258-2272`, `:2875-2888` |
 | 暗号化の伝播 | `rename_content_in_pack` は元 pack の `ENCRYPTED` フラグを見て `pack_key` の有無を決め、エントリごとの `COMPRESSED` フラグも維持して再構築する | `import/mod.rs:986-1002` |
-| 検算例（フィクスチャ） | `plain.opfspack`: 3 件・pack フラグ `COMPRESSED`・index 244 B・`created_at = 1_728_000_000_000`（`metadata.json` 62 B 非圧縮 / `pages/page_0001.webp` 12,019 B → 圧縮 56 B / `pages/page_0002.webp` 6,019 B 非圧縮）。`encrypted.opfspack`: 同じ 3 件・pack フラグ `COMPRESSED \| ENCRYPTED`・各エントリの保存サイズは +16 B（暗号タグ）で `flags = ENCRYPTED`（`IDENTITY_BOUND` は立たない） | `crates/opfspack/tests/interop.rs:61-108`, `:151-186`（実測値は §4.10 の表と同じ） |
+| 検算例（フィクスチャ） | `plain.nartik`: 3 件・pack フラグ `COMPRESSED`・index 244 B・`created_at = 1_728_000_000_000`（`metadata.json` 62 B 非圧縮 / `pages/page_0001.webp` 12,019 B → 圧縮 56 B / `pages/page_0002.webp` 6,019 B 非圧縮）。`encrypted.nartik`: 同じ 3 件・pack フラグ `COMPRESSED \| ENCRYPTED`・各エントリの保存サイズは +16 B（暗号タグ）で `flags = ENCRYPTED`（`IDENTITY_BOUND` は立たない） | `crates/nartik/tests/interop.rs:61-108`, `:151-186`（実測値は §4.10 の表と同じ） |
 
 **本文エントリの実測**（release ビルド、120 ページ・本文 約 453 B/ページ）: pack は **+3,856 B（+1.11%）**、Drive 復元は **+20〜29 ms**（≒ +0.2 ms/ページ）、取り込み時間の差は誤差。旧 pack（`source` 無し・本文エントリ無し）も今までどおり復元できる（`import/mod.rs:2668-2670`, `:2637-2639`）。
 
@@ -411,11 +415,11 @@ index の `size` / `compressed_size` / `entry_count` は攻撃者が自由に書
 
 | 事実 | アンカー |
 |---|---|
-| 参照実装は TS（thundoku-shelf の `packages/opfspack`）で、**バイトレイアウト互換が要件**。v3 の TS 側対応はこれから（`docs/spec/10-pack-keys.md` §7 のチェックリスト） | `crates/opfspack/src/lib.rs:1-24` |
-| **フィクスチャの生成元**: **v3 のフィクスチャは Rust の builder が生成**している（TS 版 v3 が入るまでは Rust 側が正）。バイトレイアウト自体は v2 時代の TS 実装（`gen-fixtures.ts`、bun + fflate 0.8.2）で検証済みで、差分は **header version と `IDENTITY_BOUND` の不在だけ** | `crates/opfspack/tests/interop.rs:1-22` |
-| **フィクスチャ**: `plain.opfspack`（平文・pack フラグ `COMPRESSED`）、`encrypted.opfspack`（pack フラグ `COMPRESSED \| ENCRYPTED`・全エントリ暗号化）。どちらも `created_at = 1_728_000_000_000`、PRK は仕様 §8 のベクタ（`00 01 … 1f`）で `pack_id = "test-pack"`。**`identity-bound.opfspack`（v2）は削除済み** | `crates/opfspack/tests/interop.rs:35-58`, `:61-108`, `:151-186`, `tests/keys_v3.rs:9-20` |
-| **v2 の拒否**: CRCs を直した v2 の pack（header version だけ 2 にしたもの）が `Version(2)` で拒否されることをテストで固定 | `crates/opfspack/tests/interop.rs:236-247` |
-| **Rust → TS の書き出し確認用 CLI**: `examples/roundtrip_emit.rs`（`cargo run --example roundtrip_emit <out.opfspack>`。PRK = 仕様 §8 のベクタ → `derive_pack_key("test-pack")` を `build(Some(&key), true)` に渡す。`created_at = 1_700_000_000_000`。TS 側は bundle 無しでこのファイルを読める） | `crates/opfspack/examples/roundtrip_emit.rs:1-43` |
+| 参照実装は TS（ligrol の `packages/nartik`）で、**バイトレイアウト互換が要件**。v3 の TS 側対応はこれから（`docs/spec/10-pack-keys.md` §7 のチェックリスト） | `crates/nartik/src/lib.rs:1-24` |
+| **フィクスチャの生成元**: **v3 のフィクスチャは Rust の builder が生成**している（TS 版 v3 が入るまでは Rust 側が正）。バイトレイアウト自体は v2 時代の TS 実装（`gen-fixtures.ts`、bun + fflate 0.8.2）で検証済みで、差分は **header version と `IDENTITY_BOUND` の不在だけ** | `crates/nartik/tests/interop.rs:1-22` |
+| **フィクスチャ**: `plain.nartik`（平文・pack フラグ `COMPRESSED`）、`encrypted.nartik`（pack フラグ `COMPRESSED \| ENCRYPTED`・全エントリ暗号化）。どちらも `created_at = 1_728_000_000_000`、PRK は仕様 §8 のベクタ（`00 01 … 1f`）で `pack_id = "test-pack"`。**`identity-bound.nartik`（v2）は削除済み** | `crates/nartik/tests/interop.rs:35-58`, `:61-108`, `:151-186`, `tests/keys_v3.rs:9-20` |
+| **v2 の拒否**: CRCs を直した v2 の pack（header version だけ 2 にしたもの）が `Version(2)` で拒否されることをテストで固定 | `crates/nartik/tests/interop.rs:236-247` |
+| **Rust → TS の書き出し確認用 CLI**: `examples/roundtrip_emit.rs`（`cargo run --example roundtrip_emit <out.nartik>`。PRK = 仕様 §8 のベクタ → `derive_pack_key("test-pack")` を `build(Some(&key), true)` に渡す。`created_at = 1_700_000_000_000`。TS 側は bundle 無しでこのファイルを読める） | `crates/nartik/examples/roundtrip_emit.rs:1-43` |
 | **エントリの並び順一致**: Rust 側は UTF-16 コード単位比較でソート（JS の文字列比較と同一） | `builder.rs:161-176`, `tests/interop.rs:360-369` |
 
 ---
@@ -465,20 +469,20 @@ index の `size` / `compressed_size` / `entry_count` は攻撃者が自由に書
 | `view_history.id` | `hex(randomblob(16))` = 32 文字 hex | — | `db/view_history.rs:26-28` |
 | 非表示一覧の補正 | `is_hidden = 1 AND hidden_at IS NULL` の行に `CURRENT_TIMESTAMP` を書き込む | — | `db/bookshelf.rs:293-298` |
 
-### 5.4 `.opfspack`
+### 5.4 `.nartik`
 
 | 名前 | 値 | 単位 | アンカー |
 |---|---|---|---|
-| `MAGIC` | `OPFS` | 4 バイト | `crates/opfspack/src/lib.rs:39` |
+| `MAGIC` | `NRTK` | 4 バイト | `crates/nartik/src/lib.rs:39` |
 | `HEADER_SIZE` | `64` | バイト | `lib.rs:41` |
 | `FORMAT_VERSION` | `3`（v2 は読めない＝再取り込み） | — | `lib.rs:43` |
 | 整列 | `8` バイト境界（`align8(n) = ceil(n/8)*8`） | バイト | `format.rs:30-32` |
 | deflate レベル | `6`（RAW DEFLATE、zlib ラッパー無し） | — | `builder.rs:70`, `:176-181` |
-| `APP_SALT` | `b"opfspack-v1-identity-salt-2024"`（v2 と同一。`sub` ラップの KEK に使う） | — | `lib.rs:46` |
+| `APP_SALT` | `b"nartik-v1-identity-salt-2026"`（v2 と同一。`sub` ラップの KEK に使う） | — | `lib.rs:46` |
 | `SUB_WRAP_ITERATIONS` | `100_000` | 回 | `lib.rs:48` |
 | `PASSPHRASE_WRAP_ITERATIONS` | `600_000`（暫定。ラップごとに記録するので後から上げられる） | 回 | `lib.rs:51` |
-| `KEY_BUNDLE_FORMAT_VERSION` | `1`（`thundoku-keys.json` の `format_version`。pack の `FORMAT_VERSION` とは別物） | — | `keys.rs:24` |
-| ラップの AAD | `UTF8("thundoku-pack-root:1:" + owner_id)` | — | `keys.rs:28`, `:58-60` |
+| `KEY_BUNDLE_FORMAT_VERSION` | `1`（`ligrol-keys.json` の `format_version`。pack の `FORMAT_VERSION` とは別物） | — | `keys.rs:24` |
+| ラップの AAD | `UTF8("ligrol-pack-root:1:" + owner_id)` | — | `keys.rs:28`, `:58-60` |
 | ラップの salt 長 | `16`（`kind=passphrase` のみ。`kind=sub` は `APP_SALT` 固定） | バイト | `keys.rs:34` |
 | `nonce` 長 | `12` | バイト（ラップ・エントリ共通） | `keys.rs:37`, `crypto.rs:41-42` |
 | ラップの暗号文長 | `48` = 32（PRK）+ 16（GCM タグ） | バイト | `keys.rs:40` |
@@ -491,9 +495,9 @@ index の `size` / `compressed_size` / `entry_count` は攻撃者が自由に書
 
 | 名前 | 値 | 単位 | アンカー |
 |---|---|---|---|
-| pack 配置 | `<data_dir>/packs/{book_id}.opfspack` | — | `crates/app/src/app_state.rs:139-142`, `import/mod.rs:1013-1019` |
-| DB 配置 | `<data_dir>/thundoku-shelf.db` | — | `crates/app/src/app_state.rs:141` |
-| 既定 data_dir | `dirs::data_dir()/thundoku-shelf` | — | `crates/app/src/app_state.rs:129-133` |
+| pack 配置 | `<data_dir>/packs/{book_id}.nartik` | — | `crates/app/src/app_state.rs:139-142`, `import/mod.rs:1013-1019` |
+| DB 配置 | `<data_dir>/ligrol.db` | — | `crates/app/src/app_state.rs:141` |
+| 既定 data_dir | `dirs::data_dir()/ligrol` | — | `crates/app/src/app_state.rs:129-133` |
 | サイト表紙キャッシュ | `<data_dir>/thumbnails/{site_id}_{database_id}_448.png`（448 px に縮小） | px | `crates/app/src/views/bookshelf.rs:7035-7045`, `:7123-7129` |
 | 表紙ダウンロード並列度 | `4` | 並列 | `crates/app/src/views/bookshelf.rs:1715-1717` |
 | 進捗表示の丸め | `(fraction * 100.0).round()` % | % | `crates/app/src/views/bookshelf.rs:2926-2928` |
@@ -510,7 +514,7 @@ index の `size` / `compressed_size` / `entry_count` は攻撃者が自由に書
 |---|---|---|---|
 | `UnsupportedType(String)` | `unsupported file type: {0}` | `import_file` の拡張子が `pdf`/`epub`/`zip` 以外（文字列は小文字化した拡張子。拡張子なしは空文字） | `import/mod.rs:46-47`, `:1668` |
 | `Io(std::io::Error)` | `io error: {0}` | ソース読み込み・pack 書き出し・ディレクトリ作成の失敗（`?` 伝播、保存領域外を指す pack パスの拒否を含む） | `import/mod.rs:48-49`, `:1346`, `:1385` |
-| `Pack(opfspack::PackError)` | `pack error: {0}` | pack 構築・読み出しの失敗（`build_to_file_streaming` / `PackReader::open` / `read_entry`。改名時の再構築も同じ） | `import/mod.rs:50-51`, `:1380-1382`, `:958-961`, `:993` |
+| `Pack(nartik::PackError)` | `pack error: {0}` | pack 構築・読み出しの失敗（`build_to_file_streaming` / `PackReader::open` / `read_entry`。改名時の再構築も同じ） | `import/mod.rs:50-51`, `:1380-1382`, `:958-961`, `:993` |
 | `Db(sqlx::Error)` | `database error: {0}` | すべての DB 書き込み・読み出し失敗（`books::*` / `documents::*` / `contents::*` / `tags::*` の `?` 伝播） | `import/mod.rs:52-53` |
 | `Pdf(String)` | `pdf error: {0}` | `pdf.rs` の描画・読み込みエラーを文字列化（PDFium のロード失敗、PDF の読み込み、ページ数上限、描画・エンコード失敗、出力量の上限）、および `import_pdf_rendered` のページ 0 件 `"no pages rendered"` | `import/mod.rs:54-55`, `:1776-1778`, `pdf.rs:83`, `:175-186`, `:218-240`, `:289-308` |
 | `Image(String)` | `image error: {0}` | ① `image::load_from_memory` の失敗（壊れた画像。ページ単位では警告に落ちるが、単体画像取り込みやサムネ生成では致命） ② 主コンテンツのページ数 0 `"primary content has no pages: {display_name}"` ③ 改名時の `metadata.json` 再シリアライズ失敗を `Image(e.to_string())` として流用 | `import/mod.rs:56-57`, `:164-175`, `:193`, `:991`, `:2251-2255`, `:2859` |
@@ -518,7 +522,7 @@ index の `size` / `compressed_size` / `entry_count` は攻撃者が自由に書
 | `EmptyArchive` | `empty archive` | ZIP のエントリが 0 件（`collect_metas_with_nested` の結果が空） | `import/mod.rs:60-61`, `:1977` |
 | `NotAReadableWork` | `not a readable work` | ① `commit_zip` で既定コンテンツが画像/PDF/EPUB 以外（音声・動画のみ） ② `plan.contents` が空（`get(plan.primary)` が `None`） | `import/mod.rs:62-65`, `:2083-2086`, `:2251-2255`（UI 文言は `docs/import-patterns.md:701-705` §11.2 R3） |
 | `LoginRequired` | `本を取り込むには Google にログインしてください（本はアカウントごとの鍵で暗号化されます）` | 未ログイン（Google のプロフィールが無い）で取り込みを要求された。**平文 pack を作らない**（fail-closed。セキュリティ評価 F03）。UI はダウンロードを始める前にこれを出し、ログイン導線（Google の認証モーダル）を開く | `import/mod.rs:66-76`, `:296`, `crates/app/src/views/bookshelf.rs:4178`（`require_import_login`） |
-| `ZipTooLarge { detail }` | `この ZIP は大きすぎて取り込めません（{detail}）` | 外側 ZIP のエントリ数（`opfspack::MAX_ENTRY_COUNT`）/ 中央ディレクトリが宣言する展開後サイズの合計（`opfspack::MAX_TOTAL_SIZE`）が上限を超える（**展開の前**に弾く） | `import/mod.rs:77-81`, `:1987`, `:1996` |
+| `ZipTooLarge { detail }` | `この ZIP は大きすぎて取り込めません（{detail}）` | 外側 ZIP のエントリ数（`nartik::MAX_ENTRY_COUNT`）/ 中央ディレクトリが宣言する展開後サイズの合計（`nartik::MAX_TOTAL_SIZE`）が上限を超える（**展開の前**に弾く） | `import/mod.rs:77-81`, `:1987`, `:1996` |
 | `SourceTooLarge { size, limit }` | `この本は大きすぎて取り込めません（{size} バイト。上限は {limit} バイト）` | 取り込み元ファイルが `MAX_IMPORT_SOURCE_BYTES`（10 GiB）超。**読む前**にメタデータで検査する | `import/mod.rs:82-85`, `:1649` |
 | `IdentityKeyUnavailable` | `Google にログイン済みですが、本を復号する鍵を取得できません。…`（長文。§10 §4.1 の fail-closed） | ログイン中なのに v3 のルート鍵（PRK）を用意できない（bundle が無い / どのラップも解けない / keyring 障害）。**平文 pack へは落とさない** | `import/mod.rs:86-96`, `:122` |
 | `PassphraseFailed` | `パスフレーズが違います。もう一度入力してください` | 入力されたパスフレーズでラップが解けない（**`sub` ラップへ黙って落ちない**） | `import/mod.rs:97-99`, `:123` |
@@ -529,7 +533,7 @@ index の `size` / `compressed_size` / `entry_count` は攻撃者が自由に書
 
 ### 6.2 `PackError`（全 variant）
 
-定義: `crates/opfspack/src/lib.rs:136-154`。
+定義: `crates/nartik/src/lib.rs:136-154`。
 
 | variant | `Display` | 発生条件 | アンカー |
 |---|---|---|---|
@@ -537,7 +541,7 @@ index の `size` / `compressed_size` / `entry_count` は攻撃者が自由に書
 | `Corrupted(String)` | `corrupted pack: {0}` | サイズ不足 / マジック不一致 / ヘッダ CRC 不一致 / ヘッダの未知フラグ / index 範囲外 / index CRC 不一致 / 件数・サイズ上限超過 / エントリフラグ不整合（**`IDENTITY_BOUND` を含む未知ビットもここ**） / エントリ境界違反 / `size` と実長の不一致 / 暗号化の不整合 / 復号失敗（他アカウントの鍵・別 pack の鍵） / 展開失敗（宣言サイズ超過を含む） / 圧縮失敗。鍵 bundle 側では JSON 不正・シリアライズ失敗にも使う | `lib.rs:140-141`, `format.rs:80-101`, `reader.rs:25-54`, `:177-262`, `:281-303`, `keys.rs:372-373`, `:383-390` |
 | `UnsupportedLz4` | `lz4 compression not supported` | エントリの `LZ4` フラグが立っている | `lib.rs:142-143`, `reader.rs:87-89`, `:402-404` |
 | `KeyRequired(String)` | `pack key required for encrypted entry: {0}` | `ENCRYPTED` 付きエントリを鍵なし（`Option<&PackKey>` = `None`）で読んだ。**v2 の `IdentityRequired` の置き換え** | `lib.rs:144-145`, `reader.rs:286-287` |
-| `UnsupportedKeyBundle(u32)` | `unsupported key bundle format version: {0}` | `thundoku-keys.json` の `format_version != 1`（構造を読む前に版だけ先に判定） | `lib.rs:146-147`, `keys.rs:391-393` |
+| `UnsupportedKeyBundle(u32)` | `unsupported key bundle format version: {0}` | `ligrol-keys.json` の `format_version != 1`（構造を読む前に版だけ先に判定） | `lib.rs:146-147`, `keys.rs:391-393` |
 | `NotFound(String)` | `entry not found: {0}` | 指定パスのエントリが無い | `lib.rs:148-149`, `reader.rs:84-86`, `:114-116`, `:398-400` |
 | `InvalidRange(String)` | `invalid range: {0}` | `read_entry_range` で `start >= end` または `end > entry.size`（復号後の実長での再検査は `Corrupted`） | `lib.rs:150-151`, `reader.rs:117-122` |
 | `Io(String)` | `pack I/O error: {0}` | `PackFileReader` のファイル読み出し・seek の失敗（`io_error` で包む） | `lib.rs:152-153`, `reader.rs:308-310`, `:312-315` |
@@ -568,7 +572,7 @@ index の `size` / `compressed_size` / `entry_count` は攻撃者が自由に書
 | 3 | ~~`book_first_events` / `zenn_tag_metadata` の書き込み経路、`product_sample_pages.pack_id` / `pack_entry_path` を埋める経路~~ → **解消**（経路の有無は確定。**列を作る意図は未確認**） | `book_first_events` / `zenn_tag_metadata` を書くアプリの経路は無く、書き込みはバックアップ復元 `backup::import_json`（`backup.rs:385-388` が `TABLES` を総なめ。対象は `:37`, `:41`。PK は `:455`, `:457`）とテストの生 INSERT（`:1070-1073`）のみ。通常フローの生成コードは無い（`book_first_events` は `owner_sub` 付与の対象 = `backup.rs:172-178`、全消しの対象 = `db/mod.rs:437-441`, `:479-483`）。`product_sample_pages.pack_id` / `pack_entry_path` も書き込み経路が無く、`db/samples.rs` の構造体・INSERT・SELECT に列が無い（`:5-16`, `:22-26`, `:53-67`）。書き込み側は `samples::insert_sample_page`（呼び出しは `crates/app/src/views/checklist.rs:644-651`）だけ。列は schema にだけ存在する（`crates/core/migrations/0001_init.sql:225-226`, `db/schema.sql:285-286`） |
 | 4 | ~~`books.page_count` / `bookshelf_items.page_count` に入る値の定義（何ページを指すか）~~ → **解消**（プロダクション経路では常に NULL） | `books.page_count` を書くのは `books::set_source_metadata`（`db/books.rs:245-283`）だけで、呼び出しは DLsite 取り込み時のみ（`crates/app/src/views/bookshelf.rs:4659-4675`）。そこへ渡るのは `bookshelf_items.page_count` だが、同期はどのサイトも `None` を書く（FANZA = `crates/core/src/fanza/sync.rs:201`、DLsite = `dlsite/sync.rs:249`、技術書典 = `tbf/sync.rs:130`、BOOTH = `crates/app/src/views/bookshelf.rs:3492`）。取り込みが作る `books` 行も `None`（`import/mod.rs:1363`）。よって「何ページを指すか」の定義は現行コードに無い（`Some` を入れるのはテストだけ = `crates/core/tests/db.rs:1271`, `:1445`） |
 | 5 | ページ・表紙・サムネイル・EPUB 生エントリを `compress=false` のままにしている理由 **（未確認）** | これらのエントリは今も `compress=false` で、`store.push` / `pack_entries.push` に `compress` を渡す経路が無い（`import/mod.rs:1313`（メタ JSON）/ `:1774`（PDF ページ）/ `:1797-1805`（表紙・サムネイル）/ `:2151-2157`, `:2183-2189`（画像/PDF レンディション）/ `:2217-2222`（EPUB）/ `:2258-2272`（ZIP の表紙・サムネイル）/ `:2875-2888`（単体画像））。**本文エントリ（`documents/text.jsonl`）だけは `compress=true`**（`:1327-1333`。理由はコードコメント = テキストは deflate が効く）。既存 pack を組み直す `rename_content_in_pack` は元の flags を引き継ぐ（`:995`）。pack レベルは常に `true`（`:1355-1360`）。「中身が既圧縮（WebP / EPUB）で利得が小さい」は §8-2 の推測で、コード・TS 版ソースのどちらにも判断根拠が無いため**未確認**（根拠を述べたコメントも無い） |
-| 6 | DEFLATE レベル `6` の根拠（TS の fflate 既定と一致するか） **（未確認）** | 実装は `raw_deflate(&bytes, 6)`（`crates/opfspack/src/builder.rs:231`）でレベル 6 固定。`raw_deflate` の doc コメントも RAW DEFLATE（zlib ヘッダ無し・fflate `deflateSync` 互換）までで、レベルの根拠は書いていない（`:393-400`）。TS 版ソースは本リポジトリに無い（相互運用フィクスチャは TS 実装 + fflate 0.8.2 製 = `crates/opfspack/tests/interop.rs:1-22`）ため、fflate の既定値と一致するかは**未確認** |
+| 6 | DEFLATE レベル `6` の根拠（TS の fflate 既定と一致するか） **（未確認）** | 実装は `raw_deflate(&bytes, 6)`（`crates/nartik/src/builder.rs:231`）でレベル 6 固定。`raw_deflate` の doc コメントも RAW DEFLATE（zlib ヘッダ無し・fflate `deflateSync` 互換）までで、レベルの根拠は書いていない（`:393-400`）。TS 版ソースは本リポジトリに無い（相互運用フィクスチャは TS 実装 + fflate 0.8.2 製 = `crates/nartik/tests/interop.rs:1-22`）ため、fflate の既定値と一致するかは**未確認** |
 | 7 | ~~pack・エントリ単位のサイズ上限（1 pack 最大バイト数等）~~ → **実装済み（R04）**: `MAX_ENTRY_SIZE` = 512 MiB / `MAX_TOTAL_SIZE` = 2 GiB / `MAX_STORED_ENTRY_SIZE` = 2 GiB / `MAX_ENTRY_COUNT` = 10,000 を index 解析時に強制する（§4.6.1）。値は既知の正常本（展開後 1.33 GB・3,321 ページ）を通すため、1 エントリ 512 MiB は取り込み側の `MAX_ZIP_ENTRY_BYTES` と同値、件数は取り込み側の `MAX_NESTED_ENTRIES = 2000` とは**別物**として 10,000 とした | `lib.rs:58-72`, `reader.rs:177-262`, `tests/limits.rs`。取り込み側の上限（通常エントリ 512 MiB / 入れ子 ZIP 512 MiB / 2000 件、HTTP 応答 2 GiB）は §3.3 のままで、pack 読み出しとは独立 |
 | 8 | `books.cover_thumbnail` を埋める経路 | 取り込みは常に `None`（`import/mod.rs:1347`）。Drive 取り込みも `None`（`drive/sync.rs:213`） |
 | 9 | `view_history.started_at` / `ended_at` をローカル時刻へ直す責務の所在（コメントは「表示側でローカルに直す」） | `db/view_history.rs:142-160` は `chrono::Local` で日付集計するが、どの層が正かは本担当範囲外（詳細は `local://spec-core.md` を参照） |
@@ -580,7 +584,7 @@ index の `size` / `compressed_size` / `entry_count` は攻撃者が自由に書
 |---|---|---|
 | 1 | `schema.sql` は Web 版から持ち込んだ「参照用の正本」で、実 DB の最終形は `0001_init.sql` + `migrate()` の runtime DDL が作る | コードからの参照がコメントのみ（`db/mod.rs:200`）、`docs/database.md:3-7` が「後発テーブルは migrate() 内の冪等 DDL で適用」と明記。`schema.sql` にしか無いテーブル・列と、runtime DDL にしか無いテーブル（`view_history` / `page_notes`）が混在している |
 | 2 | エントリ単位の圧縮を（本文エントリを除いて）無効にしているのは、中身が WebP / EPUB（どちらも既圧縮）で deflate の利得が小さいため | ページ・表紙・サムネイルはすべて `image/webp`、EPUB は `application/epub+zip` のまま 1 エントリで入る（`import/mod.rs:1774`, `:1797-1805`, `:2151-2157`, `:2183-2189`, `:2217-2222`, `:2258-2272`, `:2875-2888`）。pack フラグだけ立てている（`:1355-1360`）。**本文エントリ（`documents/text.jsonl`）は `compress=true`**（`:1327-1333`）で、テキストは実際に圧縮が効く（実測は §4.8 の本文エントリの項）。根拠がコードに無いため §7-5 は**未確認**のまま（推測であることを崩さない） |
-| 3 | pack レベル `COMPRESSED` を常に立てるのは TS 実装のグローバル既定に合わせるため | `crates/opfspack/src/builder.rs:63-64` の doc コメント「`compress` sets the pack-level flag (and is the TS global default)」 |
+| 3 | pack レベル `COMPRESSED` を常に立てるのは TS 実装のグローバル既定に合わせるため | `crates/nartik/src/builder.rs:63-64` の doc コメント「`compress` sets the pack-level flag (and is the TS global default)」 |
 | 4 | ~~`document_text` / `token_analysis` に `content_id` を入れないのは、テキスト利用（タグ生成）が本全体単位で、コンテンツ別検索が未実装だから~~ → **§7-2 で解消**（書き込み側の構造体が `content_id` を持たず、読み出しも document 単位。`import/mod.rs:1537-1538` が全コンテンツ分を連結せずまとめてタグ生成へ渡す） | 根拠は §7-2 と同じ（`db/documents.rs:44-52`, `:421-428`; `import/mod.rs:1537-1538`） |
 | 5 | 付箋 id を決定論的（`note-{book_id}-{content_id}-{page}`）にしたのは、リーダーと付箋画面の 2 経路から同じ行を UPSERT するため | 両画面が同一書式で id を作る（`crates/app/src/views/reader.rs:598-599`, `crates/app/src/views/notes.rs:305`）。UUID だと二重登録になる |
 | 6 | サムネイル行の `page_number` が常に `1` なのは「1 ページ目＝表紙」規約に合わせるため | `thumbnail_of` の入力は常に先頭ページ（`import/mod.rs:1063-1082` の `primary_thumbnail` は legacy 第 1 ページ、PDF 経路は `pages[0]`） |

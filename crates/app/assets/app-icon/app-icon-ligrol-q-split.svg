@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1254" height="1254" viewBox="0 0 1254 1254"
+     role="img" aria-label="ligrol icon Q — split">
+  <title>ligrol icon Q — split</title>
+  <rect width="1254" height="1254" fill="#ffffff"/>
+  <rect x="46" y="46" width="1162" height="1162" rx="230"
+        fill="none" stroke="#01214b" stroke-width="28"/>
+  <text x="627" y="280" text-anchor="middle"
+        font-family="'Arial Hebrew','Noto Sans Hebrew','David',Arial,sans-serif" font-size="90" font-weight="400"
+        fill="#01214b" opacity="0.55" direction="rtl">לגלול</text>
+  <g fill="#01214b">
+    <rect x="300" y="380" width="120" height="460" rx="18"/>
+    <rect x="300" y="740" width="300" height="120" rx="18"/>
+  </g>
+  <text x="620" y="540" text-anchor="start"
+        font-family="'Helvetica Neue','Arial',sans-serif" font-size="190" font-weight="700" letter-spacing="-6"
+        fill="#01214b">lig</text>
+  <text x="620" y="770" text-anchor="start"
+        font-family="'Helvetica Neue','Arial',sans-serif" font-size="190" font-weight="700" letter-spacing="-6"
+        fill="#01214b">rol</text>
+  <line x1="300" y1="930" x2="954" y2="930" stroke="#01214b" stroke-width="12" stroke-linecap="round"/>
+</svg>

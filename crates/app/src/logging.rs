@@ -1,4 +1,4 @@
-//! アプリのログ（`<データディレクトリ>/logs/thundoku.log`）。
+//! アプリのログ（`<データディレクトリ>/logs/ligrol.log`）。
 //!
 //! 出力先は**データディレクトリ配下**に固定する（issue #8）。レポート画面が同じ値を
 //! 表示して「ログの格納先を開く」で開くので、`log_dir` / `log_file` を唯一の決定箇所にする。
@@ -14,7 +14,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 /// ログファイル名。
-pub const LOG_FILE_NAME: &str = "thundoku.log";
+pub const LOG_FILE_NAME: &str = "ligrol.log";
 
 /// 起動時にこれを超えていたらログを捨てる（増え続けないように）。
 pub const MAX_LOG_BYTES: u64 = 4 * 1024 * 1024;
@@ -142,7 +142,7 @@ mod tests {
     /// テスト用のログファイル（プロセスとテスト名で分ける）。
     fn temp_log(tag: &str) -> PathBuf {
         std::env::temp_dir()
-            .join(format!("thundoku-log-test-{}-{tag}", std::process::id()))
+            .join(format!("ligrol-log-test-{}-{tag}", std::process::id()))
             .join(LOG_FILE_NAME)
     }
 
@@ -174,7 +174,7 @@ mod tests {
     /// ログの置き場所はデータディレクトリ配下（レポート画面も同じ値を使う）。
     #[test]
     fn log_paths_live_under_the_data_dir() {
-        let data_dir = Path::new("/tmp/thundoku-data");
+        let data_dir = Path::new("/tmp/ligrol-data");
         assert_eq!(log_dir(data_dir), data_dir.join("logs"));
         assert_eq!(
             log_file(data_dir),
@@ -261,7 +261,7 @@ mod tests {
 
         // 親ディレクトリが無いときは何もしない（panic フックで落ちない）
         let missing = std::env::temp_dir()
-            .join("thundoku-log-test-no-such-dir")
+            .join("ligrol-log-test-no-such-dir")
             .join("nested")
             .join(LOG_FILE_NAME);
         append_line(&missing, "PANIC: no dir");

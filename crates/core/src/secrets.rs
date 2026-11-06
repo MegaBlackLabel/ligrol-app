@@ -51,7 +51,7 @@ fn cache_remove(key: &str) {
         .remove(key);
 }
 
-pub const SERVICE: &str = "com.megablacklabel.thundoku-shelf";
+pub const SERVICE: &str = "com.megablacklabel.ligrol";
 pub const USER_TECHBOOKFEST: &str = "techbookfest";
 pub const USER_GOOGLE: &str = "google";
 /// 取得済み Google プロフィール（`sub` 等）の保存キー。
@@ -62,15 +62,15 @@ pub const USER_GOOGLE_PROFILE: &str = "google-profile";
 /// BOOTH（booth.pm）のセッション Cookie の保存キー。
 pub const USER_BOOTH: &str = "booth";
 /// `books.owner_sub` 暗号化用のローカル鍵（keyring）。
-pub const USER_DB_KEY: &str = "thundoku-shelf.db-key";
+pub const USER_DB_KEY: &str = "ligrol.db-key";
 /// ストアのセッション Cookie 暗号化用のローカル鍵（keyring）。
 /// `USER_DB_KEY` とは**別の鍵**にする（用途ごとに分離する）。
-pub const USER_SESSION_KEY: &str = "thundoku-shelf.session-key";
+pub const USER_SESSION_KEY: &str = "ligrol.session-key";
 /// pack のルート鍵（v3 = 方式 C の PRK）の keyring スロットの接頭辞。
 ///
-/// user 名は `thundoku-shelf.pack-root-key:<owner_id>`（`docs/spec/10-pack-keys.md`
+/// user 名は `ligrol.pack-root-key:<owner_id>`（`docs/spec/10-pack-keys.md`
 /// §3.1）。PRK は**アカウントごと**なので `owner_id` をスロットに含める。
-pub const PACK_ROOT_KEY_PREFIX: &str = "thundoku-shelf.pack-root-key:";
+pub const PACK_ROOT_KEY_PREFIX: &str = "ligrol.pack-root-key:";
 
 /// `owner_id` の pack ルート鍵スロット名（keyring の user 名）。
 pub fn pack_root_key_user(owner_id: &str) -> String {
@@ -324,6 +324,6 @@ mod tests {
         assert_ne!(pack_root_key_user(owner_a), USER_DB_KEY);
         assert_ne!(pack_root_key_user(owner_a), USER_SESSION_KEY);
         assert_ne!(pack_root_key_user(owner_a), pack_root_key_user(owner_b));
-        assert!(pack_root_key_user(owner_a).starts_with("thundoku-shelf.pack-root-key:"));
+        assert!(pack_root_key_user(owner_a).starts_with("ligrol.pack-root-key:"));
     }
 }

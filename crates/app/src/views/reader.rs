@@ -14,7 +14,7 @@ use gpui_kit::{
     ReadGlobal as _, Render, SharedString, Window, div,
 };
 use gpui_kit::{Focusable as _, Styled as _};
-use thundoku_core::db;
+use ligrol_core::db;
 
 use crate::app_state::AppState;
 use crate::components::image_viewer::{
@@ -721,9 +721,9 @@ impl ReaderView {
 /// 全エントリを復号 → 再圧縮して組み直すため、アプリからは背景 executor 経由で呼ぶ。
 /// テストが決定的に検証できるよう、I/O まで含めて関数として切り出している。
 fn rewrite_pack_content_name_sync(
-    db: &thundoku_core::db::SqlitePool,
+    db: &ligrol_core::db::SqlitePool,
     packs_dir: &std::path::Path,
-    root_key: Option<opfspack::PackRootKey>,
+    root_key: Option<nartik::PackRootKey>,
     book_id: &str,
     content_id: &str,
     display_name: &str,
@@ -733,7 +733,7 @@ fn rewrite_pack_content_name_sync(
     };
     let pack_id = book.pack_id.clone().unwrap_or_else(|| book.id.clone());
     // 保存領域の外を指す id（改変バックアップ由来）では読み書きしない。
-    let Ok(path) = thundoku_core::pack_path::pack_path(packs_dir, &pack_id) else {
+    let Ok(path) = ligrol_core::pack_path::pack_path(packs_dir, &pack_id) else {
         log::warn!("pack の名前書き換えをスキップ（不正な pack id）: {pack_id:?}");
         return;
     };
@@ -742,7 +742,7 @@ fn rewrite_pack_content_name_sync(
         return;
     };
     // 読み出しと同じ鍵（`PackPageLoader` と同じく book id から pack 鍵を導出）で復号する
-    match thundoku_core::import::rename_content_in_pack(
+    match ligrol_core::import::rename_content_in_pack(
         &bytes,
         book_id,
         content_id,
@@ -763,7 +763,7 @@ fn rewrite_pack_content_name_sync(
 ///
 /// フェーズ2以前に取り込んだ本は `book_contents` を持たないため、取り込み済み
 /// ドキュメントから 1 行だけ合成する（メニューは「アイコン + 一覧 ›」の同じ形）。
-fn load_content_entries(db: &thundoku_core::db::SqlitePool, book_id: &str) -> Vec<ContentEntry> {
+fn load_content_entries(db: &ligrol_core::db::SqlitePool, book_id: &str) -> Vec<ContentEntry> {
     let stored = db::contents::list_with_formats(db, book_id).unwrap_or_default();
     if !stored.is_empty() {
         return stored
@@ -868,8 +868,8 @@ impl Render for ReaderView {
 mod tests {
     use super::*;
     use gpui_kit::TestAppContext;
-    use thundoku_core::db::documents;
-    use thundoku_core::db::page_views;
+    use ligrol_core::db::documents;
+    use ligrol_core::db::page_views;
 
     /// 本を開いて綴じ方向を変えると、**その本だけ**に保存されること。
     ///
@@ -1233,7 +1233,7 @@ mod tests {
             purchase_date: None,
             file_name: file_name.to_string(),
             file_size: 10,
-            opfs_path: format!("{id}.opfspack"),
+            opfs_path: format!("{id}.nartik"),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -1558,7 +1558,7 @@ mod tests {
         seed_book_with_two_contents(cx, "b13");
         // 実 pack（metadata.json + ページ 1 枚）を置く
         let packs_dir = cx.update(|cx| crate::app_state::AppState::global(cx).packs_dir.clone());
-        let mut builder = opfspack::PackBuilder::new(1);
+        let mut builder = nartik::PackBuilder::new(1);
         builder.add_entry(
             "metadata.json",
             serde_json::to_vec(&serde_json::json!({
@@ -1581,7 +1581,7 @@ mod tests {
         );
         let pack = builder.build(None, false).unwrap();
         std::fs::create_dir_all(&packs_dir).unwrap();
-        std::fs::write(packs_dir.join("b13.opfspack"), &pack).unwrap();
+        std::fs::write(packs_dir.join("b13.nartik"), &pack).unwrap();
 
         let reader = cx.new(|cx| ReaderView::for_book(cx, "b13".to_string()));
         let viewer = reader.read_with(cx, |r, _| r.viewer.clone());
@@ -1602,8 +1602,8 @@ mod tests {
         });
 
         // pack の metadata.json も書き換わっている（Drive 復元で名前が戻らない）
-        let bytes = std::fs::read(packs_dir.join("b13.opfspack")).unwrap();
-        let reader = opfspack::PackReader::open(&bytes).unwrap();
+        let bytes = std::fs::read(packs_dir.join("b13.nartik")).unwrap();
+        let reader = nartik::PackReader::open(&bytes).unwrap();
         let meta: serde_json::Value =
             serde_json::from_slice(&reader.read_entry("metadata.json", None).unwrap()).unwrap();
         assert_eq!(meta["contents"][1]["displayName"], "続編");

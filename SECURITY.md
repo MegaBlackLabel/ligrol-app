@@ -13,7 +13,7 @@ English or Japanese）。
 **公開の Issue に書かないでください。** 未修正の脆弱性は、修正が出るまで公開されると利用者が
 危険にさらされます。
 
-1. GitHub の **[Private vulnerability reporting](https://github.com/MegaBlackLabel/thundoku-shelf-app/security/advisories/new)**
+1. GitHub の **[Private vulnerability reporting](https://github.com/MegaBlackLabel/ligrol-app/security/advisories/new)**
    （リポジトリの「Security」タブ →「Report a vulnerability」）から報告してください。内容は
    メンテナーだけが読めます
 2. うまく開けない場合は、「不具合」の Issue テンプレートで
@@ -24,7 +24,7 @@ English or Japanese）。
 
 - 影響を受けるバージョン（アプリの「このアプリについて」画面の下部に出ています）と OS
 - 何が起きるか（例: 端末の別ユーザーが本の中身を読める / 想定外の宛先へ通信する）
-- 再現手順（可能なら最小の手順。ログは `%TEMP%\thundoku-shelf\thundoku.log`）
+- 再現手順（可能なら最小の手順。ログは `%TEMP%\ligrol\ligrol.log`）
 - 分かるなら原因の当たり（ファイル名・関数名）
 
 **秘密情報（API キー・パスフレーズ・鍵・セッション Cookie・本の中身）は報告に貼らないでください。**
@@ -34,15 +34,15 @@ English or Japanese）。
 
 技術的な背景は `docs/spec/` にあります（特に `10-pack-keys.md` と `07-decisions.md`）。
 
-- 本のファイル（`.opfspack`）と DB のバックアップ（`thundoku-backup.json`）は、**アカウントごとに
+- 本のファイル（`.nartik`）と DB のバックアップ（`ligrol-backup.json`）は、**アカウントごとに
   作られる乱数の鍵**で暗号化します。鍵は端末の OS 資格情報ストア（Windows: 資格情報マネージャー /
-  macOS: キーチェーン）と、Google Drive の `thundoku-keys.json`（パスフレーズ /
+  macOS: キーチェーン）と、Google Drive の `ligrol-keys.json`（パスフレーズ /
   Google アカウントで解ける形にラップ）に保存します
 - **端末の OS アカウントを奪われた場合は守れません**（資格情報ストアの鍵が読まれます）。
 - Google ログインを使う構成（既定）では、**Drive のバックアップと `sub`（アカウント識別子）の
   両方を取得された相手は、パスフレーズが無くても鍵を解けます**。追加防御は設定の
-  「パスフレーズ必須」です（オンにすると `sub` で解ける形を `thundoku-keys.json` から削除します）
-- DB（`thundoku-shelf.db`）は全体を暗号化せず、**機密列だけ**を暗号化します（ページ本文・
+  「パスフレーズ必須」です（オンにすると `sub` で解ける形を `ligrol-keys.json` から削除します）
+- DB（`ligrol.db`）は全体を暗号化せず、**機密列だけ**を暗号化します（ページ本文・
   形態素解析・付箋メモ）。**ディスク暗号化（BitLocker / FileVault 等）と OS アカウントの分離を
   前提**にしています
 - ストア（技術書典 / BOOTH / FANZA同人 / DLsite）のセッション Cookie は OS 資格情報ストアの鍵で

@@ -8,31 +8,34 @@ use std::sync::atomic::AtomicBool;
 use gpui_kit::ReadGlobal as _;
 use gpui_kit::{App, AppContext as _, Bounds, Global, Point, Size, Window, WindowBounds, px};
 use parking_lot::Mutex;
-use thundoku_core::booth::BoothSession;
-use thundoku_core::db;
-use thundoku_core::dlsite::client::DlsiteSession;
-use thundoku_core::fantia::client::FantiaSession;
-use thundoku_core::fanza::client::FanzaSession;
-use thundoku_core::google::{GoogleClient, GoogleProfile};
-use thundoku_core::secrets::SecretStore;
-use thundoku_core::session_store::{PurgeMarker, SessionVault, StoreSession};
-use thundoku_core::tbf::{TbfClient, TbfSession};
+use ligrol_core::booth::BoothSession;
+use ligrol_core::db;
+use ligrol_core::dlsite::client::DlsiteSession;
+use ligrol_core::fantia::client::FantiaSession;
+use ligrol_core::fanza::client::FanzaSession;
+use ligrol_core::google::{GoogleClient, GoogleProfile};
+use ligrol_core::secrets::SecretStore;
+use ligrol_core::session_store::{PurgeMarker, SessionVault, StoreSession};
+use ligrol_core::tbf::{TbfClient, TbfSession};
 /// The Google OAuth client id (public info; embedded at build time from
-/// `THUNDOKU_GOOGLE_CLIENT_ID`). Web 版（thundoku-web）と同じクライアントを
-/// デフォルトとして使い、未設定でも Google ログインが動くようにする。
-pub const DEFAULT_GOOGLE_CLIENT_ID: &str = match option_env!("THUNDOKU_GOOGLE_CLIENT_ID") {
+/// `LIGROL_GOOGLE_CLIENT_ID`). GCP プロジェクト `ligrol-app` の
+/// **デスクトップ用**クライアント。`drive.file` の付与はプロジェクト単位なので、
+/// 同じプロジェクトの Web 用クライアントが作ったファイルも読める。
+pub const DEFAULT_GOOGLE_CLIENT_ID: &str = match option_env!("LIGROL_GOOGLE_CLIENT_ID") {
     Some(value) if !value.is_empty() => value,
-    _ => "1054619943130-2kaqpgnm719bp8l8rslm8rkuvdhb945s.apps.googleusercontent.com",
+    _ => "786418602386-r4ofkd1sr0j0ip4d7ps4unt5ldtfe63t.apps.googleusercontent.com",
 };
 
-/// Google OAuth client secret. デスクトップでは公開情報扱いで許容
-/// （Google が client_secret を要求する場合のため）。`THUNDOKU_GOOGLE_CLIENT_SECRET`
-/// 環境変数で上書き可能。デフォルトはクライアント
-/// `1054619943130-2kaqpgnm...` の secret（Downloads の client_secret JSON より）。
+/// Google OAuth client secret。
+///
+/// Google はインストール型アプリの client_secret を「非機密」として扱うが、
+/// リポジトリには置かない（GitHub の push protection がブロックする）。
+/// **ビルド時に `LIGROL_GOOGLE_CLIENT_SECRET` を渡す**（リリースは CI の secret から）。
+/// 未設定だとトークン交換ができないので、配布ビルドでは必ず設定すること。
 pub const DEFAULT_GOOGLE_CLIENT_SECRET: Option<&str> =
-    match option_env!("THUNDOKU_GOOGLE_CLIENT_SECRET") {
+    match option_env!("LIGROL_GOOGLE_CLIENT_SECRET") {
         Some(value) if !value.is_empty() => Some(value),
-        _ => Some("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"),
+        _ => None,
     };
 
 /// ログアウト時に削除できなかった資格情報の印に使うスロット名（Google）。
@@ -51,14 +54,14 @@ pub fn purge_marker(state: &AppState) -> PurgeMarker {
 /// ログイン・ログアウト（アカウントの切り替え）でそのストアの位置は捨てる。
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SyncCursors {
-    pub fanza: Option<thundoku_core::fanza::sync::PurchaseCursor>,
-    pub dlsite: Option<thundoku_core::dlsite::sync::PurchaseCursor>,
-    pub fantia: Option<thundoku_core::fantia::sync::PurchaseCursor>,
+    pub fanza: Option<ligrol_core::fanza::sync::PurchaseCursor>,
+    pub dlsite: Option<ligrol_core::dlsite::sync::PurchaseCursor>,
+    pub fantia: Option<ligrol_core::fantia::sync::PurchaseCursor>,
 }
 
 pub struct AppState {
     pub data_dir: PathBuf,
-    /// サンプル（デモ）モードか（`--demo` / `THUNDOKU_DEMO=1`。[`crate::demo::enabled`]）。
+    /// サンプル（デモ）モードか（`--demo` / `LIGROL_DEMO=1`。[`crate::demo::enabled`]）。
     ///
     /// 真のときは**メモリ DB + 一時ディレクトリ + メモリ keyring** で動き、本物のデータ
     /// ディレクトリには触らない。ネットワーク（同期・表紙取得・タグ取得）と危険操作
@@ -67,7 +70,7 @@ pub struct AppState {
     pub packs_dir: PathBuf,
     pub downloads_dir: PathBuf,
     /// sqlx の接続プール（migrations 適用済み）
-    pub db_pool: thundoku_core::db::SqlitePool,
+    pub db_pool: ligrol_core::db::SqlitePool,
     pub tbf: Arc<Mutex<TbfClient>>,
     pub google: Arc<Mutex<Option<GoogleClient>>>,
     pub secrets: SecretStore,
@@ -76,9 +79,9 @@ pub struct AppState {
     ///
     /// pack の復号は冊ごとに `root.derive_pack_key(book_id)` で導出する鍵を使う
     /// （仕様 `docs/spec/10-pack-keys.md` §2 / §6）。解決（keyring → Drive の
-    /// `thundoku-keys.json` → 必要ならパスフレーズ入力）は [`crate::pack_keys`] が行い、
+    /// `ligrol-keys.json` → 必要ならパスフレーズ入力）は [`crate::pack_keys`] が行い、
     /// ここは**解決済みの値**を読む側が取るための置き場。
-    pub pack_root_key: Arc<Mutex<Option<opfspack::PackRootKey>>>,
+    pub pack_root_key: Arc<Mutex<Option<nartik::PackRootKey>>>,
     /// パスフレーズの解錠ダイアログ（背景スレッド → UI）の受け渡し。
     ///
     /// `PackKeyStore` の prompt コールバックは同期なので、背景タスクが
@@ -247,7 +250,7 @@ impl Global for AppState {}
 fn data_settings_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("thundoku-shelf")
+        .join("ligrol")
         .join("settings.json")
 }
 
@@ -275,7 +278,7 @@ pub fn save_data_path(path: &std::path::Path) {
     );
 }
 
-/// データディレクトリを解決する（保存先の設定 → OS の `data_dir`/thundoku-shelf）。
+/// データディレクトリを解決する（保存先の設定 → OS の `data_dir`/ligrol）。
 ///
 /// **`main.rs` は AppState の初期化より先にこれを使う**（ログの出力先を決めるため。
 /// `AppState::init` も同じ値を使うので、保存先の解決はここ 1 箇所）。
@@ -286,7 +289,7 @@ pub fn save_data_path(path: &std::path::Path) {
 pub fn resolve_data_dir() -> PathBuf {
     let default = dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("thundoku-shelf");
+        .join("ligrol");
     match loaded_data_path() {
         Some(path) if path_is_under_temp(&path, &std::env::temp_dir()) => {
             log::warn!(
@@ -360,12 +363,12 @@ pub(crate) fn path_is_under_temp(path: &std::path::Path, temp_root: &std::path::
 /// （`books.owner_sub`）の判定に使う。起動直後に sub が無いと、Drive バックアップの
 /// 所有者フィルタを組めず、終了時のアップロードが丸ごとスキップされ、起動のたびに
 /// 「復元しますか」が出る（Drive 側は所有者で絞られた古いバックアップのため）。
-fn restore_google_profile(secrets: &SecretStore) -> Option<thundoku_core::google::GoogleProfile> {
-    let profile = thundoku_core::google::saved_profile(secrets);
+fn restore_google_profile(secrets: &SecretStore) -> Option<ligrol_core::google::GoogleProfile> {
+    let profile = ligrol_core::google::saved_profile(secrets);
     // `sub` はログに出さない（pack の master key の導出元 = 実質の復号秘密）。
     log::info!(
         "google profile: 起動時復元 = {}",
-        thundoku_core::google::profile_log_label(profile.as_ref())
+        ligrol_core::google::profile_log_label(profile.as_ref())
     );
     profile
 }
@@ -377,8 +380,8 @@ fn restore_google_profile(secrets: &SecretStore) -> Option<thundoku_core::google
 /// **48 分開いたデモでダウンロードが失敗**した（実測:
 /// `error returned from database: (code: 1) no such table: books`）。1 本を張りっぱなしに
 /// して作り直させない。
-fn in_memory_pool() -> thundoku_core::db::SqlitePool {
-    let pool = thundoku_core::db::block_on(async {
+fn in_memory_pool() -> ligrol_core::db::SqlitePool {
+    let pool = ligrol_core::db::block_on(async {
         let options = sqlx::sqlite::SqliteConnectOptions::new()
             .filename(":memory:")
             .foreign_keys(true)
@@ -392,7 +395,7 @@ fn in_memory_pool() -> thundoku_core::db::SqlitePool {
             .await
     })
     .expect("in-memory sqlx pool");
-    thundoku_core::db::migrate(&pool).expect("migrate");
+    ligrol_core::db::migrate(&pool).expect("migrate");
     pool
 }
 
@@ -408,7 +411,7 @@ impl AppState {
     pub fn init_with_data_dir(cx: &mut App, data_dir: PathBuf) {
         let packs_dir = data_dir.join("packs");
         let downloads_dir = data_dir.join("downloads");
-        let db_path = data_dir.join("thundoku-shelf.db");
+        let db_path = data_dir.join("ligrol.db");
         std::fs::create_dir_all(&packs_dir).expect("create packs dir");
         std::fs::create_dir_all(&downloads_dir).expect("create downloads dir");
 
@@ -457,7 +460,7 @@ impl AppState {
                     &secrets,
                     &db_pool,
                     StoreSession::Techbookfest,
-                    thundoku_core::secrets::USER_TECHBOOKFEST,
+                    ligrol_core::secrets::USER_TECHBOOKFEST,
                 )
             })
             .filter(TbfSession::is_logged_in);
@@ -484,8 +487,8 @@ impl AppState {
             log::warn!(
                 "google: 前回のログアウトで資格情報を削除できなかったため復元しません（再ログインが必要）"
             );
-            let token_delete = secrets.delete(thundoku_core::secrets::USER_GOOGLE);
-            let profile_deleted = thundoku_core::google::delete_saved_profile(&secrets);
+            let token_delete = secrets.delete(ligrol_core::secrets::USER_GOOGLE);
+            let profile_deleted = ligrol_core::google::delete_saved_profile(&secrets);
             clear_pending_logout(
                 &purge_marker,
                 GOOGLE_LOGOUT_SLOT,
@@ -503,12 +506,12 @@ impl AppState {
                 DEFAULT_GOOGLE_CLIENT_SECRET.map(String::from),
             ))
         };
-        let google_profile: Option<thundoku_core::google::GoogleProfile> =
+        let google_profile: Option<ligrol_core::google::GoogleProfile> =
             if let Some(client) = google.as_mut() {
                 // 前回のログアウトで消せなかった資格情報が残っている起動では、
                 // トークンもプロフィールも復元しない（`google_restorable` が false）。
                 if google_restorable {
-                    if let Ok(Some(json)) = secrets.load(thundoku_core::secrets::USER_GOOGLE)
+                    if let Ok(Some(json)) = secrets.load(ligrol_core::secrets::USER_GOOGLE)
                         && let Ok(tokens) = serde_json::from_str(&json)
                     {
                         client.restore_tokens(tokens);
@@ -621,13 +624,13 @@ impl AppState {
         });
         // Zenn タグを起動時に 1 回だけ取得する（取り込み時のネットワーク待ちをなくす）
         std::thread::spawn(|| {
-            let _ = thundoku_core::tags::fetch_zenn_tags();
+            let _ = ligrol_core::tags::fetch_zenn_tags();
         });
     }
 
     /// Test-only initialization: in-memory DB, no keyring.
     pub fn init_test(cx: &mut App) {
-        Self::init_in_memory(cx, std::env::temp_dir().join("thundoku-shelf-test"), false);
+        Self::init_in_memory(cx, std::env::temp_dir().join("ligrol-test"), false);
     }
 
     /// サンプル（デモ）モードで起動する: メモリ DB + 一時ディレクトリ + メモリ keyring。
@@ -753,7 +756,7 @@ impl AppState {
     /// 読む側（リーダー・付箋のサムネイルなど）はここから取り、冊ごとの pack 鍵を
     /// `root.derive_pack_key(book_id)` で導出する。解決（ログイン後の復元・
     /// パスフレーズ入力）は [`crate::pack_keys`] が背景で行う。
-    pub fn pack_root_key(&self) -> Option<opfspack::PackRootKey> {
+    pub fn pack_root_key(&self) -> Option<nartik::PackRootKey> {
         self.pack_root_key.lock().clone()
     }
 }
@@ -773,9 +776,9 @@ pub fn default_client_id() -> String {
 /// 叩かないと取れないため、保存しておかないと次回起動で「誰の本か」が分からず、
 /// Drive バックアップのアップロードが丸ごとスキップされる。
 pub fn store_google_profile_secret(
-    profile: &thundoku_core::google::GoogleProfile,
+    profile: &ligrol_core::google::GoogleProfile,
 ) -> Result<(), String> {
-    thundoku_core::google::save_profile(&SecretStore::new(), profile).map_err(|error| {
+    ligrol_core::google::save_profile(&SecretStore::new(), profile).map_err(|error| {
         log::error!("google profile save failed: {error}");
         "プロフィールを保存できませんでした（資格情報ストアを確認してください）".to_string()
     })
@@ -784,12 +787,12 @@ pub fn store_google_profile_secret(
 /// `owner_token` の実体。バックグラウンドタスクから `AppState` 全体を持たずに
 /// 呼べるよう、プロフィールと鍵だけを受け取る。
 pub fn owner_token_from(
-    profile: Option<&thundoku_core::google::GoogleProfile>,
+    profile: Option<&ligrol_core::google::GoogleProfile>,
     secrets: &SecretStore,
 ) -> Option<String> {
     let sub = profile.map(|profile| profile.sub.as_str())?;
     let key = secrets.db_key().ok()?;
-    Some(thundoku_core::owner::encrypt(&key, sub))
+    Some(ligrol_core::owner::encrypt(&key, sub))
 }
 
 /// 現在の Google アカウントの所有者トークン（keyring の DB 鍵で暗号化した `sub`）。
@@ -805,9 +808,9 @@ pub fn owner_token(state: &AppState) -> Option<String> {
 /// メモリ上のプロフィールを更新する（keyring への保存が済んだ後に呼ぶ）。
 ///
 /// ログに `sub` を出さない: pack の master key は `sub` から導出されるため、
-/// `sub` は実質の復号秘密であり、ログ（Windows は `%TEMP%/thundoku-shelf/thundoku.log`
+/// `sub` は実質の復号秘密であり、ログ（Windows は `%TEMP%/ligrol/ligrol.log`
 /// に既定 debug レベルで残る）へ書くと pack を取得した第三者に復号材料を渡すことになる。
-pub fn set_google_profile(cx: &App, profile: &thundoku_core::google::GoogleProfile) {
+pub fn set_google_profile(cx: &App, profile: &ligrol_core::google::GoogleProfile) {
     let state = AppState::global(cx);
     // アカウントが変わったら解決済みの pack ルート鍵は捨てる（鍵はアカウントごと — 仕様 §2）。
     // 別アカウントの pack を前のアカウントの鍵で復号しようとしない。
@@ -830,7 +833,7 @@ pub fn set_google_profile(cx: &App, profile: &thundoku_core::google::GoogleProfi
 /// keyring の応答待ちで固まりうる（許可ダイアログ等）。保存に失敗してもメモリ上の
 /// 状態は更新する: ログイン自体は成功しており、保存できなかったのは「次回起動で
 /// 所有者を特定するための控え」だけなので、今のセッションを未ログイン扱いにはしない。
-pub fn save_google_profile(cx: &App, profile: &thundoku_core::google::GoogleProfile) {
+pub fn save_google_profile(cx: &App, profile: &ligrol_core::google::GoogleProfile) {
     if let Err(error) = store_google_profile_secret(profile) {
         log::warn!("google profile: 保存に失敗（次回起動で sub を復元できない）: {error}");
     }
@@ -884,8 +887,8 @@ pub fn handle_google_auth_expiry(message: &str, cx: &mut App) -> bool {
     // プロフィールの控えも消す（古い sub で所有者判定を続けない）。
     let store = state.secrets.clone();
     cx.background_spawn(async move {
-        let _ = store.delete(thundoku_core::secrets::USER_GOOGLE);
-        let _ = thundoku_core::google::delete_saved_profile(&store);
+        let _ = store.delete(ligrol_core::secrets::USER_GOOGLE);
+        let _ = ligrol_core::google::delete_saved_profile(&store);
     })
     .detach();
     true
@@ -1047,7 +1050,7 @@ pub fn clear_tbf_session(cx: &App) -> Result<(), String> {
     // keyring 側だけ消せなかった場合も印を残し、次回起動では復元しない（＝再ログイン）。
     let keyring = state
         .secrets
-        .delete(thundoku_core::secrets::USER_TECHBOOKFEST);
+        .delete(ligrol_core::secrets::USER_TECHBOOKFEST);
     if let Err(error) = &keyring {
         log::warn!("tbf session: keyring の残骸を削除できません: {error}");
         if purged.is_ok()
@@ -1239,7 +1242,7 @@ pub fn load_window_bounds(cx: &App) -> Option<WindowBounds> {
 fn clear_pending_logout(
     marker: &PurgeMarker,
     slot: &str,
-    token_delete: Result<(), thundoku_core::secrets::SecretError>,
+    token_delete: Result<(), ligrol_core::secrets::SecretError>,
     profile_deleted: bool,
 ) -> bool {
     if !marker.is_pending(slot) {
@@ -1272,19 +1275,19 @@ mod tests {
             "temp 直下を一時と判定していない"
         );
         assert!(
-            path_is_under_temp(&root.join("thundoku-shelf-demo-move-test"), &root),
+            path_is_under_temp(&root.join("ligrol-demo-move-test"), &root),
             "temp の子を一時と判定していない"
         );
         // 名前が前方一致するだけの兄弟は一時ではない（区切りまで見る）
         assert!(
-            !path_is_under_temp(&root.with_file_name("Temp2").join("thundoku-shelf"), &root),
+            !path_is_under_temp(&root.with_file_name("Temp2").join("ligrol"), &root),
             "前方一致するだけの別ディレクトリを一時と誤判定している"
         );
         // 通常のデータディレクトリは一時ではない
         let normal = if cfg!(windows) {
-            PathBuf::from("C:/Users/x/AppData/Roaming/thundoku-shelf")
+            PathBuf::from("C:/Users/x/AppData/Roaming/ligrol")
         } else {
-            PathBuf::from("/home/x/.local/share/thundoku-shelf")
+            PathBuf::from("/home/x/.local/share/ligrol")
         };
         assert!(!path_is_under_temp(&normal, &root));
     }
@@ -1317,7 +1320,7 @@ mod tests {
     /// core 側の文言が変わったらこのテストが落ちる（＝気づける）ようにしておく。
     #[test]
     fn detects_google_token_expiry_from_core_messages() {
-        use thundoku_core::google::GoogleError;
+        use ligrol_core::google::GoogleError;
 
         assert!(is_google_auth_expired(
             &GoogleError::RefreshTokenRevoked.to_string()
@@ -1350,7 +1353,7 @@ mod tests {
 
         let handled = cx.update(|cx| {
             handle_google_auth_expiry(
-                &thundoku_core::google::GoogleError::RefreshTokenRevoked.to_string(),
+                &ligrol_core::google::GoogleError::RefreshTokenRevoked.to_string(),
                 cx,
             )
         });
@@ -1380,13 +1383,13 @@ mod tests {
     /// （セキュリティ評価 F04）。fail-closed に倒す。
     #[test]
     fn pending_logout_is_cleared_only_after_the_credentials_are_deleted() {
-        let dir = std::env::temp_dir().join("thundoku-shelf-test/pending-logout");
+        let dir = std::env::temp_dir().join("ligrol-test/pending-logout");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("テンポラリを作れる");
         let marker = PurgeMarker::new(&dir);
         marker.mark(GOOGLE_LOGOUT_SLOT).expect("印を付けられる");
         let failed = || {
-            Err(thundoku_core::secrets::SecretError::Keyring(
+            Err(ligrol_core::secrets::SecretError::Keyring(
                 "locked".into(),
             ))
         };
@@ -1438,7 +1441,7 @@ mod tests {
 
     /// テスト用のデータディレクトリ（テストごとに作り直す）。
     fn temp_data_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("thundoku-shelf-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("ligrol-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -1578,8 +1581,8 @@ mod tests {
         });
     }
 
-    fn google_profile() -> thundoku_core::google::GoogleProfile {
-        thundoku_core::google::GoogleProfile {
+    fn google_profile() -> ligrol_core::google::GoogleProfile {
+        ligrol_core::google::GoogleProfile {
             sub: "sub-1".to_string(),
             email: "user@example.com".to_string(),
             name: "ユーザー".to_string(),
@@ -1598,15 +1601,15 @@ mod tests {
     ) {
         // 同じプロフィールスロットを触る既存テストと直列化する（`lock_profile_slot`）
         let _slot = lock_profile_slot();
-        thundoku_core::secrets::SecretStore::use_memory_backend();
+        ligrol_core::secrets::SecretStore::use_memory_backend();
         cx.update(gpui_kit::component::init);
-        let data_dir = std::env::temp_dir().join("thundoku-shelf-test/pending-logout-startup");
+        let data_dir = std::env::temp_dir().join("ligrol-test/pending-logout-startup");
         let _ = std::fs::remove_dir_all(&data_dir);
         cx.update(|cx| AppState::init_with_data_dir(cx, data_dir.clone()));
         // ログイン済みの状態（プロフィールが keyring に保存されている）を作る
         cx.update(|cx| {
             let state = AppState::global(cx);
-            thundoku_core::google::save_profile(&state.secrets, &google_profile())
+            ligrol_core::google::save_profile(&state.secrets, &google_profile())
                 .expect("プロフィールを保存できる");
         });
 
@@ -1629,7 +1632,7 @@ mod tests {
         });
 
         cx.update(|cx| {
-            let _ = thundoku_core::google::delete_saved_profile(&AppState::global(cx).secrets);
+            let _ = ligrol_core::google::delete_saved_profile(&AppState::global(cx).secrets);
         });
         let _ = std::fs::remove_dir_all(&data_dir);
     }
@@ -1645,20 +1648,20 @@ mod tests {
         // keyring のプロフィールスロットはプロセス内で共有される（`lock_profile_slot` で
         // 直列化。同じスロットを触るテスト: `startup_with_a_pending_logout_marker_...`）
         let _slot = lock_profile_slot();
-        thundoku_core::secrets::SecretStore::use_memory_backend();
+        ligrol_core::secrets::SecretStore::use_memory_backend();
         cx.update(gpui_kit::component::init);
-        let data_dir = std::env::temp_dir().join("thundoku-shelf-test/google-profile-startup");
+        let data_dir = std::env::temp_dir().join("ligrol-test/google-profile-startup");
         let _ = std::fs::remove_dir_all(&data_dir);
         cx.update(|cx| AppState::init_with_data_dir(cx, data_dir.clone()));
         cx.update(|cx| {
             let state = AppState::global(cx);
-            let _ = thundoku_core::google::delete_saved_profile(&state.secrets);
+            let _ = ligrol_core::google::delete_saved_profile(&state.secrets);
             assert!(
                 state.google_profile.lock().is_none(),
                 "保存前はプロフィールを持たない"
             );
             // プロフィール取得時（ログイン完了・設定画面を開いたとき）に保存される
-            thundoku_core::google::save_profile(&state.secrets, &google_profile())
+            ligrol_core::google::save_profile(&state.secrets, &google_profile())
                 .expect("保存できる");
         });
 
@@ -1680,7 +1683,7 @@ mod tests {
 
         // メモリバックエンドはプロセス内で共有されるため後始末する
         cx.update(|cx| {
-            let _ = thundoku_core::google::delete_saved_profile(&AppState::global(cx).secrets);
+            let _ = ligrol_core::google::delete_saved_profile(&AppState::global(cx).secrets);
         });
         let _ = std::fs::remove_dir_all(&data_dir);
     }
@@ -1711,7 +1714,7 @@ mod tests {
         );
         // マイグレーション済み（テーブルがある）
         assert!(
-            thundoku_core::db::books::list(&pool).is_ok(),
+            ligrol_core::db::books::list(&pool).is_ok(),
             "テーブルが無い（マイグレーションされていない）"
         );
     }
@@ -1757,7 +1760,7 @@ mod tests {
             // 本棚は全冊入り、ローカル本（ダウンロード済み）は未ダウンロードの 12 冊を除く。
             // 未ダウンロードの本は本棚と表紙だけを持つ（ダミーのダウンロードで取り込める）。
             assert_eq!(
-                db::bookshelf::list(&state.db_pool, thundoku_core::tbf::SITE_ID_TECHBOOKFEST)
+                db::bookshelf::list(&state.db_pool, ligrol_core::tbf::SITE_ID_TECHBOOKFEST)
                     .unwrap()
                     .len(),
                 crate::demo::BOOKS.len(),

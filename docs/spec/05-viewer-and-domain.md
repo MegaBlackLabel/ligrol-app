@@ -160,7 +160,7 @@
 
 | 実装 | 供給元 | ページ数 | 寸法 | 備考 | アンカー |
 |---|---|---|---|---|---|
-| `PackPageLoader` | `.opfspack`（`document_images.pack_entry_path`） | `images.len()` | `(image.width, image.height)` | `book_id_of()` は `documents::get_document(document_id).book_id`（解決できなければ空文字） | `crates/app/src/components/image_viewer/mod.rs:145-156`、`crates/app/src/components/image_viewer/mod.rs:158-203`、`crates/app/src/components/image_viewer/mod.rs:205-211` |
+| `PackPageLoader` | `.nartik`（`document_images.pack_entry_path`） | `images.len()` | `(image.width, image.height)` | `book_id_of()` は `documents::get_document(document_id).book_id`（解決できなければ空文字） | `crates/app/src/components/image_viewer/mod.rs:145-156`、`crates/app/src/components/image_viewer/mod.rs:158-203`、`crates/app/src/components/image_viewer/mod.rs:205-211` |
 | `Base64PageLoader` | メモリ上の base64（技術書典 試し読み `pages: Vec<(String, u32, u32)>`） | `pages.len()` | 各行の `(w, h)` | `base64::engine::general_purpose::STANDARD` でデコード | `crates/app/src/components/image_viewer/mod.rs:214-236` |
 
 - デコード: webp（`data.get(8..12) == Some(b"WEBP")`）は **libwebp で直接 RGBA デコード**（`WebPGetInfo` → `WebPDecodeRGBA` → `WebPFree`）。その他は `image::load_from_memory` → `to_rgba8()`。理由コメント: image クレートの webp デコーダーは 1000px で 1 秒超（実測）（`crates/app/src/components/image_viewer/mod.rs:268-300`）。
@@ -405,10 +405,10 @@ ON CONFLICT(book_id, content_id, page_number) DO UPDATE SET
 | 読み（`reading`） | `details[7]`。`"*"` なら空文字 | `crates/core/src/tags.rs:47-52` |
 | 頻度集計 | 語 = `base_form`（空なら表層形）。`excluded` に完全一致する語と 20 文字超を除外し、`HashMap<String, usize>` に加算 | `crates/core/src/tags.rs:64-82` |
 | 並び | `sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)))` = **頻度降順 → 語の昇順** | `crates/core/src/tags.rs:84-87`、`crates/core/src/tags.rs:158-160` |
-| Zenn 取得 | プロセス内 1 回キャッシュ（`static CACHE: Mutex<Option<Vec<String>>>`）。ureq Agent: `timeout_connect = 5s`, `timeout_read = 10s`、`User-Agent: thundoku-shelf/0.1`。HTTP ステータス ≠ 200 / JSON 配列が空なら `Err(ZennError)` | `crates/core/src/tags.rs:93-145` |
+| Zenn 取得 | プロセス内 1 回キャッシュ（`static CACHE: Mutex<Option<Vec<String>>>`）。ureq Agent: `timeout_connect = 5s`, `timeout_read = 10s`、`User-Agent: ligrol/0.1`。HTTP ステータス ≠ 200 / JSON 配列が空なら `Err(ZennError)` | `crates/core/src/tags.rs:93-145` |
 | Zenn タグ抽出 | 配列要素の `name`、無ければ `id` を文字列として集める | `crates/core/src/tags.rs:122-136` |
 | `generate_tags` | 全ページの `extract_nouns` を合算 → 頻度順にソート → `zenn_tags` が非空なら **Zenn に含まれる語だけに絞る** → `.take(MAX_TAGS)` = 最大 10 件 | `crates/core/src/tags.rs:148-166` |
-| 起動時の先読み | アプリ起動時に `std::thread::spawn(|| { let _ = thundoku_core::tags::fetch_zenn_tags(); })` | `crates/app/src/app_state.rs:260-262` |
+| 起動時の先読み | アプリ起動時に `std::thread::spawn(|| { let _ = ligrol_core::tags::fetch_zenn_tags(); })` | `crates/app/src/app_state.rs:260-262` |
 | 取り込み時の除外語 | `extract_nouns(text, &[&title])`（タイトルそのものを除外）、生成タグの除外語も `&[&title]` | `crates/core/src/import/mod.rs:1117-1118`、`crates/core/src/import/mod.rs:1141` |
 | トークン行の保存 | `token_analysis` に `pos = "名詞"`, `base_form = Some(word)`, `reading = None`, `frequency = count as i64` | `crates/core/src/import/mod.rs:1117-1132` |
 

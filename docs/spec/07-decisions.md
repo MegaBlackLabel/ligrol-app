@@ -18,7 +18,7 @@
 
 | 決定 | 理由 | 代替案/却下理由 |
 |---|---|---|
-| **1 冊 = 1 ファイルの自前形式 `.opfspack`** | 配布物（ZIP/PDF/画像）を 1 つにまとめ、コピー・バックアップ・別 PC 移行を単純化する | 元の ZIP をそのまま置く案は、複数コンテンツ・レンディションの表現が崩れる |
+| **1 冊 = 1 ファイルの自前形式 `.nartik`** | 配布物（ZIP/PDF/画像）を 1 つにまとめ、コピー・バックアップ・別 PC 移行を単純化する | 元の ZIP をそのまま置く案は、複数コンテンツ・レンディションの表現が崩れる |
 | **コンテンツ（作品）とレンディション（形式）を分離**（`content_id` / `format_id` / `document_id`） | 同じ作品の「PDF 版」「画像版」を別物として保持し、ビューアーで切り替えられるようにする | 1 作品 1 形式に潰す案は、同梱 ZIP の片方を失う |
 | **DB は SQLite（WAL）** | 端末ローカル・単一プロセス・バックアップが単純 | |
 | **`CREATE TABLE IF NOT EXISTS` + `ALTER TABLE` による冪等な後方互換** | 起動時に毎回実行しても安全で、既存ユーザーの DB を壊さない（マイグレーションファイルを増やさない方針） | 逐次マイグレーションは配布チャネルが無いデスクトップアプリでは運用が重い |
@@ -45,10 +45,10 @@
 | プレースホルダの文字が描画されず、ログに `usvg::text: No match for 'sans-serif' font-family.` が溢れる | `usvg::Options::default()` のフォントDBが**空**（システムフォントは自動で読み込まれない）。解決に失敗すると usvg は警告したうえで**その span を描画しない** | **修正済み**: `svg_options()`（`LazyLock`）が起動時に一度だけ `fontdb_mut().load_system_fonts()` を呼び、`sans-serif` を読み込めたファミリ（CJK 対応を優先。無ければ先頭）へ `set_sans_serif_family` で向け直す。`usvg` の `text` / `system-fonts` / `memmap-fonts` は `crates/app/Cargo.toml` で明示。回帰テスト `rasterize_svg_draws_text_glyphs` |
 | 履歴の表紙が日ごとに再デコード | 同じ本が複数の日に出る | `reload` 内で `book_id` ごとに**1 回だけデコードして共有** |
 | 通知の自動消滅時間のコメントが「3 秒」 | 実装は gpui-kit の既定 **5 秒** | **修正済み**: コード内コメント（`app_state.rs` / `settings.rs` / `workspace.rs`）を実装に合わせて「既定 5 秒」に統一した |
-| pack の `entry_count` で **377 GB の確保**を試みてプロセスが異常終了（`memory allocation of 377957121960 bytes failed` → `STATUS_STACK_BUFFER_OVERRUN`） | `entry_count` を index 長と突き合わせずに `Vec::with_capacity` に渡していた。ヘッダ CRC は攻撃者も計算できるため、68 バイトの細工データで再現する | **修正済み**: index 長から導ける件数上限（1 エントリ ≧ 48 バイト）を確保の前に検査（`crates/opfspack/src/reader.rs`）。回帰テスト `crates/opfspack/tests/hardening.rs` |
+| pack の `entry_count` で **377 GB の確保**を試みてプロセスが異常終了（`memory allocation of 377957121960 bytes failed` → `STATUS_STACK_BUFFER_OVERRUN`） | `entry_count` を index 長と突き合わせずに `Vec::with_capacity` に渡していた。ヘッダ CRC は攻撃者も計算できるため、68 バイトの細工データで再現する | **修正済み**: index 長から導ける件数上限（1 エントリ ≧ 48 バイト）を確保の前に検査（`crates/nartik/src/reader.rs`）。回帰テスト `crates/nartik/tests/hardening.rs` |
 | 保存済み `download_url` / 302 の `Location` を外部ホストへ向けると**セッション Cookie が送られる** | 送信先の検証が無かった。`download_url` は Drive の JSON バックアップから復元でき、改変バックアップの復元で攻撃が成立する | **修正済み**: `download_url::check` を追加し、認証付き送信の直前と 302 の転送先で `https` + 許可ホスト（Cookie のスコープに合わせる）を検証（`crates/core/src/download_url.rs`）。回帰テスト `crates/core/tests/download_credentials.rs` |
 | Windows で**作業ディレクトリの `pdfium.dll` を優先ロード** | `library_candidates()` の先頭が `./`（テスト用のつもりが製品コードにも残っていた）。CWD を用意して起動させられると任意 DLL を読む（DLL 配置攻撃） | **修正済み**: CWD の候補を削除し、開発時の探索はビルド時 `CARGO_MANIFEST_DIR` の絶対パスに限定（`crates/core/src/import/pdf.rs`） |
-| 改変バックアップの `books.id` / `pack_id` で**保存領域の外**の pack を読み書き・削除できる | 復元した id を検証せず `packs_dir.join("{id}.opfspack")` へ渡していた | **修正済み**: `pack_path` モジュールに検証を集約し、復元時は不正 id を拒否、pack を触る全経路で同じ検証を通す（`crates/core/src/pack_path.rs`） |
+| 改変バックアップの `books.id` / `pack_id` で**保存領域の外**の pack を読み書き・削除できる | 復元した id を検証せず `packs_dir.join("{id}.nartik")` へ渡していた | **修正済み**: `pack_path` モジュールに検証を集約し、復元時は不正 id を拒否、pack を触る全経路で同じ検証を通す（`crates/core/src/pack_path.rs`） |
 | **ストアのログインを開くとアプリが落ちる**（`RefCell already borrowed` → `panic in a function that cannot unwind` で abort） | WebView2 の生成（`WebViewBuilder::build`）と Cookie 取得（`cookies_for_url`）が内部で `webview2_com::wait_with_pump` を呼び、**メッセージループを回す**。gpui はメッセージ処理のたびに保留中の foreground タスクを実行するため、App を借用したまま呼ぶと、その間に走った定期タスクの `handle.update` が `app_mut` の `borrow_mut` で panic する（実測: DLsite のログインを開いた瞬間に `Workspace::start_login_done_watcher` が衝突） | **修正済み**: `crates/app/src/app_state.rs` の `WebviewPumpGuard` / `webview_pumping()`（static。判定で借用を取ると本末転倒なので AppState ではない）で WebView2 を触る区間を示し、定期タスク（Workspace のログイン監視・4 ストアのログイン監視・本棚の同期/進捗ポーリング・ビューアーのフレームループ）は 0 でなければ 1 tick 待つ。**残るリスク**: WebView2 の呼び出し中に**単発**のタスクが待っている場合は依然として衝突し得る（恒久策は生成を借用の外＝タスク本体へ出すこと。未着手） |
 | **「アップロードして終了」が 1 件も送らずに終了する**（利用者は気づけない。2026-09-30 実測） | 終了処理が best-effort で、失敗を `log::error!` に出すだけで画面には何も出さずに終了していた。実測では Google のリフレッシュトークンが失効（`invalid_grant`）し、`access_token()` の時点で失敗して**同期エンジンに入る前**に落ちていた（ログ: `exit upload failed: refresh token expired or revoked: re-authorize required`） | **修正済み**: 失敗したら**終了を中断**し、進行中の（消えない）通知をエラー通知で置き換えて `exit_checked` を false に戻す（次の終了で再確認できる）。トークン失効なら `crate::app_state::handle_google_auth_expiry`（設定の同期と共通）でトークンを捨てる（**この経路からは認証モーダルを開かない** = 下の行の事故）。回帰テスト `crates/app/src/workspace.rs`（`exit_upload_failure_keeps_the_app_open_and_shows_the_error`）/ `crates/app/src/app_state.rs`（`auth_expiry_clears_the_saved_credentials`） |
 | **Google ログインのモーダルを開いた瞬間にアプリが落ちる**（`RefCell already borrowed`。2026-09-30 実測） | 終了時アップロードの失敗から認証モーダルを自動で開いていた。モーダルの生成は**描画中**で、そこから `ShellExecuteW`（既定ブラウザを開く）を呼ぶとメッセージポンプが回り、保留中のタスクが再入して App を二重借用する（ログ: `deferring re-entrant draw` ×6 の直後に `async_context.rs:65` で panic） | **修正済み**: ① 終了処理の中では認証モーダルを開かない（通知の文言でアカウントメニューからのログインを促す。`crates/app/src/workspace.rs` / `crates/app/src/app_state.rs` の `open_google_login` を分離）、② ブラウザを開く呼び出しをバックグラウンドへ移した（`crates/app/src/views/google_login.rs`）。**残るリスク**: 描画中にメッセージポンプを回す呼び出しは WebView2 以外にもあり得る（`WebviewPumpGuard` と同じ族。`open_browser` は上記②で回避） |
@@ -79,7 +79,7 @@
 | Drive のフォルダ | **既知の制約**: 実装は単一キー `drive.sync.folder_id`（アカウント別ではない）。データ本体は `owner_sub` で属性付けされるため混ざらないが、フォルダは分かれない |
 | 未読フィルタ | **修正済み**: `ReadFilter::Unread` は未ダウンロード本も未読として通す（カードのバッジ・サイドバーの未読バッジと同じ `ReadingState::Unread` を既定にする） |
 | 履歴一覧 | **修正済み**: 本棚と同じ `gpui_kit::list` + `ListState` で行単位に仮想化（日付バー + カード/リストの行。可視行のみ構築。列数の変化で組み直し） |
-| パスフレーズの位置づけ | **仕様として明記**（セキュリティ評価 F01）: パスフレーズは「Google に依存しない**復元手段**」で、Drive アカウント侵害への追加防御にはならない（`thundoku-keys.json` に `sub` ラップが併存するため、bundle + `sub` が漏れればパスフレーズ無しで解ける）。`sub` ラップを消す「パスフレーズ必須モード」は未実装（`docs/spec/10-pack-keys.md` §1.2 / §9） |
+| パスフレーズの位置づけ | **仕様として明記**（セキュリティ評価 F01）: パスフレーズは「Google に依存しない**復元手段**」で、Drive アカウント侵害への追加防御にはならない（`ligrol-keys.json` に `sub` ラップが併存するため、bundle + `sub` が漏れればパスフレーズ無しで解ける）。`sub` ラップを消す「パスフレーズ必須モード」は未実装（`docs/spec/10-pack-keys.md` §1.2 / §9） |
 | ローカル DB の暗号化範囲 | **DB 全体は暗号化しないが、機密列だけは暗号化する**（2026-09-26 / セキュリティ評価 F02）。`document_text.text_content` / `token_analysis` の `token`・`pos`・`base_form`・`reading` / `page_notes.memo` は、keyring の DB 鍵（`books.owner_sub` と同じ鍵）で AES-256-GCM にした `enc:v1:...` として保存する（`crates/core/src/db/column_crypto.rs`。保存形式は `docs/spec/02-data-model.md` §1.11）。SQLCipher 等での DB 全体の暗号化はしない（重い・読み書き経路の総取り替えになる）。**書誌・進捗・履歴などの他の列は平文のまま**で、ディスク暗号化（BitLocker / FileVault 等）と OS アカウント分離を前提にする |
 | 未ログインの取り込み | **修正済み（fail-closed）**（2026-09-26 / セキュリティ評価 F03）: 未ログインでは取り込まず `ImportError::LoginRequired` で失敗させる。`pack_root_key_for_import` / `import_root_key` は `Result<PackRootKey, _>` を返し、**平文 pack を作る経路が型として無い**（`crates/core/src/import/mod.rs:248`）。UI はダウンロードを**始める前**に案内して Google の認証モーダルを開き（`require_import_login`）、お気に入りの自動ダウンロードは利用者が要求した操作ではないので案内だけ出して見送る。**取り込み済みの本の閲覧にログインは要らない**（暗号化 pack は鍵が要る = 従来どおり） |
 | 機密列の鍵を失ったとき | **既知の制約**: 上記の列は**端末の keyring の鍵**で暗号化するので、鍵を消した端末では復号できない（付箋メモは空として表示。付箋の ON / OFF・ページ・見開き側は残る。`books.owner_sub` は所有者不一致で非表示）。ただし **Drive のバックアップ（v3）はユーザーデータ（`owner_sub` / `page_notes.memo`）を平文で運び、取り込む端末の鍵で暗号化し直す**ので、**別端末への復元ではメモ・所有者も戻る**（2026-09-29。`docs/spec/06-sync-auth-drive.md` §3.4 / `docs/spec/10-pack-keys.md` §11.3）。戻らないのは v2 の控え（暗号文のまま運ぶ）や PRK を失った場合 |
@@ -157,7 +157,7 @@
 
 | 決定 | 理由 |
 |---|---|
-| 切替は起動フラグ `--demo` / `THUNDOKU_DEMO=1`（判定は純関数 `demo::enabled`） | ビルドを分けず、同じバイナリで切り替える。配布物を増やさずに済む |
+| 切替は起動フラグ `--demo` / `LIGROL_DEMO=1`（判定は純関数 `demo::enabled`） | ビルドを分けず、同じバイナリで切り替える。配布物を増やさずに済む |
 | データは**メモリ DB（`:memory:`）+ 一時ディレクトリ + メモリ keyring のみ**。`resolve_data_dir()` の下には書かない | 実在の購入履歴・書籍ファイル・鍵を晒さず、通常のデータディレクトリを汚さない。デモを見せた端末にサンプルが残らない |
 | **ネットワークに出ない**（ストア同期 / 表紙のリモート取得 / タグ取得 / Drive の復元・保存確認 / 終了時アップロードをすべて止める） | 実在のアカウント・購入履歴に触れない。サンプルは固定データと SVG 生成だけで完結する。危険操作（ログアウト / Drive 削除 / 全データ削除）も早期 return |
 | 表紙・ページ画像は **SVG をラスタライズして生成**し、既存の表紙キャッシュ経路へ書き出す | 実在の画像を同梱せずに済み、UI に demo 分岐を足さず既存の読み込みがそのまま拾う |

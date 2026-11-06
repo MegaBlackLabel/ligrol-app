@@ -10,14 +10,14 @@ use gpui_kit::{
     Render, StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
 use gpui_webview::WebView;
-use thundoku_core::tbf::TbfSession;
+use ligrol_core::tbf::TbfSession;
 
 /// セッション Cookie を集める起点（技術書典は単一ホスト）。
 const SESSION_ORIGIN: &str = "https://techbookfest.org";
 
 /// 収集元ホスト（`CollectedCookies` のキー）。定義は core と共有する
 /// （ダウンロードで資格情報を付ける先の判定と同じ値を使う）。
-const SESSION_HOST: &str = thundoku_core::tbf::SITE_HOST;
+const SESSION_HOST: &str = ligrol_core::tbf::SITE_HOST;
 
 /// ログイン完了イベント（セッション Cookie を取得して永続化した後に発行）。
 pub struct TbfLoginDone;

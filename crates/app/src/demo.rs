@@ -1,6 +1,6 @@
 //! サンプル（デモ）モード: 実在の本を出さずに全画面を見せるための固定データ。
 //!
-//! `--demo` か `THUNDOKU_DEMO=1` で有効になり、**メモリ DB と一時ディレクトリだけ**を使う
+//! `--demo` か `LIGROL_DEMO=1` で有効になり、**メモリ DB と一時ディレクトリだけ**を使う
 //! （本物のデータディレクトリには書かない。判定は [`enabled`]、起動は
 //! [`crate::app_state::AppState::init_demo`]）。ネットワークへ出ないための分岐は各所に
 //! 散らしてあり、ここは「サンプルの中身」だけを持つ。
@@ -14,14 +14,14 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use gpui_kit::RenderImage;
-use thundoku_core::db;
-use thundoku_core::db::SqlitePool;
-use thundoku_core::db::books::Book;
-use thundoku_core::db::bookshelf::BookshelfItem;
-use thundoku_core::db::checklist::{CheckedItem, TbfEvent};
-use thundoku_core::db::notes::{PageNoteInput, SpreadSide};
-use thundoku_core::db::progress::{ReadingProgress, ReadingState};
-use thundoku_core::tbf::SITE_ID_TECHBOOKFEST;
+use ligrol_core::db;
+use ligrol_core::db::SqlitePool;
+use ligrol_core::db::books::Book;
+use ligrol_core::db::bookshelf::BookshelfItem;
+use ligrol_core::db::checklist::{CheckedItem, TbfEvent};
+use ligrol_core::db::notes::{PageNoteInput, SpreadSide};
+use ligrol_core::db::progress::{ReadingProgress, ReadingState};
+use ligrol_core::tbf::SITE_ID_TECHBOOKFEST;
 
 /// サンプルの Google アカウントの `sub`。
 ///
@@ -30,7 +30,7 @@ use thundoku_core::tbf::SITE_ID_TECHBOOKFEST;
 /// 両者が食い違うとサンプルが 1 冊も出ない。
 pub const DEMO_OWNER_SUB: &str = "demo-owner";
 
-/// `--demo` か `THUNDOKU_DEMO=1` で true（純関数）。
+/// `--demo` か `LIGROL_DEMO=1` で true（純関数）。
 ///
 /// `args` は `std::env::args()`（先頭の実行ファイルパスを含む）。他の引数は見ない。
 pub fn enabled(args: &[String], env: Option<&str>) -> bool {
@@ -42,9 +42,9 @@ pub fn enabled(args: &[String], env: Option<&str>) -> bool {
 /// 本物のデータディレクトリ（[`crate::app_state::resolve_data_dir`]）とは別にし、
 /// **本物のデータもログもここには書かない**。ログの出力先もこの下にする
 /// （`crates/app/src/main.rs` の `log_data_dir`）ので、サンプル起動で
-/// 本物の `logs/thundoku.log` を切り詰めてしまう事故が起きない。
+/// 本物の `logs/ligrol.log` を切り詰めてしまう事故が起きない。
 pub fn data_dir() -> std::path::PathBuf {
-    std::env::temp_dir().join("thundoku-shelf-demo")
+    std::env::temp_dir().join("ligrol-demo")
 }
 
 /// サンプルの本 1 冊（seed と [`DemoPageLoader`] が共有する唯一の出典）。
@@ -822,8 +822,8 @@ pub fn promote_to_downloaded(pool: &SqlitePool, database_id: &str) -> anyhow::Re
 /// `AppState` の `secrets` と同じ keyring（サンプルはメモリバックエンド）を使うため、
 /// `SecretStore::new()` で作っても同じ鍵が返る（`app_state::owner_token` と一致する）。
 fn demo_owner_token() -> Option<String> {
-    let key = thundoku_core::secrets::SecretStore::new().db_key().ok()?;
-    Some(thundoku_core::owner::encrypt(&key, DEMO_OWNER_SUB))
+    let key = ligrol_core::secrets::SecretStore::new().db_key().ok()?;
+    Some(ligrol_core::owner::encrypt(&key, DEMO_OWNER_SUB))
 }
 
 /// 1 冊ぶんの固定データ（本棚・タグ・表紙は全冊、ローカル本・進捗・付箋はダウンロード済みだけ）。
@@ -911,10 +911,10 @@ fn seed_book(
     // **テストでは作らない**: ここは書いた PNG を読み直して 256px WebP に再エンコードするため
     // debug ビルドで 1 冊 150ms 前後かかり、`seed` を呼ぶテストが 1 件 10 秒以上遅くなる
     // （デモのテストは 10 件以上あるので全体で 1 分を超える）。この経路そのものは
-    // `thundoku_core::thumbs` のテスト（`cache_shelf_cover_fills_the_share_table_immediately`）が
+    // `ligrol_core::thumbs` のテスト（`cache_shelf_cover_fills_the_share_table_immediately`）が
     // 押さえている。
     #[cfg(not(test))]
-    if let Err(error) = thundoku_core::thumbs::cache_shelf_cover(
+    if let Err(error) = ligrol_core::thumbs::cache_shelf_cover(
         pool,
         thumbnails_dir,
         SITE_ID_TECHBOOKFEST,
@@ -1020,7 +1020,7 @@ fn insert_view_sessions(pool: &SqlitePool) -> anyhow::Result<()> {
         let Some((started_at, ended_at)) = session_times(today, *days_ago, start, *minutes) else {
             continue;
         };
-        thundoku_core::db::block_on(async {
+        ligrol_core::db::block_on(async {
             sqlx::query(
                 "INSERT INTO view_history (id, book_id, started_at, ended_at) \
                  VALUES (?1, ?2, ?3, ?4) \
@@ -1097,7 +1097,7 @@ fn shelf_item(book: &DemoBook) -> BookshelfItem {
         media_category: None,
         ai_type: None,
         // 技術書典は DRM の情報を返さない（「不明」として保存する）
-        is_drm: thundoku_core::drm::DrmStatus::Unknown.as_db(),
+        is_drm: ligrol_core::drm::DrmStatus::Unknown.as_db(),
         release_date: None,
         description: None,
         theme: None,
@@ -1132,7 +1132,7 @@ fn local_book(book: &DemoBook) -> Book {
         updated_at: PURCHASED_AT.to_string(),
         media_category: None,
         ai_type: None,
-        is_drm: thundoku_core::drm::DrmStatus::Unknown.as_db(),
+        is_drm: ligrol_core::drm::DrmStatus::Unknown.as_db(),
         release_date: None,
         description: None,
         theme: None,
@@ -1177,7 +1177,7 @@ fn cover_png_for_seed(book: &DemoBook) -> Option<Vec<u8>> {
     static DIR: LazyLock<std::path::PathBuf> = LazyLock::new(|| {
         let fingerprint = hash(&BOOKS.iter().map(cover_svg).collect::<String>());
         let dir =
-            std::env::temp_dir().join(format!("thundoku-shelf-demo-covers-{fingerprint:08x}"));
+            std::env::temp_dir().join(format!("ligrol-demo-covers-{fingerprint:08x}"));
         let _ = std::fs::create_dir_all(&dir);
         for entry in BOOKS {
             let path = dir.join(format!("{}.png", entry.database_id));
@@ -1893,13 +1893,13 @@ impl crate::components::image_viewer::PageLoader for DemoPageLoader {
 mod tests {
     use super::*;
     use crate::components::image_viewer::PageLoader as _;
-    use thundoku_core::db;
-    use thundoku_core::tbf::SITE_ID_TECHBOOKFEST;
+    use ligrol_core::db;
+    use ligrol_core::tbf::SITE_ID_TECHBOOKFEST;
 
     /// 表紙の書き出し先（テストごとに作り直す。テストは並列に走るので名前を分ける）。
     fn thumbnails_dir(tag: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "thundoku-shelf-demo-covers-{tag}-{}",
+            "ligrol-demo-covers-{tag}-{}",
             std::process::id()
         ))
     }
@@ -1981,7 +1981,7 @@ mod tests {
     #[test]
     fn enabled_only_with_the_flag_or_env() {
         let args = |extra: &[&str]| -> Vec<String> {
-            std::iter::once("thundoku-shelf".to_string())
+            std::iter::once("ligrol".to_string())
                 .chain(extra.iter().map(|arg| arg.to_string()))
                 .collect()
         };
@@ -2172,12 +2172,12 @@ mod tests {
 
         // 所有者はデモの Google アカウント（本棚の所有者フィルタを通す）。
         // 未ダウンロードの本はローカル本が無いので所有者も無い（取り込み時に付く）。
-        let key = thundoku_core::secrets::SecretStore::new().db_key().unwrap();
+        let key = ligrol_core::secrets::SecretStore::new().db_key().unwrap();
         for book in BOOKS {
             let owner = db::books::get_owner_sub(&pool, book.database_id).unwrap();
             if book.downloaded {
                 assert!(
-                    thundoku_core::owner::matches(&key, owner.as_deref(), Some(DEMO_OWNER_SUB)),
+                    ligrol_core::owner::matches(&key, owner.as_deref(), Some(DEMO_OWNER_SUB)),
                     "サンプルの本がデモのアカウントに帰属していない: {}",
                     book.database_id
                 );
@@ -2361,9 +2361,9 @@ mod tests {
             Some(sample.tags.len()),
             "ローカルタグが入っていない"
         );
-        let key = thundoku_core::secrets::SecretStore::new().db_key().unwrap();
+        let key = ligrol_core::secrets::SecretStore::new().db_key().unwrap();
         assert!(
-            thundoku_core::owner::matches(
+            ligrol_core::owner::matches(
                 &key,
                 db::books::get_owner_sub(&pool, id).unwrap().as_deref(),
                 Some(DEMO_OWNER_SUB),

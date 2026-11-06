@@ -136,7 +136,7 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 | 戻り値 | `PurchaseBatch`（`saved` / `fetched_pages` / `pages_left` / `next` / `remaining_runs`）。`saved` は upsert した件数で、除外カテゴリは含まない | `crates/core/src/dlsite/sync.rs:75`, `:157-162` |
 | 時刻ヘルパ | `fn now() -> String` = `chrono::Utc::now().format("%Y-%m-%d %H:%M:%S")`（**UTC**、ローカル時刻ではない） | `crates/core/src/dlsite/sync.rs:15-17` |
 | クライアント生成 | `DlsiteClient::with_transport(Box<dyn Transport>, DlsiteSession)` | `crates/core/src/dlsite/client.rs:158-160` |
-| app 側の呼び出し元 | `BookshelfView::sync_dlsite`（`pub fn sync_dlsite(&mut self, cx: &mut Context<Self>)`）→ `std::thread::spawn` → `thundoku_core::dlsite::sync::save_purchases_batch(&db, &mut client, owner, cursor, PURCHASE_PAGES_PER_RUN)` | `crates/app/src/views/bookshelf.rs:3622`, `:3658` |
+| app 側の呼び出し元 | `BookshelfView::sync_dlsite`（`pub fn sync_dlsite(&mut self, cx: &mut Context<Self>)`）→ `std::thread::spawn` → `ligrol_core::dlsite::sync::save_purchases_batch(&db, &mut client, owner, cursor, PURCHASE_PAGES_PER_RUN)` | `crates/app/src/views/bookshelf.rs:3622`, `:3658` |
 | 実行スレッド | 専用 `std::thread` 1 本（UI 非ブロック）。結果は `std::sync::mpsc::channel::<Result<PurchaseBatch, String>>()` で返す。続きの位置は同期の開始時に `AppState.sync_cursors` から読む | `crates/app/src/views/bookshelf.rs:3647`, `:3650-3652` |
 
 #### 1.2 番号付き処理手順（`save_purchases_batch` 本体）
@@ -172,7 +172,7 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 - 取得失敗時: `get_html` の `?` で即 `Err`（1 ページでも失敗すると全体失敗、部分結果は返らない）。`crates/core/src/dlsite/client.rs:207`
 - 1 ページあたりの件数: コード上の明示定数 **なし**（`MAX_PAGES_PER_STORE` のコメントは「1 ページあたりの行数境界」だが実際は最大ページ数として使用）。`crates/core/src/dlsite/client.rs:16-17`
 - HTTP ヘッダ（HTML 取得 = `cookie_headers_for(SITE_HOST)`）: `Cookie`（**その宛先ホスト向けに収集したものだけ**）/ `User-Agent` / `Referer: https://www.dlsite.com/` / `Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8` / `Accept-Language: ja,en;q=0.9` / `Sec-Fetch-Dest: document` / `Sec-Fetch-Mode: navigate` / `Sec-Fetch-Site: same-origin` / `Upgrade-Insecure-Requests: 1`。`crates/core/src/dlsite/client.rs:195-214`
-- User-Agent 実値（**自認 UA**。`ThundokuShelf/<version> (+https://github.com/MegaBlackLabel/thundoku-shelf-app)`、`THUNDOKU_DLSITE_UA` で差し替え可）: ブラウザ偽装はしていない。`crates/core/src/dlsite/client.rs:22-39`
+- User-Agent 実値（**自認 UA**。`Ligrol/<version> (+https://github.com/MegaBlackLabel/ligrol-app)`、`LIGROL_DLSITE_UA` で差し替え可）: ブラウザ偽装はしていない。`crates/core/src/dlsite/client.rs:22-39`
 - メソッドは GET、ボディは `None`、`redirects: 3`。`crates/core/src/dlsite/client.rs:386-401`
 
 #### 1.4 `product_info()`（作品メタ）の詳細
@@ -322,7 +322,7 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 | 保存先 | `app_settings` テーブル（key-value） | `crates/core/src/db/schema.sql:25-30`, `crates/core/src/db/settings.rs:11-28` |
 | 保存キー | `"dlsite.session"` | `crates/app/src/app_state.rs:222`, `:867`, `:878` |
 | 保存値の形式 | `serde_json::to_string(&DlsiteSession)` の JSON 文字列。`DlsiteSession` は `origins: HostScopedCookies` 1 フィールドで、`HostScopedCookies` は「収集元ホスト → Cookie の配列」なので実体は `{"origins":{"www.dlsite.com":[{"name":"…","value":"…",…},…],"login.dlsite.com":[…]}}`（**収集元ホストごと**。名前をキーにした旧形式も読める） | `crates/app/src/app_state.rs:867-877`, `crates/core/src/dlsite/client.rs:97-100` |
-| 保護 | **AES-256-GCM で暗号化**。値は `enc:v2:` + base64 で `app_settings.value` に入る。鍵は keyring の専用スロット（`thundoku-shelf.session-key`）にあり、**DB のコピーだけでは復元できない**。復号できない値（旧 `enc:v1`・平文・改ざん・別鍵）は未ログインとして破棄する。**保存から 7 日**（`SESSION_MAX_AGE_SECONDS`）を過ぎた値も行ごと破棄する（保存時刻は暗号文の中にあり、DB を書き換えても期限は延ばせない）。keyring の鍵が取れない環境では**保存しない**（平文へフォールバックしない） | `crates/core/src/session_store.rs:7-11`, `:37-38`, `:175-183` |
+| 保護 | **AES-256-GCM で暗号化**。値は `enc:v2:` + base64 で `app_settings.value` に入る。鍵は keyring の専用スロット（`ligrol.session-key`）にあり、**DB のコピーだけでは復元できない**。復号できない値（旧 `enc:v1`・平文・改ざん・別鍵）は未ログインとして破棄する。**保存から 7 日**（`SESSION_MAX_AGE_SECONDS`）を過ぎた値も行ごと破棄する（保存時刻は暗号文の中にあり、DB を書き換えても期限は延ばせない）。keyring の鍵が取れない環境では**保存しない**（平文へフォールバックしない） | `crates/core/src/session_store.rs:7-11`, `:37-38`, `:175-183` |
 | keyring に Cookie を直接置かない理由 | Cookie が巨大で keyring の値長上限（2560 UTF-16 文字）を超えるため、**鍵だけ**を keyring に置いて DB 側を暗号化する（BOOTH / FANZA と同流儀） | `crates/core/src/session_store.rs`, `crates/app/src/app_state.rs:433-434` |
 | 書き込みタイミング | ログイン完了直後（`save_dlsite_session`）のみ | `crates/app/src/views/dlsite_login.rs:177` |
 | メモリ側 | `AppState.dlsite_session: Arc<Mutex<Option<DlsiteSession>>>` と `dlsite_logged_in: Arc<Mutex<bool>>` を同時更新 | `crates/app/src/app_state.rs:100-101`, `:407-408` |
@@ -453,12 +453,12 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 | クエリ `sort` | `purchasedate_desc`（購入日降順） | `crates/core/src/fanza/client.rs:261-263` |
 | クエリ `genre` | `all`（全ジャンル） | `crates/core/src/fanza/client.rs:261-263` |
 | リクエストヘッダ | `Cookie: {cookie_header_for(SITE_HOST)}` / `Accept: application/json` / `User-Agent: {USER_AGENT}` | `crates/core/src/fanza/client.rs:221-227`（生成）、`:243`（適用） |
-| User-Agent 実値（**自認 UA**。`THUNDOKU_FANZA_UA` で差し替え可） | `ThundokuShelf/<version> (+https://github.com/MegaBlackLabel/thundoku-shelf-app)`。ブラウザ偽装はしていない | `crates/core/src/fanza/client.rs:24-33` |
+| User-Agent 実値（**自認 UA**。`LIGROL_FANZA_UA` で差し替え可） | `Ligrol/<version> (+https://github.com/MegaBlackLabel/ligrol-app)`。ブラウザ偽装はしていない | `crates/core/src/fanza/client.rs:24-33` |
 | リダイレクト追跡 | JSON API（`get_json`）= `redirects: 3`（`:267`）。**ダウンロードの 302 は自動追跡しない**（proxy = `redirects: 0`、CDN 以降 = `send_with_validated_redirects` が各ホップ検証） | `crates/core/src/fanza/client.rs:267`, `:409`, `:482-495` |
 | Cookie 送信形式 | 宛先ホスト向けの Cookie を `name=value` 形式で `"; "` 連結（**長い `Path` が先、同じなら名前順**で安定）。収集元（www / accounts）をまとめた和集合は送らない | `crates/core/src/session_cookies.rs:70-77` |
 | CSRF | 送らない（コメント「GET に CSRF 不要」） | `crates/core/src/fanza/client.rs:3-4` |
 
-- User-Agent の扱い（コメント）: 「以前は『DMM/FANZA は非ブラウザ UA を 403 で弾く』という観測から Mac の Chrome を名乗っていたが、購入一覧 API が**自認 UA でも 200** を返すことを実機で確認した（未ログインでは UA に関わらず 401）」。弾かれるようになったら `THUNDOKU_FANZA_UA` で差し替える（`crates/core/src/ua.rs`）。`crates/core/src/fanza/client.rs:19-33`。
+- User-Agent の扱い（コメント）: 「以前は『DMM/FANZA は非ブラウザ UA を 403 で弾く』という観測から Mac の Chrome を名乗っていたが、購入一覧 API が**自認 UA でも 200** を返すことを実機で確認した（未ログインでは UA に関わらず 401）」。弾かれるようになったら `LIGROL_FANZA_UA` で差し替える（`crates/core/src/ua.rs`）。`crates/core/src/fanza/client.rs:19-33`。
 
 #### 1.4 ページング（1 ページ件数 / 総件数 / 終了条件）
 
@@ -616,9 +616,9 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 | 保存先 | **DB（`app_settings` テーブル）**。keyring に置くのは**暗号鍵だけ**（Cookie 本体は keyring の値長上限を超えるため） | `crates/app/src/app_state.rs:847-856` |
 | 保存キー | `"fanza.session"`（`app_settings.key` の 1 行。`StoreSession::Fanza.settings_key()`） | `crates/core/src/session_store.rs:78-83` |
 | 形式 | `serde_json::to_string(&FanzaSession)` → `{"origins":{"www.dmm.co.jp":[{"name":"…","value":"…",…},…],"accounts.dmm.co.jp":[…]}}`（`FanzaSession` は `origins: HostScopedCookies` 1 フィールド、`HostScopedCookies` は `#[serde(transparent)]`）。**平文 JSON のままでは保存しない**（暗号化してから `app_settings.value` へ） | `crates/core/src/fanza/client.rs:86-91`, `crates/app/src/app_state.rs:847-856` |
-| 暗号化 | **AES-256-GCM**（AAD に用途名・形式版）。値は `enc:v2:` + base64(IV ‖ 暗号文 ‖ tag)。鍵は keyring の専用スロット `thundoku-shelf.session-key`（`USER_SESSION_KEY`。DB 鍵とは**別**）。復号できない値（旧 `enc:v1`・平文・改ざん・別鍵）は未ログインとして破棄し、**保存から 7 日**（`SESSION_MAX_AGE_SECONDS`）を過ぎた値も行ごと破棄する（保存時刻は暗号文の中にあり、DB を書き換えても期限は延ばせない）。keyring の鍵が取れない環境では**保存しない**（平文へフォールバックしない） | `crates/core/src/session_store.rs:7-11`, `:33`, `:38`, `:107-200` |
+| 暗号化 | **AES-256-GCM**（AAD に用途名・形式版）。値は `enc:v2:` + base64(IV ‖ 暗号文 ‖ tag)。鍵は keyring の専用スロット `ligrol.session-key`（`USER_SESSION_KEY`。DB 鍵とは**別**）。復号できない値（旧 `enc:v1`・平文・改ざん・別鍵）は未ログインとして破棄し、**保存から 7 日**（`SESSION_MAX_AGE_SECONDS`）を過ぎた値も行ごと破棄する（保存時刻は暗号文の中にあり、DB を書き換えても期限は延ばせない）。keyring の鍵が取れない環境では**保存しない**（平文へフォールバックしない） | `crates/core/src/session_store.rs:7-11`, `:33`, `:38`, `:107-200` |
 | keyring を使わない理由（コメント） | 「セッション Cookie は Windows Credential Manager の上限（2560 UTF-16 文字）を超えることがあるため」DB に置き、**鍵だけ**を keyring へ | `crates/app/src/app_state.rs:340-346` |
-| keyring の FANZA 定数 | **FANZA 専用の定数は無い**。暗号鍵はストア共通の `USER_SESSION_KEY`（`thundoku-shelf.session-key`）。`secrets.rs` には `techbookfest` / `google` / `google-profile` / `github` / `booth` / `thundoku-shelf.db-key` / `thundoku-shelf.session-key` がある | `crates/core/src/secrets.rs:55-71` |
+| keyring の FANZA 定数 | **FANZA 専用の定数は無い**。暗号鍵はストア共通の `USER_SESSION_KEY`（`ligrol.session-key`）。`secrets.rs` には `techbookfest` / `google` / `google-profile` / `github` / `booth` / `ligrol.db-key` / `ligrol.session-key` がある | `crates/core/src/secrets.rs:55-71` |
 | 書き込み API | `SessionVault::save` → `db::settings::set(pool, StoreSession::Fanza.settings_key(), &enc)` = `INSERT … ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP` | `crates/app/src/app_state.rs:817-829`, `crates/core/src/db/settings.rs:17-28` |
 | 保存時のメモリ更新 | `*state.fanza_session.lock() = Some(session.clone())`、`*state.fanza_logged_in.lock() = logged_in` | `crates/app/src/app_state.rs:847-856` |
 | 保存呼び出し元 | `crates/app/src/views/fanza_login.rs:161` のみ | `crates/app/src/views/fanza_login.rs:161` |
@@ -812,7 +812,7 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 | 7 | pixiv セッション破棄 | `POST https://accounts.booth.pm/users/sign_out`、body `_method=delete`（form） | `Accept: */*`, `X-CSRF-Token`, `Referer`/`Origin: https://accounts.booth.pm`、`Cookie` | `crates/core/src/booth.rs:117-127` |
 | 8 | booth.pm セッション破棄 | `POST https://booth.pm/users/sign_out`、body `_method=delete`（form） | `Accept: */*`, `X-CSRF-Token`, `Referer: https://booth.pm/ja`, `Origin: https://booth.pm`、`Cookie` | `crates/core/src/booth.rs:143-154` |
 
-- User-Agent（BOOTH 用。**自認 UA**、`THUNDOKU_BOOTH_UA` で差し替え可）: `ThundokuShelf/<version> (+https://github.com/MegaBlackLabel/thundoku-shelf-app)` — `crates/core/src/booth.rs:105-109`。
+- User-Agent（BOOTH 用。**自認 UA**、`LIGROL_BOOTH_UA` で差し替え可）: `Ligrol/<version> (+https://github.com/MegaBlackLabel/ligrol-app)` — `crates/core/src/booth.rs:105-109`。
 - リダイレクトは**経路で分かれる**: 一覧・メタ・ログアウトは既定エージェント（ureq 2.8.0 の既定 = 最大 5 回、`ureq-2.8.0/src/agent.rs:262`）、**ファイル本体は `download_agent`（`redirects(0)`）で 302 を自前追跡**し、`Location` を `Url::join` で解決 → `download_url::check_url` で検証 → `https` 以外は拒否（上限 `BOOTH_REDIRECT_LIMIT = 5`）— `crates/core/src/booth.rs:130-131`, `:193-205`, `:437-478`, `:73-74`。
 - `GET https://booth.pm/downloadables/{id}` は 302 → 署名付き一時 S3 URL（**180 秒有効**）へ転送され、ファイル本体が返る。**S3 へは Cookie を載せない**（`check_url` が通ったホストでだけ `cookie_for(...)` を付ける）— `crates/core/src/booth.rs:412-414`, `:445-449`。
 - 同期（1〜4）はすべて Cookie 付き GET のみ。POST はログアウト時のみ。
@@ -898,7 +898,7 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 | ログアウト（booth.pm 側）401/403 | `ureq::Error::Status(401|403)` | `BoothError::NotLoggedIn` `crates/core/src/booth.rs:156-158` |
 | CSRF トークンが取れない | `extract_csrf_token` が `None` | `BoothError::Network("csrf token not found in page")` `crates/core/src/booth.rs:109-110` |
 | ログアウト（plaza 側）失敗 | 任意のエラー | **無視して続行**（`log::info!("booth logout(plaza): failed ({e})")`） `crates/core/src/booth.rs:135-137` |
-| HTML ダンプ | **通常動作では書き出さない**。`THUNDOKU_BOOTH_HTML_DUMP=1` を明示したときだけ `%TEMP%/thundoku-shelf/booth-dumps/` へ保存し、失敗は `log::warn!` のみで続行。ログアウト時にダンプを削除する `crates/core/src/booth.rs`（`dump_html_if_enabled` / `remove_html_dumps`） |
+| HTML ダンプ | **通常動作では書き出さない**。`LIGROL_BOOTH_HTML_DUMP=1` を明示したときだけ `%TEMP%/ligrol/booth-dumps/` へ保存し、失敗は `log::warn!` のみで続行。ログアウト時にダンプを削除する `crates/core/src/booth.rs`（`dump_html_if_enabled` / `remove_html_dumps`） |
 | 同期全体の失敗 | 上記いずれかが `?` で伝播 | スレッドから `Err(String)` を返し、UI で `log::error!` + Error トースト。`"not logged in"` を含む場合のみ再ログインダイアログを自動表示 `crates/app/src/views/bookshelf.rs:2461-2469` |
 
 - **リトライは一切無い**（429/5xx 含む。`retry` / `backoff` / `attempt` の grep 結果 0 件）。
@@ -965,7 +965,7 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 |---|---|---|
 | 保存先 | SQLite の `app_settings` テーブル、キー `"booth.session"` | `crates/app/src/app_state.rs:392`、`crates/core/src/db/schema.sql:25-30` |
 | 形式 | `BoothSession` を `serde_json` 化したものを暗号化した文字列（`enc:v2:` + base64）を `value` 列へ。**平文 JSON では保存しない**。`BoothSession` は `origins: HostScopedCookies` 1 フィールドなので実体は `{"origins":{"booth.pm":[{"name":"…","value":"…",…},…],"accounts.booth.pm":[…]}}`（**収集元ホストごと**。旧 `{"cookies":{…}}` 形式は復元できず再ログインになる） | `crates/core/src/session_store.rs:33`、`crates/app/src/views/booth_login.rs:160-166` |
-| 暗号化 | **keyring の鍵（`thundoku-shelf.session-key`）で AES-256-GCM**（AAD に用途名・形式版）。保存値は `enc:v2:` + base64(IV ‖ 暗号文 ‖ tag)。復号できない値（旧 `enc:v1`・平文・改ざん・別鍵）は未ログインとして破棄し、**平文へは戻さない**。**保存から 7 日**を過ぎた値も行ごと破棄する | `crates/core/src/session_store.rs:7-11`, `:33`, `:38`, `:107-200` |
+| 暗号化 | **keyring の鍵（`ligrol.session-key`）で AES-256-GCM**（AAD に用途名・形式版）。保存値は `enc:v2:` + base64(IV ‖ 暗号文 ‖ tag)。復号できない値（旧 `enc:v1`・平文・改ざん・別鍵）は未ログインとして破棄し、**平文へは戻さない**。**保存から 7 日**を過ぎた値も行ごと破棄する | `crates/core/src/session_store.rs:7-11`, `:33`, `:38`, `:107-200` |
 | keyring を使わない理由（コメント） | セッション Cookie は Windows Credential Manager の上限（**2560 UTF-16 文字**）を超えることがあるため DB 保存 | `crates/app/src/app_state.rs`、`crates/core/src/session_store.rs` |
 | 実行時キャッシュ | `AppState.booth_session: Arc<parking_lot::Mutex<Option<BoothSession>>>` と `booth_logged_in: Arc<Mutex<bool>>` | `crates/app/src/app_state.rs` |
 | 保存関数 | `pub fn save_booth_session(cx: &App, session: &BoothSession)` → `SessionVault::save`。**鍵が無ければ保存しない**（平文へフォールバックしない）。失敗時はログのみで、メモリ状態は更新する | `crates/app/src/app_state.rs`、`crates/core/src/session_store.rs` |
@@ -974,7 +974,7 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 | 削除（汎用ヘルパー） | `pub fn clear_booth_session(cx: &App) -> Result<(), String>`（`logout_booth` から呼ぶ）。`Err` は永続値の削除失敗を意味する | `crates/app/src/app_state.rs` |
 | 保存タイミング | ログイン成立時（`check_login` 内）のみ。同期では保存しない | `crates/app/src/views/booth_login.rs:148` |
 | `secrets.rs` の `USER_BOOTH` | `pub const USER_BOOTH: &str = "booth";`（keyring 用キーとして定義）— **リポジトリ内で参照箇所ゼロ**（未使用） | `crates/core/src/secrets.rs:12` |
-| keyring の共通定数 | `SERVICE = "com.megablacklabel.thundoku-shelf"`、`USER_DB_KEY = "thundoku-shelf.db-key"`、`USER_SESSION_KEY = "thundoku-shelf.session-key"`（セッション Cookie 暗号化用・別鍵） | `crates/core/src/secrets.rs` |
+| keyring の共通定数 | `SERVICE = "com.megablacklabel.ligrol"`、`USER_DB_KEY = "ligrol.db-key"`、`USER_SESSION_KEY = "ligrol.session-key"`（セッション Cookie 暗号化用・別鍵） | `crates/core/src/secrets.rs` |
 | `owner_sub`（別物） | BOOTH の ID からは作られない。ダウンロード時に Google ログイン中の `sub` を AES-256-GCM で暗号化して `books.owner_sub` に入れる（**取り込みに Google ログインが必須になった**ので新規の `NULL` は付かない。旧版で取り込んだ本の `NULL` 行は残る — セキュリティ評価 F03） | `crates/app/src/views/bookshelf.rs:3844`（`start_download`）、`:3822`（`require_import_login`）、`crates/core/src/db/books.rs:250-265`、`crates/core/src/owner.rs:14-27` |
 | `owner_sub` 列 | `books.owner_sub TEXT`（NULL 可）。実行時 DDL で冪等に追加（`pragma_table_info` 確認後 `ALTER TABLE books ADD COLUMN owner_sub TEXT`） | `crates/core/src/db/schema.sql:50`、`crates/core/src/db/mod.rs:236-244` |
 
@@ -1099,7 +1099,7 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 | ファイル | 役割（1 行） | アンカー |
 |---|---|---|
 | `transport.rs` | HTTP 抽象: `RequestSpec`（method/url/headers/body/redirects）と `ResponseSpec`（status/headers/body）の定義、`Transport` trait、本番実装 `UreqTransport`（ureq + rustls）、ダウンロード進捗コールバックを提供 | `crates/core/src/tbf/transport.rs:5-19`, `:53-69`, `:77-108`, `:127-219` |
-| `queries.rs` | Web 実装（`packages/thundoku-api`）から**verbatim コピーした GraphQL クエリ文字列定数**を保持（整形禁止コメント付き） | `crates/core/src/tbf/queries.rs:1-3`, `:6`, `:9-121`, `:124-141`, `:145-146`, `:150` |
+| `queries.rs` | Web 実装（`packages/ligrol-api`）から**verbatim コピーした GraphQL クエリ文字列定数**を保持（整形禁止コメント付き） | `crates/core/src/tbf/queries.rs:1-3`, `:6`, `:9-121`, `:124-141`, `:145-146`, `:150` |
 | `sync.rs` | `TbfClient` の取得結果を SQLite（`bookshelf_items` / `tbf_events` / `checked_items`）へ UPSERT し、差分フラグを返す | `crates/core/src/tbf/sync.rs:1-3`, `:70`, `:130`, `:159`, `:244` |
 
 #### 1.1 transport の詳細定数
@@ -1469,16 +1469,16 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 
 | 項目 | 内容 | アンカー |
 |---|---|---|
-| keyring サービス名 | `com.megablacklabel.thundoku-shelf` | `crates/core/src/secrets.rs:7` |
+| keyring サービス名 | `com.megablacklabel.ligrol` | `crates/core/src/secrets.rs:7` |
 | ユーザキー（**旧版の移行元**） | `USER_TECHBOOKFEST = "techbookfest"`。現在は保存先ではなく、起動時に vault へ移行して消す（消せなければ印を残して復元しない） | `crates/core/src/secrets.rs:9`, `crates/core/src/session_store.rs`（`adopt_legacy`） |
 | 保存先 | SQLite の `app_settings` テーブル、キー `"tbf.session"`（BOOTH / FANZA / DLsite と同じ共通 Vault） | `crates/core/src/session_store.rs`（`StoreSession::Techbookfest`） |
 | 保存形式 | `TbfSession` を `serde_json` 化し、`Envelope { saved_at, session }` として暗号化した文字列（`enc:v2:` + base64）を `value` 列へ。**平文 JSON では保存しない** | `crates/core/src/session_store.rs` |
-| 暗号化 | **keyring の鍵（`thundoku-shelf.session-key`）で AES-256-GCM**（AAD に用途名・形式版）。**保存から 7 日**を過ぎた値は行ごと破棄（保存時刻は暗号文の中）。鍵が取れない環境では保存しない | `crates/core/src/session_store.rs`、`crates/core/src/secrets.rs` |
+| 暗号化 | **keyring の鍵（`ligrol.session-key`）で AES-256-GCM**（AAD に用途名・形式版）。**保存から 7 日**を過ぎた値は行ごと破棄（保存時刻は暗号文の中）。鍵が取れない環境では保存しない | `crates/core/src/session_store.rs`、`crates/core/src/secrets.rs` |
 | 読み込み | 起動時に `SessionVault::adopt_legacy::<TbfSession>(..)`（旧 keyring 値の移行 → 復号 → 7 日判定）→ `TbfSession::is_logged_in()` を満たすものだけ `tbf.restore_session()` して `tbf_logged_in` に反映 | `crates/app/src/app_state.rs`, `crates/core/src/session_store.rs` |
 | 保存タイミング | WebView ログイン完了時（`save_tbf_session`）のみ | `crates/app/src/views/tbf_login.rs:154`, `crates/app/src/app_state.rs` |
 | 削除タイミング | ログアウト時（`SettingsView::logout_tbf` → `clear_tbf_session`）。vault（DB）と旧 keyring を消し、**成否を待って**通知する。削除に失敗したら `session-purge.pending` に印を残す（次回起動で復元しない）。サーバーログアウト失敗でもローカル削除は実行 | `crates/app/src/app_state.rs`, `crates/app/src/views/settings.rs`, `crates/core/src/session_store.rs` |
 | サイズ制約 | 共通 Vault（DB）へ移したため、Windows Credential Manager の上限（2560 UTF-16 文字）は**もう関係ない**（BOOTH/FANZA/DLsite と同じ理由で DB 保存） | `crates/app/src/app_state.rs`, `crates/core/src/session_store.rs` |
-| 他キー | `USER_GOOGLE="google"` / `USER_BOOTH="booth"` / `USER_DB_KEY="thundoku-shelf.db-key"`（`owner_sub` 暗号鍵 32 byte を BASE64 で保存） | `crates/core/src/secrets.rs:10-14`, `:71-84` |
+| 他キー | `USER_GOOGLE="google"` / `USER_BOOTH="booth"` / `USER_DB_KEY="ligrol.db-key"`（`owner_sub` 暗号鍵 32 byte を BASE64 で保存） | `crates/core/src/secrets.rs:10-14`, `:71-84` |
 
 #### 11. レート制限 / 待機 / リトライ / 並列度 / タイムアウト
 

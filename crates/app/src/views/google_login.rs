@@ -19,7 +19,7 @@ use gpui_kit::{
     ClipboardItem, Context, EventEmitter, InteractiveElement as _, IntoElement, ParentElement,
     ReadGlobal as _, Render, StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
-use thundoku_core::google::{GoogleError, GoogleProfile, PendingGoogleAuth};
+use ligrol_core::google::{GoogleError, GoogleProfile, PendingGoogleAuth};
 
 use crate::app_state::AppState;
 
@@ -75,7 +75,7 @@ impl GoogleLoginView {
                 cx.spawn(async move |this, cx| {
                     let opened = cx
                         .background_executor()
-                        .spawn(async move { thundoku_core::google::open_browser(&url) })
+                        .spawn(async move { ligrol_core::google::open_browser(&url) })
                         .await;
                     if let Err(error) = opened {
                         // 自動で開けなくても、URL を出せば手で続行できる。
@@ -105,7 +105,7 @@ impl GoogleLoginView {
     fn start_finish(
         &mut self,
         pending: PendingGoogleAuth,
-        google: Arc<parking_lot::Mutex<Option<thundoku_core::google::GoogleClient>>>,
+        google: Arc<parking_lot::Mutex<Option<ligrol_core::google::GoogleClient>>>,
         cx: &mut Context<Self>,
     ) {
         // 弱参照にする: 監視タスクはアプリ寿命で動き続けるため、強参照を持つと
@@ -119,7 +119,7 @@ impl GoogleLoginView {
                     // 取ると待っている間に UI 側の `google.lock()`（設定画面の表示・
                     // Drive 同期）が止まり、モーダルの ✕ も効かなくなる（固まって見える）。
                     // 交換とプロフィール取得のときだけロックする。
-                    let code = thundoku_core::google::wait_for_code(&pending)?;
+                    let code = ligrol_core::google::wait_for_code(&pending)?;
                     let mut guard = google.lock();
                     guard
                         .as_mut()
@@ -147,7 +147,7 @@ impl GoogleLoginView {
                         {
                             let _ = state
                                 .secrets
-                                .save(thundoku_core::secrets::USER_GOOGLE, &json);
+                                .save(ligrol_core::secrets::USER_GOOGLE, &json);
                         }
                         // cx.emit は AsyncApp::update の RefCell 再入でパニックするため、
                         // AppState のグローバル状態を直接更新する。
@@ -306,7 +306,7 @@ impl Render for GoogleLoginView {
                                         let url = url.clone();
                                         move |_, _window, _cx| {
                                             if let Err(error) =
-                                                thundoku_core::google::open_browser(&url)
+                                                ligrol_core::google::open_browser(&url)
                                             {
                                                 log::warn!(
                                                     "google login: ブラウザを開けません: {error}"

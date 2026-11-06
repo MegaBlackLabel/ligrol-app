@@ -20,7 +20,7 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, Window, div, px, relative,
 };
 
-use thundoku_core::db::{self, books, progress};
+use ligrol_core::db::{self, books, progress};
 
 use crate::actions::OpenReaderAtPage;
 use crate::app_state::AppState;
@@ -1061,7 +1061,7 @@ impl NotesView {
 fn load_note_thumb(
     pool: &db::SqlitePool,
     packs_dir: std::path::PathBuf,
-    pack_root_key: Option<opfspack::PackRootKey>,
+    pack_root_key: Option<nartik::PackRootKey>,
     book_id: &str,
     content_id: &str,
     page: i64,
@@ -1915,7 +1915,7 @@ mod tests {
             purchase_date: None,
             file_name: "t.pdf".into(),
             file_size: 1,
-            opfs_path: format!("{id}.opfspack"),
+            opfs_path: format!("{id}.nartik"),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -1943,7 +1943,7 @@ mod tests {
     #[test]
     fn note_cover_reads_the_pack_cover() {
         let root =
-            std::env::temp_dir().join(format!("thundoku-notes-cover-{}", std::process::id()));
+            std::env::temp_dir().join(format!("ligrol-notes-cover-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let packs = root.join("packs");
         let thumbnails = root.join("thumbnails");
@@ -1955,10 +1955,10 @@ mod tests {
         image::RgbaImage::from_pixel(4, 6, image::Rgba([10, 20, 30, 255]))
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
-        let mut builder = opfspack::PackBuilder::new(1);
+        let mut builder = nartik::PackBuilder::new(1);
         builder.add_entry("cover.webp", png.clone(), "image/webp", false);
         let bytes = builder.build(None, false).unwrap();
-        std::fs::write(packs.join("b1.opfspack"), &bytes).unwrap();
+        std::fs::write(packs.join("b1.nartik"), &bytes).unwrap();
 
         assert!(
             load_note_cover(&thumbnails, &packs, &test_book("b1"), None).is_some(),

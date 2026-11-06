@@ -97,7 +97,7 @@ mod tests {
                 purchase_date: None,
                 file_name: "t.pdf".into(),
                 file_size: 1,
-                opfs_path: "b1.opfspack".into(),
+                opfs_path: "b1.nartik".into(),
                 cover_thumbnail: None,
                 tbf_product_id: None,
                 site_id: None,

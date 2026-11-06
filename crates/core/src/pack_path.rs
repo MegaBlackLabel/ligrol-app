@@ -1,7 +1,7 @@
-//! pack ファイル（`packs/{id}.opfspack`）のパス解決と id の検証。
+//! pack ファイル（`packs/{id}.nartik`）のパス解決と id の検証。
 //!
 //! `books.id` / `books.pack_id` は Drive の JSON バックアップから復元でき、復元時に
-//! 値の検証が無かった。`packs_dir.join(format!("{id}.opfspack"))` へそのまま渡すと、
+//! 値の検証が無かった。`packs_dir.join(format!("{id}.nartik"))` へそのまま渡すと、
 //! `../../other/book` のような id で保存領域の外のファイルを読み書き・削除できる
 //! （CWE-22）。pack を触る経路（取り込み・閲覧・改名・削除・Drive 同期）は
 //! **すべてこのモジュールを通す**。
@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 
 /// pack ファイルの拡張子。
-pub const PACK_EXTENSION: &str = "opfspack";
+pub const PACK_EXTENSION: &str = "nartik";
 
 #[derive(Debug, thiserror::Error)]
 pub enum IdError {
@@ -46,7 +46,7 @@ pub fn is_safe_id(id: &str) -> bool {
     Path::new(id).components().count() == 1
 }
 
-/// `packs_dir/{id}.opfspack`。id が安全でなければエラー。
+/// `packs_dir/{id}.nartik`。id が安全でなければエラー。
 pub fn pack_path(packs_dir: &Path, id: &str) -> Result<PathBuf, IdError> {
     if !is_safe_id(id) {
         return Err(IdError::Unsafe(id.to_string()));
@@ -60,7 +60,7 @@ pub fn pack_path(packs_dir: &Path, id: &str) -> Result<PathBuf, IdError> {
     Ok(path)
 }
 
-/// `packs_dir/{id}.conflict-local.opfspack`（Drive 同期の競合退避先）。
+/// `packs_dir/{id}.conflict-local.nartik`（Drive 同期の競合退避先）。
 pub fn conflict_backup_path(packs_dir: &Path, id: &str) -> Result<PathBuf, IdError> {
     if !is_safe_id(id) {
         return Err(IdError::Unsafe(id.to_string()));
@@ -109,7 +109,7 @@ mod tests {
     fn pack_path_stays_inside_packs_dir() {
         let dir = std::path::Path::new("/tmp/packs");
         let path = pack_path(dir, "book-1").unwrap();
-        assert_eq!(path, dir.join("book-1.opfspack"));
+        assert_eq!(path, dir.join("book-1.nartik"));
         assert!(pack_path(dir, "../escape").is_err());
         assert!(pack_path(dir, "/etc/passwd").is_err());
     }
@@ -119,7 +119,7 @@ mod tests {
         let dir = std::path::Path::new("/tmp/packs");
         assert_eq!(
             conflict_backup_path(dir, "book-1").unwrap(),
-            dir.join("book-1.conflict-local.opfspack")
+            dir.join("book-1.conflict-local.nartik")
         );
         assert!(conflict_backup_path(dir, "../escape").is_err());
     }

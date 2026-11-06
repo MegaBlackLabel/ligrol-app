@@ -1,11 +1,11 @@
 [package]
-name = "thundoku-shelf"
+name = "ligrol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "thundoku-shelf"
+name = "ligrol"
 path = "src/main.rs"
 
 [dependencies]
@@ -21,7 +21,7 @@ gpui-kit = "=0.8.0"
 # gpui が二重に入り、`Window` / `Entity` の型が食い違う）。0.8 系から
 # `gpui-wry` は `gpui-webview` に改名された。
 gpui-webview = "=0.8.0"
-thundoku-core = { path = "../core" }
+ligrol-core = { path = "../core" }
 url = "2"
 sqlx = { version = "0.9", features = ["sqlite", "runtime-tokio"] }
 lb-wry = { version = "0.53.3", package = "lb-wry" }
@@ -35,7 +35,7 @@ serde.workspace = true
 rfd = "0.17"
  parking_lot = "0.13"
 ureq = { version = "3", features = ["json"] }
-opfspack = { path = "../opfspack" }
+nartik = { path = "../nartik" }
 image = { version = "0.25", default-features = false, features = ["webp", "png", "jpeg"] }
 webp = "0.3"
 libwebp-sys = { version = "0.9", features = ["sse41"] }

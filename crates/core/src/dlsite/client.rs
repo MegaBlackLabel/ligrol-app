@@ -20,20 +20,20 @@ pub const MAX_PAGES_PER_STORE: usize = 200;
 /// DLsite は以前「非ブラウザ UA を弾く」観測があったためブラウザ UA + Referer を送っていた。
 /// いまは **UA だけ自認に変えても購入履歴が 200 で返る**ことを実機で確認済み
 /// （Referer と `Sec-Fetch-*` / `Accept` は引き続き送る）。
-/// ストアへ送る UA。**クライアントを名乗る**（`ThundokuShelf/<version> (+リポジトリ URL)`）。
+/// ストアへ送る UA。**クライアントを名乗る**（`Ligrol/<version> (+リポジトリ URL)`）。
 ///
 /// 以前は Chrome を名乗っていた（DLsite は非ブラウザ UA を弾くため）。購入履歴が
 /// この UA でも 200 で取れることを実測で確認したので、なりすましはやめた。
 ///
-/// サイト側が弾くようになったら、環境変数 `THUNDOKU_DLSITE_UA` にブラウザ UA を入れて
+/// サイト側が弾くようになったら、環境変数 `LIGROL_DLSITE_UA` にブラウザ UA を入れて
 /// 起動すれば元の挙動に戻せる（`crate::ua`）。
 const USER_AGENT: &str = concat!(
-    "ThundokuShelf/",
+    "Ligrol/",
     env!("CARGO_PKG_VERSION"),
-    " (+https://github.com/MegaBlackLabel/thundoku-shelf-app)"
+    " (+https://github.com/MegaBlackLabel/ligrol-app)"
 );
 
-/// 送る UA。既定は上の定数（`THUNDOKU_DLSITE_UA` で差し替えられる → `crate::ua`）。
+/// 送る UA。既定は上の定数（`LIGROL_DLSITE_UA` で差し替えられる → `crate::ua`）。
 fn user_agent() -> String {
     crate::ua::for_store(USER_AGENT, crate::ua::ENV_DLSITE)
 }

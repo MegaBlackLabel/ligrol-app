@@ -1,14 +1,14 @@
 # 01. アーキテクチャ / 実行モデル / データ配置
 
 > このファイルは `docs/spec/README.md`（索引）から参照される設計仕様書の一部。
-> 対象: thundoku-shelf-app（Rust + GPUI デスクトップアプリ）。読み手は AI（別言語での再実装を想定）。
+> 対象: ligrol-app（Rust + GPUI デスクトップアプリ）。読み手は AI（別言語での再実装を想定）。
 > 情報源はコード（アンカー付き）と既存 docs。**記載のない意図は推測しない**（推測は明記）。
 
 ## 1. リポジトリ構成
 
 | パス | 役割 | 主な言語/依存 |
 |---|---|---|
-| `crates/opfspack` | 書籍ファイル形式 `.opfspack` の読み書き（自前形式） | Rust / aes-gcm, sha2 |
+| `crates/nartik` | 書籍ファイル形式 `.nartik` の読み書き（自前形式） | Rust / aes-gcm, sha2 |
 | `crates/core` | DB・取り込み・各ストア同期・Google/Drive・タグ・暗号（UI 非依存） | Rust / sqlx, tokio, reqwest 相当は ureq, lindera, pdfium-render |
 | `crates/app` | GPUI デスクトップ UI（画面・ビューアー・通知・アイコン） | Rust / gpui-kit, gpui-webview, image, resvg, usvg |
 
@@ -78,15 +78,15 @@
 
 | パス | 内容 | 備考 |
 |---|---|---|
-| `<data_dir>/thundoku-shelf.db` | SQLite（WAL） | `packs` / `downloads` / `thumbnails` への参照を持つ |
-| `<data_dir>/packs/{book_id}.opfspack` | 書籍ファイル（自前形式） | 1 冊 1 ファイル |
+| `<data_dir>/ligrol.db` | SQLite（WAL） | `packs` / `downloads` / `thumbnails` への参照を持つ |
+| `<data_dir>/packs/{book_id}.nartik` | 書籍ファイル（自前形式） | 1 冊 1 ファイル |
 | `<data_dir>/downloads/` | ダウンロード直後の一時ファイル | 取り込み後に pack へ変換 |
 | `<data_dir>/thumbnails/` | 表紙サムネイル（PNG） | 命名規則は `docs/spec/03-import-and-pack.md`。Drive へ上げるための 256px 版は DB の `thumbnail_share` に持つ（`docs/spec/10-pack-keys.md` §11.8） |
 | `<data_dir>/instance.lock` | 単一インスタンス用 | |
 
-- 既定の `data_dir` = `dirs::data_dir()/thundoku-shelf`（Windows: `%APPDATA%`、macOS: `~/Library/Application Support`）
+- 既定の `data_dir` = `dirs::data_dir()/ligrol`（Windows: `%APPDATA%`、macOS: `~/Library/Application Support`）
 - **保存先は設定で変更でき、変更時に既存ファイルを移動する**（`loaded_data_path()` / `init_with_data_dir`。`crates/app/src/app_state.rs:96,129-138`）
-- テストは `std::env::temp_dir()/thundoku-shelf-test` を使う（`crates/app/src/app_state.rs:282-284`）
+- テストは `std::env::temp_dir()/ligrol-test` を使う（`crates/app/src/app_state.rs:282-284`）
 
 ## 5. 依存ライブラリと選定理由（コード内コメント由来）
 
@@ -107,12 +107,12 @@
 
 | 目的 | コマンド |
 |---|---|
-| テスト（アプリ） | `mise exec -- cargo test -p thundoku-shelf --lib` |
-| テスト（コア） | `mise exec -- cargo test -p thundoku-core --lib` |
-| 取り込み統合テスト | `mise exec -- cargo test -p thundoku-core --test import`（PDF 並列の回帰テストを含む） |
+| テスト（アプリ） | `mise exec -- cargo test -p ligrol --lib` |
+| テスト（コア） | `mise exec -- cargo test -p ligrol-core --lib` |
+| 取り込み統合テスト | `mise exec -- cargo test -p ligrol-core --test import`（PDF 並列の回帰テストを含む） |
 | Lint | `mise exec -- cargo clippy --workspace --all-targets -- -D warnings` |
-| 整形 | `mise exec -- cargo fmt -p thundoku-shelf`（`-p thundoku-core` も） |
-| リリースビルド | `mise exec -- cargo build --release` → `target/release/thundoku-shelf.exe` |
+| 整形 | `mise exec -- cargo fmt -p ligrol`（`-p ligrol-core` も） |
+| リリースビルド | `mise exec -- cargo build --release` → `target/release/ligrol.exe` |
 
 - 実行時ツールは **mise 管理**（`mise exec -- ...`）。システムの python/node は使わない
 - PDF を描画するテストには **PDFium の動的ライブラリ**が要る（`mise run pdfium` = `scripts/fetch-pdfium.sh` が `crates/core/` に `libpdfium.dylib` / `pdfium.dll` を取得する。無い場合はスキップされる）
@@ -120,5 +120,5 @@
 
 ## 7. 不明点
 
-- `crates/opfspack` の言語非依存な仕様（バイトオーダ等）は `docs/spec/03-import-and-pack.md` を参照（本ファイルでは扱わない）
+- `crates/nartik` の言語非依存な仕様（バイトオーダ等）は `docs/spec/03-import-and-pack.md` を参照（本ファイルでは扱わない）
 - macOS / Linux 固有のウィンドウ制御（タイトルバー等）の分岐はコード上に散在（`cfg(target_os)`）。本ファイルでは列挙しない

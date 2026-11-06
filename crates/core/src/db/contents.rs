@@ -310,7 +310,7 @@ mod tests {
         crate::db::block_on(async {
             sqlx::query(
                 "INSERT INTO books (id, title, file_name, file_size, opfs_path) \
-                 VALUES ('b1', 't', 't.pdf', 1, 'b1.opfspack')",
+                 VALUES ('b1', 't', 't.pdf', 1, 'b1.nartik')",
             )
             .execute(pool)
             .await

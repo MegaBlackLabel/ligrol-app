@@ -4,7 +4,7 @@
 //! 超えることがあるため、アプリ DB（`app_settings`）に置いている。しかし平文で置くと、
 //! DB のコピー・バックアップ・サポートへのファイル添付からセッションを再利用される。
 //!
-//! そこで鍵だけを keyring の専用スロット（`thundoku-shelf.session-key`）に置き、値は
+//! そこで鍵だけを keyring の専用スロット（`ligrol.session-key`）に置き、値は
 //! AES-256-GCM（AAD に用途名 = サービス + 形式版）で暗号化し、**保存時刻を暗号文の中に
 //! 包んで** `enc:v2:` を前置して保存する。**復号できない値（旧平文・改ざん・別鍵）と
 //! 保存から 7 日を過ぎた値は未ログインとして扱い、行を削除する**（平文へのフォールバックは
@@ -102,7 +102,7 @@ impl StoreSession {
 
     /// AAD に混ぜる用途名。**別のサービスへコピーされた暗号文は復号できなくなる。**
     fn purpose(self) -> String {
-        format!("thundoku-shelf/session/v{FORMAT_VERSION}/{}", self.label())
+        format!("ligrol/session/v{FORMAT_VERSION}/{}", self.label())
     }
 }
 
@@ -437,7 +437,7 @@ mod tests {
 
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "thundoku-session-store-{tag}-{}",
+            "ligrol-session-store-{tag}-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);

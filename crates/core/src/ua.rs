@@ -1,6 +1,6 @@
 //! ストアへ送る `User-Agent` の解決。
 //!
-//! 各ストアのクライアントは `ThundokuShelf/<version> (+リポジトリ URL)` を名乗る
+//! 各ストアのクライアントは `Ligrol/<version> (+リポジトリ URL)` を名乗る
 //! （以前はブラウザを名乗っていた。DLsite の購入履歴が自認 UA で 200 になることは
 //! 実機で確認済み）。
 //!
@@ -8,19 +8,19 @@
 //! `User-Agent` を差し替える逃げ道を用意している（コードを直して再ビルドせずに戻せる）:
 //!
 //! ```text
-//! THUNDOKU_DLSITE_UA="Mozilla/5.0 … Chrome/126.0.0.0 Safari/537.36"
+//! LIGROL_DLSITE_UA="Mozilla/5.0 … Chrome/126.0.0.0 Safari/537.36"
 //! ```
 //!
 //! 既定は各クライアントの定数（＝自認 UA）で、環境変数を付けて起動したときだけ差し替わる。
 
 /// DLsite のクライアントが使う UA を差し替える環境変数。
-pub const ENV_DLSITE: &str = "THUNDOKU_DLSITE_UA";
+pub const ENV_DLSITE: &str = "LIGROL_DLSITE_UA";
 /// FANZA のクライアントが使う UA を差し替える環境変数。
-pub const ENV_FANZA: &str = "THUNDOKU_FANZA_UA";
+pub const ENV_FANZA: &str = "LIGROL_FANZA_UA";
 /// BOOTH のクライアントが使う UA を差し替える環境変数。
-pub const ENV_BOOTH: &str = "THUNDOKU_BOOTH_UA";
+pub const ENV_BOOTH: &str = "LIGROL_BOOTH_UA";
 /// 表紙など CDN 画像の取得に使う UA を差し替える環境変数。
-pub const ENV_COVER: &str = "THUNDOKU_COVER_UA";
+pub const ENV_COVER: &str = "LIGROL_COVER_UA";
 
 /// 差し替え値から実際に送る UA を決める。
 ///
@@ -63,7 +63,7 @@ mod tests {
     /// 差し替え値があればそれを使う（前後の空白は落とす）。
     #[test]
     fn uses_the_override_value() {
-        let app_ua = "ThundokuShelf/0.2.7 (+https://github.com/MegaBlackLabel/thundoku-shelf-app)";
+        let app_ua = "Ligrol/0.2.7 (+https://github.com/MegaBlackLabel/ligrol-app)";
         assert_eq!(resolve(DEFAULT, Some(app_ua)), app_ua);
         assert_eq!(resolve(DEFAULT, Some(&format!(" {app_ua} "))), app_ua);
     }

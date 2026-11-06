@@ -9,7 +9,7 @@
 use serde_json::{Map, Number, Value};
 use sqlx::{Row, TypeInfo, ValueRef};
 
-use opfspack::{BACKUP_LABEL, PackRootKey, SealedEnvelope};
+use nartik::{BACKUP_LABEL, PackRootKey, SealedEnvelope};
 
 use crate::db::{SqlitePool, dynamic_sql};
 
@@ -214,9 +214,9 @@ async fn owner_checked_item_ids(
 /// 確認できた」なので、復元時に意味を取り違えないよう版を持たせる。
 pub const FORMAT_VERSION: i64 = 2;
 
-// ---- Drive のバックアップファイル（`thundoku-backup.json`） ---------------------
+// ---- Drive のバックアップファイル（`ligrol-backup.json`） ---------------------
 
-/// Drive の `thundoku-backup.json` の中身（`docs/spec/10-pack-keys.md` §11）。
+/// Drive の `ligrol-backup.json` の中身（`docs/spec/10-pack-keys.md` §11）。
 ///
 /// v3 は PRK から導出した鍵で暗号化した封筒（[`DriveBackup::Encrypted`]）、
 /// v2 以前は平文のバックアップ JSON（[`DriveBackup::Plain`]）。**どちらも読める**
@@ -265,7 +265,7 @@ impl DriveBackup {
                 .get("format_version")
                 .and_then(serde_json::Value::as_i64)
                 .ok_or_else(|| BackupError::Corrupt("封筒に format_version が無い".to_string()))?;
-            if version != i64::from(opfspack::BACKUP_FORMAT_VERSION) {
+            if version != i64::from(nartik::BACKUP_FORMAT_VERSION) {
                 return Err(BackupError::UnsupportedVersion(version));
             }
             let envelope = SealedEnvelope::from_json(&BACKUP_LABEL, bytes)
@@ -284,7 +284,7 @@ impl DriveBackup {
 
     /// 封筒の所有者（`owner_id`）。平文バックアップは `None`。
     ///
-    /// keyring の鍵スロット（`thundoku-shelf.pack-root-key:<owner_id>`）を選ぶのに使う。
+    /// keyring の鍵スロット（`ligrol.pack-root-key:<owner_id>`）を選ぶのに使う。
     pub fn owner_id(&self) -> Option<&str> {
         match self {
             Self::Encrypted(envelope) => Some(envelope.owner_id()),
@@ -596,7 +596,7 @@ pub fn import_json(
                 continue;
             };
             // 改変バックアップ対策: `books.id` / `books.pack_id` は
-            // `packs/{id}.opfspack` のファイル名になる。保存領域の外を指す id を
+            // `packs/{id}.nartik` のファイル名になる。保存領域の外を指す id を
             // 取り込むと読み出し・改名・削除が領域外へ及ぶ（CWE-22）。
             // 行だけ捨てると子テーブル（reading_progress 等）の FK 違反で
             // 復元全体がロールバックするため、**復元を拒否**して利用者に見せる。
@@ -974,7 +974,7 @@ mod tests {
                 purchase_date: None,
                 file_name: "book-1.pdf".into(),
                 file_size: 10,
-                opfs_path: "book-1.opfspack".into(),
+                opfs_path: "book-1.nartik".into(),
                 cover_thumbnail: None,
                 tbf_product_id: None,
                 site_id: None,
@@ -1071,7 +1071,7 @@ mod tests {
                 purchase_date: None,
                 file_name: "book-1.pdf".into(),
                 file_size: 10,
-                opfs_path: "book-1.opfspack".into(),
+                opfs_path: "book-1.nartik".into(),
                 cover_thumbnail: None,
                 tbf_product_id: None,
                 site_id: None,
@@ -1196,7 +1196,7 @@ mod tests {
             purchase_date: None,
             file_name: "f.pdf".into(),
             file_size: 1,
-            opfs_path: format!("{id}.opfspack"),
+            opfs_path: format!("{id}.nartik"),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -1672,7 +1672,7 @@ mod tests {
 
     // ---- Drive のバックアップファイル（v3 の封筒 / v2 の平文） -----------------
 
-    const OWNER_ID: &str = "6366bfc3b6ab37feaf2adb385aeaa515c4aa52cf09e70cac890d888e4409f3b0";
+    const OWNER_ID: &str = "27b44245034c0ede5be981b0d5d07ab78ce95311defd60ce9d9e8fe2bc25ab7d";
 
     fn plain_backup() -> String {
         r#"{"format_version":2,"books":[{"id":"book-1","title":"テスト本"}]}"#.to_string()
@@ -1794,9 +1794,9 @@ mod tests {
             author: String::new(),
             circle_name: String::new(),
             purchase_date: None,
-            file_name: format!("{id}.opfspack"),
+            file_name: format!("{id}.nartik"),
             file_size: 1,
-            opfs_path: format!("{id}.opfspack"),
+            opfs_path: format!("{id}.nartik"),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,

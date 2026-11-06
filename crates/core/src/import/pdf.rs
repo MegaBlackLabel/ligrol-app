@@ -301,10 +301,10 @@ fn render_pdf_source_into(
         // **累積の出力量**も見る（1 ページ 16MPix の検査は「1 ページ」の上限で、
         // 全体の量は制約しない。pack の上限（`MAX_TOTAL_SIZE`）を超える分を
         // エンコードし続けないよう、ここで打ち切る。F06）。
-        if output_bytes > opfspack::MAX_TOTAL_SIZE {
+        if output_bytes > nartik::MAX_TOTAL_SIZE {
             return Err(ImportError::Pdf(format!(
                 "PDF の出力が上限を超えています（{output_bytes} バイト > {} バイト）",
-                opfspack::MAX_TOTAL_SIZE
+                nartik::MAX_TOTAL_SIZE
             )));
         }
     }

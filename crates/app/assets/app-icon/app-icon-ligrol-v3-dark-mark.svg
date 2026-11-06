@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1254" height="1254" viewBox="0 0 1254 1254"
+     role="img" aria-label="ligrol icon V3 — bookmark and wordmark">
+  <title>ligrol icon V3 — bookmark and wordmark</title>
+  <rect width="1254" height="1254" fill="#01214b"/>
+  <rect x="46" y="46" width="1162" height="1162" rx="230" fill="none" stroke="#ffffff" stroke-width="28"/>
+  <path d="M 527 220 H 727 V 560 L 627 475 L 527 560 Z" fill="none" stroke="#ffffff" stroke-width="14" stroke-linejoin="round"/>
+  <text x="627" y="410" text-anchor="middle"
+        font-family="'Arial Hebrew','Noto Sans Hebrew','David',Arial,sans-serif" font-size="60" font-weight="400"
+        fill="#ffffff" opacity="0.65" direction="rtl">לגלול</text>
+  <text x="627" y="820" text-anchor="middle"
+        font-family="'Helvetica Neue','Arial',sans-serif" font-size="260" font-weight="700"
+        letter-spacing="-6" fill="#ffffff">ligrol</text>
+</svg>

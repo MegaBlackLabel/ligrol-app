@@ -1,6 +1,6 @@
-//! 表紙バンドル（`thundoku-thumbs.json`）の平文を作る。
+//! 表紙バンドル（`ligrol-thumbs.json`）の平文を作る。
 //!
-//! Drive には封筒（[`opfspack::SealedEnvelope`] + [`opfspack::THUMBS_LABEL`]）で
+//! Drive には封筒（[`nartik::SealedEnvelope`] + [`nartik::THUMBS_LABEL`]）で
 //! 上げる。ここは**平文**（封筒の中身）の組み立てと、アップロード用画像の
 //! エンコードだけを担当する。仕様は `docs/spec/10-pack-keys.md` §11.8。
 //!
@@ -367,7 +367,7 @@ mod tests {
     const KEY: [u8; 32] = [31u8; 32];
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("thundoku-thumbs-{name}"));
+        let dir = std::env::temp_dir().join(format!("ligrol-thumbs-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

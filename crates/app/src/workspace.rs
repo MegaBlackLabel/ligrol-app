@@ -41,9 +41,9 @@ use crate::views::notes::NotesView;
 use crate::views::reader::ReaderView;
 use crate::views::report::ReportView;
 use crate::views::settings::SettingsView;
-use thundoku_core::db;
-use thundoku_core::db::{books, bookshelf, progress};
-use thundoku_core::tbf;
+use ligrol_core::db;
+use ligrol_core::db::{books, bookshelf, progress};
+use ligrol_core::tbf;
 
 /// アクティブなナビゲーション先。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,7 +84,7 @@ const EXIT_UPLOAD_NOTICE: &str =
 ///
 /// 通知は幅が狭いので、**ファイル名は出さず進捗だけ**にする（`3.0 MB / 9.0 MB（45%）`）。
 /// 数字が無い段階（バックアップ作成）だけ段階名を出す。
-fn exit_upload_progress_text(progress: &thundoku_core::drive::sync::SyncProgress) -> String {
+fn exit_upload_progress_text(progress: &ligrol_core::drive::sync::SyncProgress) -> String {
     crate::views::settings::sync_progress_compact(progress)
 }
 
@@ -127,7 +127,7 @@ struct ProgressNotice;
 /// 「チェックリスト」を無効化する（技術書典に未ログインのとき）。
 pub fn app_menus(quit_enabled: bool, checklist_enabled: bool) -> Vec<Menu> {
     let app = Menu::new("App").items([
-        MenuItem::action("Thundoku Shelf について", crate::actions::OpenAbout),
+        MenuItem::action("Ligrol について", crate::actions::OpenAbout),
         MenuItem::separator(),
         MenuItem::action("終了", crate::actions::QuitApp).disabled(!quit_enabled),
     ]);
@@ -236,7 +236,7 @@ pub struct Workspace {
     /// 起動時の Drive バックアップ復元確認を表示中か。
     show_restore_prompt: bool,
     /// 復元対象の Drive バックアップ情報（確認ダイアログの表示用）。
-    restore_info: Option<thundoku_core::drive::sync::DriveBackupInfo>,
+    restore_info: Option<ligrol_core::drive::sync::DriveBackupInfo>,
     /// 復元実行中（バックグラウンド）か。
     restoring: bool,
     /// Google ログイン後に Drive バックアップ有効化の確認を表示中か。
@@ -427,7 +427,7 @@ impl Workspace {
         // （マーカーで二度目以降は何もしない。手動で戻した本をひっくり返さないため）。
         {
             let state = AppState::global(cx);
-            match thundoku_core::db::books::apply_auto_backup_exclusion_once(
+            match ligrol_core::db::books::apply_auto_backup_exclusion_once(
                 &state.db_pool,
                 &state.packs_dir,
             ) {
@@ -962,7 +962,7 @@ impl Workspace {
         };
         // 最後にアップロードしたバックアップの内容（基準値）。Drive 側がこれから
         // 変わっていないなら、差分はローカル側だけのもの＝復元する必要はない。
-        let baseline = db::settings::get(&db, thundoku_core::drive::sync::BACKUP_BASELINE_KEY)
+        let baseline = db::settings::get(&db, ligrol_core::drive::sync::BACKUP_BASELINE_KEY)
             .ok()
             .flatten();
         let handle = cx.weak_entity();
@@ -973,11 +973,11 @@ impl Workspace {
             let Ok(token) = client.access_token() else {
                 return None;
             };
-            let mut drive = thundoku_core::drive::DriveClient::new(
-                Box::new(thundoku_core::tbf::UreqTransport::new()),
+            let mut drive = ligrol_core::drive::DriveClient::new(
+                Box::new(ligrol_core::tbf::UreqTransport::new()),
                 token,
             );
-            let status = thundoku_core::drive::sync::inspect_drive_backup(
+            let status = ligrol_core::drive::sync::inspect_drive_backup(
                 &db,
                 &mut drive,
                 &folder_id,
@@ -1041,11 +1041,11 @@ impl Workspace {
             let mut client = google.lock();
             let client = client.as_mut()?;
             let token = client.access_token().ok()?;
-            let mut drive = thundoku_core::drive::DriveClient::new(
-                Box::new(thundoku_core::tbf::UreqTransport::new()),
+            let mut drive = ligrol_core::drive::DriveClient::new(
+                Box::new(ligrol_core::tbf::UreqTransport::new()),
                 token,
             );
-            thundoku_core::drive::sync::restore_drive_backup(&mut drive, &folder_id, &db).ok()
+            ligrol_core::drive::sync::restore_drive_backup(&mut drive, &folder_id, &db).ok()
         });
         cx.spawn(async move |_window, cx| {
             let restored = task.await.is_some();
@@ -1259,7 +1259,7 @@ impl Workspace {
         book_id: String,
         page: i64,
         content_id: String,
-        side: Option<thundoku_core::db::notes::SpreadSide>,
+        side: Option<ligrol_core::db::notes::SpreadSide>,
     ) {
         if self.reader_blocked_by_import_confirm(cx) {
             return;
@@ -1479,8 +1479,8 @@ impl Workspace {
         };
         // PRK は解決済みのものだけ使う（終了時に Drive を取りに行かない）。
         let root = state.pack_root_key();
-        let sync_books = thundoku_core::drive::sync::books_backup_enabled(&state.db_pool);
-        match thundoku_core::drive::sync::pending_backup_changes(
+        let sync_books = ligrol_core::drive::sync::books_backup_enabled(&state.db_pool);
+        match ligrol_core::drive::sync::pending_backup_changes(
             &state.db_pool,
             &state.packs_dir,
             Some(&sub),
@@ -1634,7 +1634,7 @@ impl Workspace {
         let db = state.db_pool.clone();
         let packs_dir = state.packs_dir.clone();
         let downloads_dir = state.downloads_dir.clone();
-        let db_path = state.data_dir.join("thundoku-shelf.db");
+        let db_path = state.data_dir.join("ligrol.db");
         let thumbnails_dir = state.data_dir.join("thumbnails");
         let google_sub = state.google_profile.lock().as_ref().map(|p| p.sub.clone());
         let db_key = state.secrets.db_key().ok();
@@ -1643,7 +1643,7 @@ impl Workspace {
         // アップロードの進捗を UI（スティッキー通知）へ流す口。
         // `send` は無限バッファなのでブロックしない（終了処理を止めない）。
         let (progress_tx, progress_rx) =
-            std::sync::mpsc::channel::<thundoku_core::drive::sync::SyncProgress>();
+            std::sync::mpsc::channel::<ligrol_core::drive::sync::SyncProgress>();
         let task: gpui_kit::Task<Result<(), String>> = cx.background_executor().spawn(async move {
             log::info!("exit upload: start");
             let folder_id = db::settings::get(&db, "drive.sync.folder_id")
@@ -1677,17 +1677,17 @@ impl Workspace {
                     .ok_or_else(|| "Google にログインしてください".to_string())?;
                 client.access_token().map_err(|e| e.to_string())?
             };
-            let mut drive = thundoku_core::drive::DriveClient::new(
-                Box::new(thundoku_core::tbf::UreqTransport::new()),
+            let mut drive = ligrol_core::drive::DriveClient::new(
+                Box::new(ligrol_core::tbf::UreqTransport::new()),
                 token,
             );
             log::info!("exit upload: sync 開始");
             let progress_tx = progress_tx;
             // 書籍のバックアップ ON/OFF（行が無ければ ON）。OFF でも DB バックアップと
             // 鍵 bundle は同期する（本のファイルとは失うものが別）。
-            let sync_books = thundoku_core::drive::sync::books_backup_enabled(&db);
-            let _ = thundoku_core::drive::sync::sync_with_progress(
-                thundoku_core::drive::sync::SyncRequest {
+            let sync_books = ligrol_core::drive::sync::books_backup_enabled(&db);
+            let _ = ligrol_core::drive::sync::sync_with_progress(
+                ligrol_core::drive::sync::SyncRequest {
                     pool: &db,
                     drive: &mut drive,
                     packs_dir: &packs_dir,
@@ -1719,7 +1719,7 @@ impl Workspace {
             let mut last_at: Option<std::time::Instant> = None;
             let mut disconnected = false;
             while !disconnected {
-                let mut latest: Option<thundoku_core::drive::sync::SyncProgress> = None;
+                let mut latest: Option<ligrol_core::drive::sync::SyncProgress> = None;
                 loop {
                     match progress_rx.try_recv() {
                         Ok(progress) => latest = Some(progress),
@@ -2085,7 +2085,7 @@ impl Workspace {
                 action
                     .side
                     .as_deref()
-                    .and_then(thundoku_core::db::notes::SpreadSide::parse),
+                    .and_then(ligrol_core::db::notes::SpreadSide::parse),
             )
         );
         reg!(crate::actions::ShowChecklist, |this, cx| {
@@ -2877,7 +2877,7 @@ impl Workspace {
                             .debug_selector(|| "app-title-bar-title".into())
                             .text_sm()
                             .font_weight(gpui_kit::FontWeight::MEDIUM)
-                            .child("Thundoku Shelf"),
+                            .child("Ligrol"),
                     ),
             )
             .into_any_element()
@@ -2910,7 +2910,7 @@ impl Workspace {
                     .window_control_area(WindowControlArea::Drag)
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .child("Thundoku Shelf"),
+                    .child("Ligrol"),
             )
             .child(
                 div()
@@ -3107,7 +3107,7 @@ impl Workspace {
                                         .text_sm()
                                         .font_weight(FontWeight::BOLD)
                                         .whitespace_nowrap()
-                                        .child("Thundoku Shelf"),
+                                        .child("Ligrol"),
                                 )
                                 .when_some(unread, |this, count| {
                                     this.child(
@@ -4161,7 +4161,7 @@ impl Workspace {
 
 /// 起動時の復元確認・終了時のアップロードで使う所有者スコープ（現在の Google アカウント）。
 ///
-/// Drive 側の `thundoku-backup.json` は「アップロードした時点のアカウントに帰属する
+/// Drive 側の `ligrol-backup.json` は「アップロードした時点のアカウントに帰属する
 /// データ」だけを含むため、比較・アップロードも同じ範囲で行う必要がある。
 /// `book_ids` は `books`（本の id で辿れるテーブル）用、`key` / `sub` は
 /// 本棚・チェックリスト・お気に入りの `owner_sub` 判定（`OwnerFilter`）用。
@@ -4184,8 +4184,8 @@ fn backup_owner_scope(state: &AppState) -> Option<BackupOwnerScope> {
 }
 
 /// バックアップ（`export_json` / `inspect_drive_backup`）用の所有者フィルタ。
-fn owner_filter_of(scope: &BackupOwnerScope) -> thundoku_core::db::backup::OwnerFilter<'_> {
-    thundoku_core::db::backup::OwnerFilter {
+fn owner_filter_of(scope: &BackupOwnerScope) -> ligrol_core::db::backup::OwnerFilter<'_> {
+    ligrol_core::db::backup::OwnerFilter {
         key: &scope.key,
         sub: Some(&scope.sub),
     }
@@ -4247,14 +4247,14 @@ fn window_restore(window: &mut Window) {
 
 #[cfg(test)]
 mod tests {
-    use thundoku_core::drive::sync::{SyncPhase, SyncProgress};
+    use ligrol_core::drive::sync::{SyncPhase, SyncProgress};
 
     /// 終了時の通知は「何をどこまで送ったか」を出す（進捗が無い段階でも段階名を出す）。
     #[test]
     fn exit_upload_notice_shows_progress() {
         let uploading = SyncProgress {
             phase: SyncPhase::Upload,
-            name: "pack-1.opfspack".into(),
+            name: "pack-1.nartik".into(),
             index: 0,
             count: 0,
             bytes: 3 * 1024 * 1024,
@@ -4280,7 +4280,7 @@ mod tests {
     #[test]
     fn exit_upload_failure_message_tells_the_user_what_happened() {
         let expired = super::exit_upload_failure_message(
-            &thundoku_core::google::GoogleError::RefreshTokenRevoked.to_string(),
+            &ligrol_core::google::GoogleError::RefreshTokenRevoked.to_string(),
             true,
         );
         assert!(
@@ -6215,7 +6215,7 @@ mod tests {
     }
     #[gpui_kit::test]
     async fn closing_reader_refreshes_bookshelf_read_state(cx: &mut TestAppContext) {
-        use thundoku_core::db::documents;
+        use ligrol_core::db::documents;
         cx.update(gpui_kit::component::init);
         cx.update(AppState::init_test);
         // b1: 3 ページの本（ダウンロード直後は reading_progress が無く
@@ -6233,7 +6233,7 @@ mod tests {
                     purchase_date: None,
                     file_name: "b1.pdf".into(),
                     file_size: 10,
-                    opfs_path: "b1.opfspack".into(),
+                    opfs_path: "b1.nartik".into(),
                     cover_thumbnail: None,
                     tbf_product_id: None,
                     site_id: None,
@@ -6372,7 +6372,7 @@ mod tests {
             ws.update(cx, |w, cx| w.set_theme("dark", cx));
         });
         let saved = cx.update(|cx| {
-            thundoku_core::db::settings::get(&AppState::global(cx).db_pool, "theme.mode")
+            ligrol_core::db::settings::get(&AppState::global(cx).db_pool, "theme.mode")
                 .ok()
                 .flatten()
         });
@@ -6384,7 +6384,7 @@ mod tests {
         let ws = setup(cx);
         let mode = |cx: &mut TestAppContext| {
             cx.update(|cx| {
-                thundoku_core::db::settings::get(&AppState::global(cx).db_pool, "theme.mode")
+                ligrol_core::db::settings::get(&AppState::global(cx).db_pool, "theme.mode")
                     .ok()
                     .flatten()
             })
@@ -6468,7 +6468,7 @@ mod tests {
         let after = ws.read_with(cx, |w, _| w.theme_mode_name.clone());
         assert_ne!(before, after, "テーマ切替後にキャッシュが更新されていない");
         let stored = cx.read(|cx| {
-            thundoku_core::db::settings::get(&AppState::global(cx).db_pool, "theme.mode").unwrap()
+            ligrol_core::db::settings::get(&AppState::global(cx).db_pool, "theme.mode").unwrap()
         });
         assert_eq!(
             Some(after),
@@ -6861,8 +6861,8 @@ mod tests {
         assert!(ws.read_with(cx, |w, _| w.show_auth));
     }
 
-    fn google_profile(sub: &str) -> thundoku_core::google::GoogleProfile {
-        thundoku_core::google::GoogleProfile {
+    fn google_profile(sub: &str) -> ligrol_core::google::GoogleProfile {
+        ligrol_core::google::GoogleProfile {
             sub: sub.to_string(),
             email: format!("{sub}@example.com"),
             name: "ユーザー".to_string(),
@@ -6879,7 +6879,7 @@ mod tests {
             purchase_date: None,
             file_name: "t.pdf".to_string(),
             file_size: 1,
-            opfs_path: format!("{id}.opfspack"),
+            opfs_path: format!("{id}.nartik"),
             cover_thumbnail: None,
             tbf_product_id: None,
             site_id: None,
@@ -6922,11 +6922,11 @@ mod tests {
             books::set_owner_sub(
                 &state.db_pool,
                 pack_id,
-                Some(thundoku_core::owner::encrypt(&key, sub)),
+                Some(ligrol_core::owner::encrypt(&key, sub)),
             )
             .unwrap();
             std::fs::create_dir_all(&state.packs_dir).unwrap();
-            std::fs::write(state.packs_dir.join(format!("{pack_id}.opfspack")), b"PACK").unwrap();
+            std::fs::write(state.packs_dir.join(format!("{pack_id}.nartik")), b"PACK").unwrap();
         });
     }
 
@@ -6937,21 +6937,21 @@ mod tests {
             let state = AppState::global(cx);
             let key = state.secrets.db_key().expect("暗号鍵");
             let ids = books::owned_book_ids(&state.db_pool, &key, Some(sub)).unwrap();
-            let owner = thundoku_core::db::backup::OwnerFilter {
+            let owner = ligrol_core::db::backup::OwnerFilter {
                 key: &key,
                 sub: Some(sub),
             };
-            let json = thundoku_core::db::backup::export_json(
+            let json = ligrol_core::db::backup::export_json(
                 &state.db_pool,
                 Some(&ids),
                 Some(&owner),
                 false,
             )
             .unwrap();
-            let baseline = thundoku_core::db::backup::canonical_md5_str(&json, None).unwrap();
+            let baseline = ligrol_core::db::backup::canonical_md5_str(&json, None).unwrap();
             let _ = db::settings::set(
                 &state.db_pool,
-                thundoku_core::drive::sync::BACKUP_BASELINE_KEY,
+                ligrol_core::drive::sync::BACKUP_BASELINE_KEY,
                 &baseline,
             );
         });
@@ -6997,7 +6997,7 @@ mod tests {
                 books::set_owner_sub(
                     &state.db_pool,
                     id,
-                    owner.map(|sub| thundoku_core::owner::encrypt(&key, sub)),
+                    owner.map(|sub| ligrol_core::owner::encrypt(&key, sub)),
                 )
                 .unwrap();
             }
@@ -7334,7 +7334,7 @@ mod tests {
 
         // 進捗を何度更新しても通知は 1 件のまま（作り直していない）。
         for percent in [1u32, 17, 42, 73, 100] {
-            let text = format!("pack-1.opfspack をアップロード中（{percent}%）");
+            let text = format!("pack-1.nartik をアップロード中（{percent}%）");
             cx.update(|cx| {
                 ws.update(cx, |w, cx| {
                     w.exit_progress.update(cx, |progress, cx| {

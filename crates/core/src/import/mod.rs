@@ -1,4 +1,4 @@
-//! Import pipeline: PDF / EPUB / image-ZIP -> .opfspack pack + DB rows
+//! Import pipeline: PDF / EPUB / image-ZIP -> .nartik pack + DB rows
 //! (books, imported_documents, document_images, document_text,
 //! token_analysis, book_tags). Mirrors the Web `file-import.ts` rules.
 
@@ -14,7 +14,7 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
-use opfspack::{PackBuilder, PackRead, PackRootKey};
+use nartik::{PackBuilder, PackRead, PackRootKey};
 
 use crate::db::{SqlitePool, books, contents, documents, tags as tags_repo};
 use crate::google::GoogleProfile;
@@ -48,7 +48,7 @@ pub enum ImportError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("pack error: {0}")]
-    Pack(#[from] opfspack::PackError),
+    Pack(#[from] nartik::PackError),
     #[error("database error: {0}")]
     Db(#[from] sqlx::Error),
     #[error("pdf error: {0}")]
@@ -86,7 +86,7 @@ pub enum ImportError {
     /// Google にログイン済みなのに pack の鍵（v3 のルート鍵 = PRK）を用意できない。
     ///
     /// v3 の鍵材料は乱数のルート鍵で、端末の keyring と Drive の
-    /// `thundoku-keys.json`（`sub` / パスフレーズでラップして保管）にしか無い。
+    /// `ligrol-keys.json`（`sub` / パスフレーズでラップして保管）にしか無い。
     /// この状態で取り込みを続けると平文 pack ができ、`owner_sub` 付きの本が
     /// 復号できない pack（＝ログイン中の閲覧で開けない本）を指す不整合になる。
     /// データを壊すより取り込みを失敗させる（fail-closed）。文言はそのまま画面に出る。
@@ -284,7 +284,7 @@ fn book_id_for(reuse_book_id: Option<&str>) -> String {
 /// - ログイン済みでも `sub` が空: エラー（`sub` は `owner_id` とラップの材料なので、
 ///   空のままでは自分の鍵を引けない）。
 ///
-/// `resolve_root` は PRK の解決（keyring → Drive の `thundoku-keys.json` → 必要なら
+/// `resolve_root` は PRK の解決（keyring → Drive の `ligrol-keys.json` → 必要なら
 /// パスフレーズ入力・新規作成）を行う。core の [`crate::pack_keys::PackKeyStore`] を
 /// 呼ぶのが想定経路で、UI（パスフレーズの入力）は呼び出し側が用意する。
 pub fn pack_root_key_for_import(
@@ -321,14 +321,14 @@ pub fn should_auto_exclude_backup(pack_bytes: u64) -> bool {
 
 /// 1 冊の PDF のページ数上限（9000）。
 ///
-/// `opfspack::MAX_ENTRY_COUNT`（10000）から metadata / サムネイル分を引いた値。
+/// `nartik::MAX_ENTRY_COUNT`（10000）から metadata / サムネイル分を引いた値。
 /// これを超える PDF は 1 エントリ 16MPix の検査を通っても、レンダリングと
 /// WebP エンコードに長時間かけてから pack の上限で落ちる（セキュリティ評価 F06）。
 pub const MAX_PDF_PAGES: usize = 9000;
 
 /// 取り込み元ファイルの上限（10 GiB）。**読む前に**検査する。
 ///
-/// pack の上限（`opfspack::MAX_TOTAL_SIZE`）と揃えてある。PDF と ZIP は**ファイルから**
+/// pack の上限（`nartik::MAX_TOTAL_SIZE`）と揃えてある。PDF と ZIP は**ファイルから**
 /// 読む（PDF は PDFium にファイルを渡し、ZIP は `ZipArchive<File>`）ので、取り込み元の
 /// 大きさがそのまま RAM 使用量になるわけではない。EPUB（ビューアー非対応で 1 エントリ
 /// として入れるだけ）と単体画像は全体を読むが、実データでは小さい。
@@ -955,7 +955,7 @@ pub fn rename_content_in_pack(
     display_name: &str,
     root_key: Option<&PackRootKey>,
 ) -> Result<Option<Vec<u8>>, ImportError> {
-    let reader = opfspack::PackReader::open(pack_bytes)?;
+    let reader = nartik::PackReader::open(pack_bytes)?;
     // v3 の pack 鍵は pack id（= book id）から導出する。
     let pack_key = root_key.map(|root| root.derive_pack_key(pack_id));
     let Ok(raw) = reader.read_entry("metadata.json", pack_key.as_ref()) else {
@@ -984,21 +984,21 @@ pub fn rename_content_in_pack(
     // 全エントリを読み直して組み直す（index は path 順・offset は再計算されるため、
     // metadata.json のサイズが変わっても整合する）。暗号化・圧縮の設定は元の pack に合わせる。
     let header = reader.header();
-    let encrypted = header.flags & opfspack::pack_flags::ENCRYPTED != 0;
-    let mut builder = opfspack::PackBuilder::new(header.created_at);
+    let encrypted = header.flags & nartik::pack_flags::ENCRYPTED != 0;
+    let mut builder = nartik::PackBuilder::new(header.created_at);
     for entry in reader.entries() {
         let data = if entry.path == "metadata.json" {
             serde_json::to_vec(&metadata).map_err(|e| ImportError::Image(e.to_string()))?
         } else {
             reader.read_entry(&entry.path, pack_key.as_ref())?
         };
-        let compress = entry.flags & opfspack::entry_flags::COMPRESSED != 0;
+        let compress = entry.flags & nartik::entry_flags::COMPRESSED != 0;
         builder.add_entry(&entry.path, data, &entry.mime_type, compress);
     }
     let pack_key = if encrypted { pack_key } else { None };
     Ok(Some(builder.build(
         pack_key.as_ref(),
-        header.flags & opfspack::pack_flags::COMPRESSED != 0,
+        header.flags & nartik::pack_flags::COMPRESSED != 0,
     )?))
 }
 
@@ -1174,7 +1174,7 @@ impl PackEntryStore {
             Some(dir) => dir.clone(),
             None => {
                 let dir = std::env::temp_dir().join(format!(
-                    "thundoku-import-spill-{}-{}",
+                    "ligrol-import-spill-{}-{}",
                     std::process::id(),
                     chrono::Utc::now().timestamp_millis()
                 ));
@@ -1190,10 +1190,10 @@ impl PackEntryStore {
     }
 
     /// pack へ書き出すエントリ（path と MIME と圧縮指定）。
-    fn specs(&self) -> Vec<opfspack::EntrySpec> {
+    fn specs(&self) -> Vec<nartik::EntrySpec> {
         self.entries
             .iter()
-            .map(|(path, _, mime_type, compress)| opfspack::EntrySpec {
+            .map(|(path, _, mime_type, compress)| nartik::EntrySpec {
                 path: path.clone(),
                 mime_type: mime_type.clone(),
                 compress: *compress,
@@ -1314,7 +1314,7 @@ fn finish_import(
     );
     // **エントリを 1 件ずつ供給して組み立てる**: ページデータは `PackEntryStore` から
     // 必要なときに取り出す（メモリか一時ファイル）。全ページを同時に持たない。
-    let mut entries = vec![opfspack::EntrySpec {
+    let mut entries = vec![nartik::EntrySpec {
         path: metadata_path.clone(),
         mime_type: "application/json".to_string(),
         compress: false,
@@ -1332,7 +1332,7 @@ fn finish_import(
         );
     }
     if texts_entry.is_some() {
-        entries.push(opfspack::EntrySpec {
+        entries.push(nartik::EntrySpec {
             path: TEXT_ENTRY.to_string(),
             mime_type: "application/x-ndjson".to_string(),
             compress: true,
@@ -1370,15 +1370,15 @@ fn finish_import(
             if path == TEXT_ENTRY {
                 return texts_entry
                     .clone()
-                    .ok_or_else(|| opfspack::PackError::Io("text entry missing".to_string()));
+                    .ok_or_else(|| nartik::PackError::Io("text entry missing".to_string()));
             }
             let index = remainder
                 .get_mut(path)
                 .and_then(std::collections::VecDeque::pop_front)
-                .ok_or_else(|| opfspack::PackError::Io(format!("import entry missing: {path}")))?;
+                .ok_or_else(|| nartik::PackError::Io(format!("import entry missing: {path}")))?;
             store
                 .take(index)
-                .map_err(|error| opfspack::PackError::Io(error.to_string()))
+                .map_err(|error| nartik::PackError::Io(error.to_string()))
         });
     drop(store);
     let pack_bytes = built?;
@@ -1398,7 +1398,7 @@ fn finish_import(
     }
     // pack 全体のハッシュは**ファイルを順に読んで**計算する（大きい pack を RAM に載せない）。
     let pack_hash = {
-        let reader = opfspack::PackFileReader::open(&pack_file)?;
+        let reader = nartik::PackFileReader::open(&pack_file)?;
         reader.source_sha256()?
     };
 
@@ -1410,7 +1410,7 @@ fn finish_import(
         purchase_date: None,
         file_name: file_name.to_string(),
         file_size: source_bytes_len,
-        opfs_path: format!("{book_id}.opfspack"),
+        opfs_path: format!("{book_id}.nartik"),
         cover_thumbnail: None,
         tbf_product_id: None,
         site_id: None,
@@ -1523,7 +1523,7 @@ fn finish_import(
             format_id: row.format_id.clone(),
             page_number: row.page_number,
             image_type: "page".to_string(),
-            opfs_path: format!("{book_id}.opfspack"),
+            opfs_path: format!("{book_id}.nartik"),
             width: row.width,
             height: row.height,
             mime_type: "image/webp".to_string(),
@@ -1561,7 +1561,7 @@ fn finish_import(
                 .and_then(|(_, format_id)| format_id.clone()),
             page_number: 1,
             image_type: "thumbnail".to_string(),
-            opfs_path: format!("{book_id}.opfspack"),
+            opfs_path: format!("{book_id}.nartik"),
             width,
             height,
             mime_type: "image/webp".to_string(),
@@ -2003,20 +2003,20 @@ pub fn analyze_zip_with<R: std::io::Read + std::io::Seek>(
     let declared_total: u64 = metas
         .iter()
         .fold(0u64, |acc, meta| acc.saturating_add(meta.declared_size));
-    if metas.len() > opfspack::MAX_ENTRY_COUNT as usize {
+    if metas.len() > nartik::MAX_ENTRY_COUNT as usize {
         return Err(ImportError::ZipTooLarge {
             detail: format!(
                 "エントリ数 {} が上限 {} を超えています",
                 metas.len(),
-                opfspack::MAX_ENTRY_COUNT
+                nartik::MAX_ENTRY_COUNT
             ),
         });
     }
-    if declared_total > opfspack::MAX_TOTAL_SIZE {
+    if declared_total > nartik::MAX_TOTAL_SIZE {
         return Err(ImportError::ZipTooLarge {
             detail: format!(
                 "展開後の合計 {declared_total} バイトが上限 {} バイトを超えています",
-                opfspack::MAX_TOTAL_SIZE
+                nartik::MAX_TOTAL_SIZE
             ),
         });
     }
@@ -2418,7 +2418,7 @@ pub fn commit_zip_path(
     )
 }
 
-/// pack（`.opfspack`）から DB の取り込み状態（`imported_documents` / `book_contents` /
+/// pack（`.nartik`）から DB の取り込み状態（`imported_documents` / `book_contents` /
 /// `content_formats` / `document_images` / `document_text` / `token_analysis`）と、
 /// `books` の取り込み元（`site_id` / `tbf_product_id`）を再構築する（Drive 復元用）。
 ///
@@ -2691,7 +2691,7 @@ fn restore_source(pool: &SqlitePool, pack_id: &str, metadata: Option<&serde_json
 ///
 /// エントリが無い pack（旧形式・Web 版が書いた pack）は空を返す。エントリはあるが読めない
 /// （鍵違い・壊れた行）ときは、その行だけを飛ばす（本文は副次的なので復元全体を止めない）。
-fn read_texts_entry(reader: &dyn PackRead, key: Option<&opfspack::PackKey>) -> Vec<(i64, String)> {
+fn read_texts_entry(reader: &dyn PackRead, key: Option<&nartik::PackKey>) -> Vec<(i64, String)> {
     if reader.entry(TEXT_ENTRY).is_none() {
         return Vec::new();
     }
@@ -2862,7 +2862,7 @@ fn document_image_row(
         format_id,
         page_number,
         image_type: image_type.to_string(),
-        opfs_path: format!("{pack_id}.opfspack"),
+        opfs_path: format!("{pack_id}.nartik"),
         width,
         height,
         mime_type: "image/webp".to_string(),
@@ -2968,7 +2968,7 @@ mod natural_sort_tests {
 mod pack_root_key_tests {
     use super::{ImportError, pack_root_key_for_import};
     use crate::google::GoogleProfile;
-    use opfspack::PackRootKey;
+    use nartik::PackRootKey;
 
     fn profile(sub: &str) -> GoogleProfile {
         GoogleProfile {
@@ -3189,7 +3189,7 @@ mod page_render_bench {
 
     /// 手元で 1 ページの変換コストと libwebp の effort ごとの差を測る（CI では走らせない）。
     ///
-    /// 実行: `PAGE_BENCH=<画像パス> cargo test --release -p thundoku-core --lib \
+    /// 実行: `PAGE_BENCH=<画像パス> cargo test --release -p ligrol-core --lib \
     ///        bench_page_render -- --ignored --nocapture`
     #[test]
     #[ignore]

@@ -1,4 +1,4 @@
-//! 画像ビューアー: Web 版 `thundoku-viewer` の仕様（packages-viewer.md）を
+//! 画像ビューアー: Web 版 `ligrol-viewer` の仕様（packages-viewer.md）を
 //! 参照した、アプリ内独立コンポーネント。データ取得は `PageLoader` 注入。
 
 use std::sync::Arc;
@@ -22,12 +22,12 @@ use gpui_kit::{
     Context, Entity, FocusHandle, IntoElement, KeyDownEvent, ParentElement, Render, RenderImage,
     SharedString, Window, div, img, px,
 };
-use thundoku_core::db;
+use ligrol_core::db;
 
 use crate::actions::CloseReader;
 use crate::icons::AppIcon;
-use thundoku_core::db::books::PageTurn;
-use thundoku_core::db::documents::DocumentImage;
+use ligrol_core::db::books::PageTurn;
+use ligrol_core::db::documents::DocumentImage;
 
 /// 付箋アイコンの一辺（px）。ボタン、アイコン、単一表示の位置計算で共有する。
 pub const NOTE_ICON_SIZE: f32 = 28.0;
@@ -235,22 +235,22 @@ fn format_subtitle(format: &FormatEntry) -> String {
     }
 }
 
-/// Loads pages from a book's `.opfspack` (via `document_images`).
+/// Loads pages from a book's `.nartik` (via `document_images`).
 pub struct PackPageLoader {
     pub images: Vec<DocumentImage>,
     pub packs_dir: std::path::PathBuf,
-    pub db: thundoku_core::db::SqlitePool,
+    pub db: ligrol_core::db::SqlitePool,
     /// pack の復号に使う v3 のルート鍵（PRK。未ログイン / 未解決は `None`）。
     /// 冊ごとの pack 鍵は `root.derive_pack_key(book_id)` で導出する（HKDF-SHA256 は
     /// 軽いのでページごとに導出してよい）。
-    pub pack_root_key: Option<opfspack::PackRootKey>,
+    pub pack_root_key: Option<nartik::PackRootKey>,
     /// pack の**ファイル裏打ちリーダー**のキャッシュ（pack_id + リーダー。初回 load 時に
     /// 一度だけ開く）。ページをめくるたびに pack 全体を読み直さないだけでなく、
     /// **pack 全体を RAM に載せない**（読むのは 1 エントリ分だけ）。
     ///
     /// 読み出しは `&self`（位置読み）なので、並列ロードでもそのまま共有できる。
     /// OnceLock なので初期化も 1 回だけ。
-    pub pack_reader: std::sync::OnceLock<Option<(String, Arc<opfspack::PackFileReader>)>>,
+    pub pack_reader: std::sync::OnceLock<Option<(String, Arc<nartik::PackFileReader>)>>,
 }
 
 impl PageLoader for PackPageLoader {
@@ -275,8 +275,8 @@ impl PageLoader for PackPageLoader {
             let book = db::books::get(db, &book_id_of(image, db)).ok()??;
             let pack_id = book.pack_id.as_deref().unwrap_or(&book.id).to_string();
             // 保存領域の外を指す id（改変バックアップ由来）では読まない。
-            let path = thundoku_core::pack_path::pack_path(&self.packs_dir, &pack_id).ok()?;
-            let reader = opfspack::PackFileReader::open(&path).ok()?;
+            let path = ligrol_core::pack_path::pack_path(&self.packs_dir, &pack_id).ok()?;
+            let reader = nartik::PackFileReader::open(&path).ok()?;
             Some((book.id.clone(), Arc::new(reader)))
         });
         let (book_id, reader) = cached.as_ref().ok_or("pack load failed")?;
@@ -300,7 +300,7 @@ impl PageLoader for PackPageLoader {
     }
 }
 
-fn book_id_of(image: &DocumentImage, db: &thundoku_core::db::SqlitePool) -> String {
+fn book_id_of(image: &DocumentImage, db: &ligrol_core::db::SqlitePool) -> String {
     db::documents::get_document(db, &image.document_id)
         .ok()
         .flatten()
@@ -1612,9 +1612,9 @@ impl ImageViewer {
             let pair = self.spread_pages();
             (pair.len() == 2).then(|| {
                 if pair.first() == Some(&index) {
-                    thundoku_core::db::notes::SpreadSide::Left
+                    ligrol_core::db::notes::SpreadSide::Left
                 } else {
-                    thundoku_core::db::notes::SpreadSide::Right
+                    ligrol_core::db::notes::SpreadSide::Right
                 }
             })
         };
@@ -1661,8 +1661,8 @@ impl ImageViewer {
                             page,
                             side: side.map(|side| {
                                 SharedString::from(match side {
-                                    thundoku_core::db::notes::SpreadSide::Left => "left",
-                                    thundoku_core::db::notes::SpreadSide::Right => "right",
+                                    ligrol_core::db::notes::SpreadSide::Left => "left",
+                                    ligrol_core::db::notes::SpreadSide::Right => "right",
                                 })
                             }),
                         });
@@ -2457,7 +2457,7 @@ impl ImageViewer {
                             .child("ページ画像を読み込めませんでした"),
                     )
                     .child(div().text_xs().text_color(_muted_foreground).child(
-                        "パック（.opfspack）が無いか壊れています。再ダウンロードしてください",
+                        "パック（.nartik）が無いか壊れています。再ダウンロードしてください",
                     ))
                     .child(div().text_xs().text_color(_muted_foreground).child(error))
                     .into_any_element(),
@@ -3995,9 +3995,9 @@ mod tests {
     fn seed_book(cx: &mut TestAppContext, id: &str) {
         cx.update(|cx| {
             let db = &crate::app_state::AppState::global(cx).db_pool;
-            thundoku_core::db::books::insert(
+            ligrol_core::db::books::insert(
                 db,
-                &thundoku_core::db::books::Book {
+                &ligrol_core::db::books::Book {
                     id: id.into(),
                     title: "テスト本".into(),
                     author: String::new(),
@@ -4005,7 +4005,7 @@ mod tests {
                     purchase_date: None,
                     file_name: "t.pdf".into(),
                     file_size: 1,
-                    opfs_path: format!("{id}.opfspack"),
+                    opfs_path: format!("{id}.nartik"),
                     cover_thumbnail: None,
                     tbf_product_id: None,
                     site_id: Some("fanza".into()),
@@ -4044,7 +4044,7 @@ mod tests {
         // 保存済みの表示モードを「スクロール」にしてから開く（DB 設定で復元される）
         cx.update(|cx| {
             let db = &crate::app_state::AppState::global(cx).db_pool;
-            thundoku_core::db::settings::set(db, "viewer.mode", "scroll").unwrap();
+            ligrol_core::db::settings::set(db, "viewer.mode", "scroll").unwrap();
         });
         // 1 ページ 4000x4000 = 64MiB 相当と申告する 20 ページの本（PNG 自体は小さい）
         let view = cx.new(|cx| {
@@ -4194,7 +4194,7 @@ mod tests {
         assert_eq!(view.read_with(cx, |v, _| v.mode), ViewMode::Scroll);
         let stored = cx.update(|cx| {
             let db = &crate::app_state::AppState::global(cx).db_pool;
-            thundoku_core::db::settings::get(db, "viewer.mode")
+            ligrol_core::db::settings::get(db, "viewer.mode")
                 .ok()
                 .flatten()
         });
@@ -4393,7 +4393,7 @@ mod tests {
         cx.update(crate::app_state::AppState::init_test);
         cx.update(|cx| {
             let db = &crate::app_state::AppState::global(cx).db_pool;
-            thundoku_core::db::settings::set(db, "viewer.wheel_direction", "up-to-next").unwrap();
+            ligrol_core::db::settings::set(db, "viewer.wheel_direction", "up-to-next").unwrap();
         });
         let view = viewer(cx, 5);
         let window = cx.open_window(
@@ -4639,7 +4639,7 @@ mod tests {
         // FANZA の既定（サイト別設定）は右綴じ
         cx.update(|cx| {
             let db = &crate::app_state::AppState::global(cx).db_pool;
-            thundoku_core::db::settings::set(db, "viewer.page_turn.fanza", "right-to-left")
+            ligrol_core::db::settings::set(db, "viewer.page_turn.fanza", "right-to-left")
                 .unwrap();
         });
 
@@ -4656,19 +4656,19 @@ mod tests {
         cx.read(|cx| {
             let db = &crate::app_state::AppState::global(cx).db_pool;
             assert_eq!(
-                thundoku_core::db::books::page_turn(db, "b1").unwrap(),
+                ligrol_core::db::books::page_turn(db, "b1").unwrap(),
                 Some(PageTurn::LeftToRight),
                 "本ごとに保存されていない"
             );
             assert_eq!(
-                thundoku_core::db::settings::get(db, "viewer.page_turn.fanza")
+                ligrol_core::db::settings::get(db, "viewer.page_turn.fanza")
                     .unwrap()
                     .as_deref(),
                 Some("right-to-left"),
                 "サイト別設定を書き換えている"
             );
             assert_eq!(
-                thundoku_core::db::books::page_turn(db, "b2").unwrap(),
+                ligrol_core::db::books::page_turn(db, "b2").unwrap(),
                 None,
                 "同じサイトの別の本に指定が入っている"
             );
@@ -4707,7 +4707,7 @@ mod tests {
         cx.read(|cx| {
             let db = &crate::app_state::AppState::global(cx).db_pool;
             assert_eq!(
-                thundoku_core::db::settings::get(db, "viewer.page_turn").unwrap(),
+                ligrol_core::db::settings::get(db, "viewer.page_turn").unwrap(),
                 None,
                 "本に紐づかない表示からグローバル設定を書き換えている"
             );
@@ -4801,7 +4801,7 @@ mod tests {
         // 左→右（洋書）: 小さい番号が左
         cx.update(|cx| {
             let db = &crate::app_state::AppState::global(cx).db_pool;
-            thundoku_core::db::settings::set(db, "viewer.page_turn", "left-to-right").unwrap();
+            ligrol_core::db::settings::set(db, "viewer.page_turn", "left-to-right").unwrap();
         });
         let view = viewer(cx, 5);
         cx.update(|cx| view.update(cx, |this, cx| this.set_mode(cx, ViewMode::Spread)));
@@ -4813,7 +4813,7 @@ mod tests {
         // 右→左（日本の本）: 小さい番号が右
         cx.update(|cx| {
             let db = &crate::app_state::AppState::global(cx).db_pool;
-            thundoku_core::db::settings::set(db, "viewer.page_turn", "right-to-left").unwrap();
+            ligrol_core::db::settings::set(db, "viewer.page_turn", "right-to-left").unwrap();
         });
         let view2 = viewer(cx, 5);
         cx.update(|cx| view2.update(cx, |this, cx| this.set_mode(cx, ViewMode::Spread)));
@@ -4864,12 +4864,12 @@ mod tests {
         assert!(view.read_with(cx, |v, _| v.overlay_visible));
     }
 
-    /// 実 pack（opfspack）を使った再現テスト: 画像だけの本（1 コンテンツ + 1 レンディション）
+    /// 実 pack（nartik）を使った再現テスト: 画像だけの本（1 コンテンツ + 1 レンディション）
     /// でページ一覧のサムネイルが読み込めること。`pack_entry_path` が実在しないと
     /// 空タイルになるため、実際に pack を書いて検証する。
     #[gpui_kit::test]
     async fn page_list_thumbnails_load_from_real_pack(cx: &mut TestAppContext) {
-        use thundoku_core::db;
+        use ligrol_core::db;
 
         cx.update(gpui_kit::component::init);
         cx.update(crate::app_state::AppState::init_test);
@@ -4884,7 +4884,7 @@ mod tests {
         let stamp = "2026-09-11 00:00:00";
 
         // 実 pack を作る（ページ 3 枚の PNG）
-        let mut builder = opfspack::PackBuilder::new(1);
+        let mut builder = nartik::PackBuilder::new(1);
         for page in 1..=3 {
             builder.add_entry(
                 &format!("pages/page_{page:04}.png"),
@@ -4895,7 +4895,7 @@ mod tests {
         }
         let pack = builder.build(None, true).unwrap();
         std::fs::create_dir_all(&packs_dir).unwrap();
-        std::fs::write(packs_dir.join(format!("{book_id}.opfspack")), &pack).unwrap();
+        std::fs::write(packs_dir.join(format!("{book_id}.nartik")), &pack).unwrap();
 
         // DB 行（画像だけの本 = 1 コンテンツ + 1 レンディション）
         db::books::insert(
@@ -4908,7 +4908,7 @@ mod tests {
                 purchase_date: None,
                 file_name: "images.zip".into(),
                 file_size: 1,
-                opfs_path: format!("{book_id}.opfspack"),
+                opfs_path: format!("{book_id}.nartik"),
                 cover_thumbnail: None,
                 tbf_product_id: None,
                 site_id: None,
@@ -4979,7 +4979,7 @@ mod tests {
                     format_id: Some(format_id.into()),
                     page_number: page,
                     image_type: "page".into(),
-                    opfs_path: format!("{book_id}.opfspack"),
+                    opfs_path: format!("{book_id}.nartik"),
                     width: 60,
                     height: 80,
                     mime_type: "image/png".into(),
@@ -5036,7 +5036,7 @@ mod tests {
     /// 読めることを確かめる（鍵の渡し方がずれると全ページが読めなくなるため）。
     #[gpui_kit::test]
     async fn encrypted_pack_reads_with_the_root_key(cx: &mut TestAppContext) {
-        use thundoku_core::db;
+        use ligrol_core::db;
 
         cx.update(gpui_kit::component::init);
         if cx.update(|cx| cx.try_global::<crate::app_state::AppState>().is_none()) {
@@ -5050,14 +5050,14 @@ mod tests {
         let book_id = "encrypted-pack-book";
         let stamp = "2026-09-24 00:00:00";
         // v3: pack の鍵はルート鍵（PRK）から book id で導出する
-        let root = opfspack::PackRootKey::generate();
-        let mut builder = opfspack::PackBuilder::new(1);
+        let root = nartik::PackRootKey::generate();
+        let mut builder = nartik::PackBuilder::new(1);
         builder.add_entry("pages/page_0001.png", make_png(60, 80), "image/png", false);
         let pack = builder
             .build(Some(&root.derive_pack_key(book_id)), true)
             .unwrap();
         std::fs::create_dir_all(&packs_dir).unwrap();
-        std::fs::write(packs_dir.join(format!("{book_id}.opfspack")), &pack).unwrap();
+        std::fs::write(packs_dir.join(format!("{book_id}.nartik")), &pack).unwrap();
 
         db::books::insert(
             &db_pool,
@@ -5069,7 +5069,7 @@ mod tests {
                 purchase_date: None,
                 file_name: "encrypted.zip".into(),
                 file_size: 1,
-                opfs_path: format!("{book_id}.opfspack"),
+                opfs_path: format!("{book_id}.nartik"),
                 cover_thumbnail: None,
                 tbf_product_id: None,
                 site_id: None,
@@ -5114,7 +5114,7 @@ mod tests {
             format_id: None,
             page_number: 1,
             image_type: "page".into(),
-            opfs_path: format!("{book_id}.opfspack"),
+            opfs_path: format!("{book_id}.nartik"),
             width: 60,
             height: 80,
             mime_type: "image/png".into(),
@@ -5170,7 +5170,7 @@ mod tests {
                 format_id: None,
                 page_number: 1,
                 image_type: "page".into(),
-                opfs_path: "missing.opfspack".into(),
+                opfs_path: "missing.nartik".into(),
                 width: 60,
                 height: 80,
                 mime_type: "image/png".into(),

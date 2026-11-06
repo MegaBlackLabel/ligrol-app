@@ -3,8 +3,8 @@
 //! 仕様は `docs/spec/10-pack-keys.md`。v3 では pack の鍵材料は **乱数の
 //! ルート鍵**（PRK）で、`sub` からは導出できない。PRK は
 //!
-//! - 端末: OS keyring（`thundoku-shelf.pack-root-key:<owner_id>`）
-//! - Drive: `thundoku-keys.json`（`thundoku-backup.json` と同じフォルダ）
+//! - 端末: OS keyring（`ligrol.pack-root-key:<owner_id>`）
+//! - Drive: `ligrol-keys.json`（`ligrol-backup.json` と同じフォルダ）
 //!
 //! の 2 箇所に置かれ、Drive 側は「ラップ」＝ AES-256-GCM で包んだ PRK を持つ
 //! （`kind=sub` は Google ログインだけでの復号、`kind=passphrase` は
@@ -13,14 +13,14 @@
 //! パスフレーズは **UI が尋ねる**（core は UI を知らない）ため、コールバックで
 //! 受け取る。
 
-use opfspack::{PackKeyBundle, PackRootKey, PackRootKeyWrap, WrapKind, derive_owner_id};
+use nartik::{PackKeyBundle, PackRootKey, PackRootKeyWrap, WrapKind, derive_owner_id};
 
 use crate::db::{SqlitePool, settings};
 use crate::drive::DriveApi;
 use crate::secrets::SecretStore;
 
-/// Drive に置く鍵 bundle のファイル名（`thundoku-backup.json` と同じフォルダ）。
-pub const KEY_BUNDLE_NAME: &str = "thundoku-keys.json";
+/// Drive に置く鍵 bundle のファイル名（`ligrol-backup.json` と同じフォルダ）。
+pub const KEY_BUNDLE_NAME: &str = "ligrol-keys.json";
 
 /// 鍵 bundle のアップロードが未完了であることを記録する設定キー（値は `owner_id`）。
 ///
@@ -29,7 +29,7 @@ pub const KEY_BUNDLE_NAME: &str = "thundoku-keys.json";
 pub const PENDING_UPLOAD_KEY: &str = "drive.pack_keys.pending";
 
 /// パスフレーズラップの PBKDF2 反復回数（暫定。ラップに記録するので後から上げられる）。
-pub const PASSPHRASE_ITERATIONS: u32 = opfspack::PASSPHRASE_WRAP_ITERATIONS;
+pub const PASSPHRASE_ITERATIONS: u32 = nartik::PASSPHRASE_WRAP_ITERATIONS;
 
 /// パスフレーズを尋ねる口。`None` は「利用者がスキップした」。
 pub type PassphrasePrompt<'a> = &'a mut dyn FnMut() -> Option<String>;
@@ -47,7 +47,7 @@ pub enum PackKeysError {
     #[error("drive error: {0}")]
     Drive(#[from] crate::drive::DriveError),
     #[error("key bundle error: {0}")]
-    Pack(#[from] opfspack::PackError),
+    Pack(#[from] nartik::PackError),
     #[error("database error: {0}")]
     Db(#[from] sqlx::Error),
     /// bundle はあるが、どのラップも解けなかった（仕様 §4.1 手順 5）。
@@ -245,7 +245,7 @@ impl<'a> PackKeyStore<'a> {
     /// パスフレーズ必須モードにする（`sub` ラップを削除。仕様 §5.3）。
     ///
     /// これで **Google ログイン（`sub`）だけでは PRK に戻せなく**なり、Drive の
-    /// `thundoku-keys.json` と `sub` を奪われても本は復号できない（パスフレーズが要る）。
+    /// `ligrol-keys.json` と `sub` を奪われても本は復号できない（パスフレーズが要る）。
     /// セキュリティ評価 F01 の本丸。
     ///
     /// **1 回の bundle 書き込み**で「（必要なら）パスフレーズラップを upsert」＋
@@ -382,7 +382,7 @@ fn save_keyring(
     Ok(())
 }
 
-/// Drive の `thundoku-keys.json` を読む（無ければ `Ok(None)`）。
+/// Drive の `ligrol-keys.json` を読む（無ければ `Ok(None)`）。
 ///
 /// `owner_id` が一致しない bundle は**使わない**（`OwnerMismatch`）。
 /// 名前で一覧から探し、複数あるときは `updated_at` が新しいものを選ぶ。
@@ -418,9 +418,9 @@ fn load_or_new_bundle(
     )
 }
 
-/// Drive の `thundoku-keys.json` を置き換える。
+/// Drive の `ligrol-keys.json` を置き換える。
 ///
-/// 先に新しいファイルを上げてから、同名の旧ファイルを消す（`thundoku-backup.json` と
+/// 先に新しいファイルを上げてから、同名の旧ファイルを消す（`ligrol-backup.json` と
 /// 同じ順序。削除→アップロードだと途中で失敗したときに鍵を失う）。
 pub fn upload_bundle(
     drive: &mut dyn DriveApi,

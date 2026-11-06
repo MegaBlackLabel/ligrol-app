@@ -1,7 +1,7 @@
-Thundoku Shelf のはじめかた（macOS）
+Ligrol のはじめかた（macOS）
 ====================================
 
-1. ThundokuShelf.app を Applications フォルダに移してください。
+1. Ligrol.app を Applications フォルダに移してください。
 
 2. アプリをダブルクリックすると、そのまま起動します。
    （この配布物は Apple の公証（Notarization）を受けた Developer ID 署名つきです。
@@ -9,7 +9,7 @@ Thundoku Shelf のはじめかた（macOS）
 
 うまくいかない場合は、ターミナルで次を実行してから開いてください:
 
-    xattr -dr com.apple.quarantine /Applications/ThundokuShelf.app
+    xattr -dr com.apple.quarantine /Applications/Ligrol.app
 
 補足
 ----

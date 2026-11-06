@@ -1,7 +1,7 @@
 //! 技術書典 (techbookfest.org) direct client: login, bookshelf, checklist,
 //! favorites, sample pages, download URL resolution.
 //!
-//! Mirrors the Web API implementation in `packages/thundoku-api`
+//! Mirrors the Web API implementation in `packages/ligrol-api`
 //! (`routes/books.ts`, `routes/samples.ts`, `routes/events.ts`,
 //! `lib/checklist-graphql.ts`, `lib/favorites-import.ts`) but talks to
 //! techbookfest.org directly instead of going through the Workers.

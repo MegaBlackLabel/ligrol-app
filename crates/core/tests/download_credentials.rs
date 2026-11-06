@@ -9,11 +9,11 @@ use parking_lot::Mutex;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use thundoku_core::booth::{BoothClient, BoothError, BoothSession};
-use thundoku_core::dlsite::client::{DlsiteClient, DlsiteError, DlsiteSession};
-use thundoku_core::fanza::client::{FanzaClient, FanzaError, FanzaSession};
-use thundoku_core::tbf::transport::{RequestSpec, ResponseSpec, Transport};
-use thundoku_core::tbf::{TbfClient, TbfError, TbfSession};
+use ligrol_core::booth::{BoothClient, BoothError, BoothSession};
+use ligrol_core::dlsite::client::{DlsiteClient, DlsiteError, DlsiteSession};
+use ligrol_core::fanza::client::{FanzaClient, FanzaError, FanzaSession};
+use ligrol_core::tbf::transport::{RequestSpec, ResponseSpec, Transport};
+use ligrol_core::tbf::{TbfClient, TbfError, TbfSession};
 
 type Log = Arc<Mutex<Vec<RequestSpec>>>;
 

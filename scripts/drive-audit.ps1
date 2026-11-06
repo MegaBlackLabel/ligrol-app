@@ -1,6 +1,6 @@
-﻿# thundoku-shelf: Google Drive の同期フォルダ健全性チェック（読み取り専用）
+﻿# ligrol: Google Drive の同期フォルダ健全性チェック（読み取り専用）
 #
-# 背景: アプリは `drive.sync.folder_id` が無いとき `create_folder("thundoku-shelf")` するだけで
+# 背景: アプリは `drive.sync.folder_id` が無いとき `create_folder("ligrol")` するだけで
 # 同名フォルダを探しに行かないため、My Drive 直下に同名フォルダが増えていく（実測で 14 個）。
 # どれが現役か・鍵 bundle がどこにあるか・今のローカルの pack と重なっているかを 1 回で出す。
 #
@@ -10,9 +10,9 @@
 #   powershell ... -File scripts/drive-audit.ps1 -PacksDir "C:\path\to\packs"
 #
 # 出力:
-#   FOLDER   ... My Drive 直下の `thundoku-shelf` フォルダ（id / 作成日時 / 中身の要約）
-#   KEYFILE  ... どのフォルダに `thundoku-keys.json`（pack のルート鍵のラップ）があるか
-#   OVERLAP  ... ローカルの `packs/*.opfspack` と重なる pack の数（=-PacksDir 指定時）
+#   FOLDER   ... My Drive 直下の `ligrol` フォルダ（id / 作成日時 / 中身の要約）
+#   KEYFILE  ... どのフォルダに `ligrol-keys.json`（pack のルート鍵のラップ）があるか
+#   OVERLAP  ... ローカルの `packs/*.nartik` と重なる pack の数（=-PacksDir 指定時）
 #   ACTIVE   ... -ActiveFolderId と一致したフォルダ
 #
 # 読み取り（files.list / files.get）しかしない。削除・移動は一切しない。
@@ -20,19 +20,24 @@
 # （手動で作ったフォルダや別クライアントが作ったものは出てこない）。
 param(
   [string]$ActiveFolderId = "",
-  [string]$PacksDir = "$env:APPDATA\thundoku-shelf\packs",
-  [string]$FolderName = "thundoku-shelf",
-  [string]$CredTarget = "google.com.megablacklabel.thundoku-shelf",
-  [string]$ClientId = "1054619943130-2kaqpgnm719bp8l8rslm8rkuvdhb945s.apps.googleusercontent.com",
-  [string]$ClientSecret = "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"
+  [string]$PacksDir = "$env:APPDATA\ligrol\packs",
+  [string]$FolderName = "ligrol",
+  [string]$CredTarget = "google.com.megablacklabel.ligrol",
+  [string]$ClientId = "786418602386-r4ofkd1sr0j0ip4d7ps4unt5ldtfe63t.apps.googleusercontent.com",
+  [string]$ClientSecret = $env:LIGROL_GOOGLE_CLIENT_SECRET
 )
 $ErrorActionPreference = 'Stop'
+
+if (-not $ClientSecret) {
+  Write-Output 'ERR: LIGROL_GOOGLE_CLIENT_SECRET を設定してください（OAuth クライアントの secret）'
+  exit 1
+}
 
 # Windows 資格情報マネージャーから OAuth トークン（JSON）を読む。値は出力しない。
 $sig = @'
 using System;
 using System.Runtime.InteropServices;
-public class ThundokuCred {
+public class LigrolCred {
   [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
   public struct CREDENTIAL {
     public uint Flags; public uint Type; public string TargetName; public string Comment;
@@ -55,7 +60,7 @@ public class ThundokuCred {
 '@
 Add-Type -TypeDefinition $sig -Language CSharp
 
-$raw = [ThundokuCred]::Read($CredTarget)
+$raw = [LigrolCred]::Read($CredTarget)
 if (-not $raw) { Write-Output "ERR: keyring entry '$CredTarget' not found (Google にログインしていない？)"; exit 1 }
 $json = $raw
 if ($raw -notmatch '^\s*\{') {
@@ -66,7 +71,10 @@ if (-not $tok.refresh_token) { Write-Output 'ERR: keyring entry has no refresh_t
 
 $resp = Invoke-RestMethod -Method Post -Uri 'https://oauth2.googleapis.com/token' -ContentType 'application/x-www-form-urlencoded' `
   -Body @{ grant_type = 'refresh_token'; refresh_token = $tok.refresh_token; client_id = $ClientId; client_secret = $ClientSecret }
-$H = @{ Authorization = "Bearer $($resp.access_token)" }
+# 直前のトークン交換で得たアクセストークンで Drive API を叩く
+$accessToken = $resp.access_token
+if (-not $accessToken) { Write-Output 'ERR: アクセストークンを取得できませんでした'; exit 1 }
+$H = @{ Authorization = "Bearer $accessToken" }
 
 function List-Files([string]$q, [string]$fields) {
   $uri = "https://www.googleapis.com/drive/v3/files?spaces=drive&pageSize=1000&fields=files($fields)&q=" + [Uri]::EscapeDataString($q)
@@ -75,7 +83,7 @@ function List-Files([string]$q, [string]$fields) {
 
 $local = @()
 if (Test-Path $PacksDir) {
-  $local = @(Get-ChildItem -Path $PacksDir -Filter '*.opfspack' -File | ForEach-Object { $_.BaseName })
+  $local = @(Get-ChildItem -Path $PacksDir -Filter '*.nartik' -File | ForEach-Object { $_.BaseName })
 }
 
 Write-Output "=== folders named '$FolderName' in My Drive root ==="
@@ -86,11 +94,11 @@ foreach ($f in $folders) {
   $kids = List-Files ("'{0}' in parents and trashed=false" -f $f.id) 'id,name,size,modifiedTime'
   $bytes = ($kids | Measure-Object -Property size -Sum).Sum
   if (-not $bytes) { $bytes = 0 }
-  $keys = @($kids | Where-Object { $_.name -eq 'thundoku-keys.json' })
-  $bk = @($kids | Where-Object { $_.name -eq 'thundoku-backup.json' })
-  $packs = @($kids | Where-Object { $_.name -like '*.opfspack' })
+  $keys = @($kids | Where-Object { $_.name -eq 'ligrol-keys.json' })
+  $bk = @($kids | Where-Object { $_.name -eq 'ligrol-backup.json' })
+  $packs = @($kids | Where-Object { $_.name -like '*.nartik' })
   $overlap = 0
-  foreach ($p in $packs) { if ($local -contains ($p.name -replace '\.opfspack$', '')) { $overlap++ } }
+  foreach ($p in $packs) { if ($local -contains ($p.name -replace '\.nartik$', '')) { $overlap++ } }
   $tag = if ($ActiveFolderId -and $f.id -eq $ActiveFolderId) { 'ACTIVE' } elseif ($ActiveFolderId) { '-' } else { '' }
   Write-Output ("FOLDER`t{0}`t{1}`tcreated={2}`tmodified={3}`tfiles={4}`tbytes={5}`tpacks={6}`toverlap-local={7}`tkeys={8}`tbackup={9}" -f `
     $f.id, $tag, $f.createdTime, $f.modifiedTime, $kids.Count, $bytes, $packs.Count, $overlap, `

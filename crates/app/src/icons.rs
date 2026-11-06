@@ -1,4 +1,4 @@
-//! Web 版（thundoku-web）と同じ lucide アイコンを提供するアセットソース。
+//! Web 版（ligrol-web）と同じ lucide アイコンを提供するアセットソース。
 //!
 //! Web 版は `lucide-react` のアイコンを使っている。gpui-component にも
 //! lucide 由来のアイコンはあるが、Web 版で使われていて gpui-component に
