@@ -18,21 +18,24 @@ use ligrol_core::secrets::SecretStore;
 use ligrol_core::session_store::{PurgeMarker, SessionVault, StoreSession};
 use ligrol_core::tbf::{TbfClient, TbfSession};
 /// The Google OAuth client id (public info; embedded at build time from
-/// `LIGROL_GOOGLE_CLIENT_ID`). Web 版（ligrol-web）と同じクライアントを
-/// デフォルトとして使い、未設定でも Google ログインが動くようにする。
+/// `LIGROL_GOOGLE_CLIENT_ID`). GCP プロジェクト `ligrol-app` の
+/// **デスクトップ用**クライアント。`drive.file` の付与はプロジェクト単位なので、
+/// 同じプロジェクトの Web 用クライアントが作ったファイルも読める。
 pub const DEFAULT_GOOGLE_CLIENT_ID: &str = match option_env!("LIGROL_GOOGLE_CLIENT_ID") {
     Some(value) if !value.is_empty() => value,
-    _ => "1054619943130-2kaqpgnm719bp8l8rslm8rkuvdhb945s.apps.googleusercontent.com",
+    _ => "786418602386-r4ofkd1sr0j0ip4d7ps4unt5ldtfe63t.apps.googleusercontent.com",
 };
 
-/// Google OAuth client secret. デスクトップでは公開情報扱いで許容
-/// （Google が client_secret を要求する場合のため）。`LIGROL_GOOGLE_CLIENT_SECRET`
-/// 環境変数で上書き可能。デフォルトはクライアント
-/// `1054619943130-2kaqpgnm...` の secret（Downloads の client_secret JSON より）。
+/// Google OAuth client secret。
+///
+/// Google はインストール型アプリの client_secret を「非機密」として扱うが、
+/// リポジトリには置かない（GitHub の push protection がブロックする）。
+/// **ビルド時に `LIGROL_GOOGLE_CLIENT_SECRET` を渡す**（リリースは CI の secret から）。
+/// 未設定だとトークン交換ができないので、配布ビルドでは必ず設定すること。
 pub const DEFAULT_GOOGLE_CLIENT_SECRET: Option<&str> =
     match option_env!("LIGROL_GOOGLE_CLIENT_SECRET") {
         Some(value) if !value.is_empty() => Some(value),
-        _ => Some("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"),
+        _ => None,
     };
 
 /// ログアウト時に削除できなかった資格情報の印に使うスロット名（Google）。

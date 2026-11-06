@@ -79,7 +79,12 @@ jobs:
 
       # `--locked`: 配布物が Cargo.lock のとおりにビルドされたことを保証する
       # （手元と配布物で依存が違う事故を防ぐ）。
+      # OAuth クライアントの secret はリポジトリに置かない（push protection 対策）。
+      # ビルド時に `option_env!` で埋め込むので、配布ビルドでは必ず渡すこと。
       - name: Build (release)
+        env:
+          LIGROL_GOOGLE_CLIENT_ID: ${{ vars.LIGROL_GOOGLE_CLIENT_ID }}
+          LIGROL_GOOGLE_CLIENT_SECRET: ${{ secrets.LIGROL_GOOGLE_CLIENT_SECRET }}
         run: cargo build --release --locked --target ${{ matrix.target }} -p ligrol
 
       # PDFium (BSD-3-Clause / Apache-2.0) は mupdf (AGPL-3.0) の代替として

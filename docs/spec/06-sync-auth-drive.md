@@ -85,7 +85,7 @@
 | コールバックの read タイムアウト | 120 秒 | `crates/core/src/google.rs:168` |
 | コールバック受信バッファ | 4096 byte | `crates/core/src/google.rs:170` |
 | `expires_in` 既定値 | 3600 秒（応答に無い場合） | `crates/core/src/google.rs:126-129` |
-| 既定 client_id（ビルド時 `LIGROL_GOOGLE_CLIENT_ID` 未設定時） | `1054619943130-2kaqpgnm719bp8l8rslm8rkuvdhb945s.apps.googleusercontent.com` | `crates/app/src/app_state.rs:21-25` |
+| 既定 client_id（ビルド時 `LIGROL_GOOGLE_CLIENT_ID` 未設定時） | `786418602386-r4ofkd1sr0j0ip4d7ps4unt5ldtfe63t.apps.googleusercontent.com` | `crates/app/src/app_state.rs:21-25` |
 | 既定 client_secret | コード内の `DEFAULT_GOOGLE_CLIENT_SECRET`（`LIGROL_GOOGLE_CLIENT_SECRET` で上書き可）。**デスクトップではクライアント種別が「デスクトップ アプリ」である前提**で扱う（§2.5）。実値は仕様書に転記しない | `crates/app/src/app_state.rs:27-32` |
 
 ### 2.2 OAuth フロー（installed-app / PKCE S256 + ループバック受信）

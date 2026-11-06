@@ -23,10 +23,15 @@ param(
   [string]$PacksDir = "$env:APPDATA\ligrol\packs",
   [string]$FolderName = "ligrol",
   [string]$CredTarget = "google.com.megablacklabel.ligrol",
-  [string]$ClientId = "1054619943130-2kaqpgnm719bp8l8rslm8rkuvdhb945s.apps.googleusercontent.com",
-  [string]$ClientSecret = "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"
+  [string]$ClientId = "786418602386-r4ofkd1sr0j0ip4d7ps4unt5ldtfe63t.apps.googleusercontent.com",
+  [string]$ClientSecret = $env:LIGROL_GOOGLE_CLIENT_SECRET
 )
 $ErrorActionPreference = 'Stop'
+
+if (-not $ClientSecret) {
+  Write-Output 'ERR: LIGROL_GOOGLE_CLIENT_SECRET を設定してください（OAuth クライアントの secret）'
+  exit 1
+}
 
 # Windows 資格情報マネージャーから OAuth トークン（JSON）を読む。値は出力しない。
 $sig = @'
