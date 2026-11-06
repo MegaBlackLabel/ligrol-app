@@ -17,3 +17,6 @@ libpdfium.so
 password.txt
 # cargo cyclonedx（SBOM）の生成物。リリース時に CI が作って配布物へ添付する
 *.cdx.json
+
+# ローカル専用の作業ファイル（OAuth クライアント JSON など。コミットしない）
+/tmp/

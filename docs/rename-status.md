@@ -90,8 +90,9 @@ Windows / macOS / Linux のどこから作業しても、ここを読めば現�
 | 9 | UI 文言 | 完了 |
 | 10 | ドキュメント | 完了 |
 | 11 | 検証 | 完了（下記） |
-| — | GCP 再作成（`ligrol-app`） | 未着手 |
-| — | Web 版リネーム | 未着手（アプリ版の検証後） |
+| — | GCP 再作成（`ligrol-app`） | 完了（2026-11-05。クライアント2本・Picker キー・実機ログインまで確認） |
+| — | Web 版リネーム | 完了（2026-11-06。staging デプロイ・旧 Worker 削除まで） |
+| — | GitHub リポジトリ改名 | 完了（`ligrol` / `ligrol-app`） |
 
 ### Phase 1 の実施ログ（2026-11-05）
 
@@ -111,6 +112,40 @@ Windows / macOS / Linux のどこから作業しても、ここを読めば現�
 - 検証結果: `cargo build --workspace --locked` 成功、`cargo test --workspace` 全緑
   （525 + 362 + その他、失敗 0）、`mise run licenses` 差分なし、
   `git grep -Iin "thundoku|opfspack"` = 0（除外3ファイルを除く）
+
+### 実機検証（2026-11-06 未明）
+
+| 項目 | 結果 |
+|---|---|
+| アプリ起動 | `cargo run -p ligrol` で起動。タイトルバー・サイドバーとも `Ligrol` |
+| データディレクトリ | `%APPDATA%\ligrol` を新規作成（`ligrol.db` / `logs/ligrol.log` / `packs`） |
+| Google ログイン | **成功**（新プロジェクト `ligrol-app` のデスクトップ用クライアント。同意画面のアプリ名は Ligrol） |
+| Drive 同期 | **成功**。My Drive 直下に `ligrol` フォルダ（id `1jeqk3gMSq2FepSFdVcjrkhPFcT_y3saj`）が作られ、`ligrol-backup.json` をアップロード（394 bytes） |
+| 確認方法 | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/drive-audit.ps1`（読み取り専用） |
+| 未検証 | GUI からの本の取り込み → `.nartik` 生成 → 閲覧（テストでは担保済み。実ファイルでの通し確認はしていない） |
+
+### Web 版リネーム（2026-11-06）
+
+- リポジトリ改名: `MegaBlackLabel/thundoku-shelf` → `ligrol`（private）、
+  `thundoku-shelf-app` → `ligrol-app`（public）。ローカルの remote も更新済み
+- コミット: `844fce7`（`feature/rename-ligrol`、602ファイル）
+- パッケージ: `thundoku-{api,web,import,viewer}` → `ligrol-*`、`@megablacklabel/opfspack` → `@megablacklabel/nartik`
+- 形式: マジック `NRTK`、拡張子 `.nartik`、AAD/鍵導出を `ligrol-*`。テストベクタとフィクスチャを再生成
+- Worker: `ligrol-staging`（新規）を作成。旧 `thundoku-shelf-staging` は削除
+- DO migrations を `v1 = SessionDurableObject` の1本に集約
+- Cloudflare KV: 孤児8個を削除（`SESSIONS*` / `*-event-masters-cache*`）、残り10個を `ligrol-*` に改名
+- secret 7個を投入（`SESSION_SECRET` / Google 系 / redirect URI 2本）
+- 検証: `nartik` 345 / `ligrol-api` 340 / `ligrol-web` 2157 passed、typecheck、`build:staging` 成功
+- staging 実機: `https://ligrol-staging.megablacklabel.workers.dev` が 200、`/health` が ok、
+  `/api/auth/google/start` が新クライアントで 302
+
+### 残タスク
+
+- 本番 Worker `thundoku-shelf` は **workers.dev 無効・custom domain なし**で元から到達不能。
+  本番を出すなら prod 用 KV（`DRIVE_TOKENS` が存在しない）と公開ホストの設定が必要
+- Web リポジトリの push / PR（未実施）
+- 旧 GCP プロジェクト `thundoku-shelf` の削除、Drive の旧 `thundoku-shelf/` フォルダ削除
+- macOS / Linux の旧データ・旧資格情報の掃除
 
 ### ベースライン（2026-11-05 実測 / `target/` 除外）
 
@@ -132,10 +167,12 @@ Windows / macOS / Linux のどこから作業しても、ここを読めば現�
 |---|---|
 | GitHub | `MegaBlackLabel/thundoku-shelf-app` → `ligrol-app` に改名予定 |
 | GCP（現行） | プロジェクト `thundoku-shelf`（番号 `1054619943130`）→ 削除予定 |
-| GCP（新） | `ligrol-app` を作成予定 |
-| OAuth | デスクトップ アプリ / ウェブ アプリケーション の2本（新プロジェクト内） |
-| OAuth secret の置き場所 | クライアント secret は Google Cloud Console。アプリ側の既定値は `crates/app/src/app_state.rs` |
-| Picker API キー | 新プロジェクトで発行。Web 側の環境変数へ |
+| GCP（新） | **作成済み**: `ligrol-app`（番号 `786418602386`、表示名 Ligrol、2026-11-05） |
+| 有効 API | `drive.googleapis.com` / `picker.googleapis.com` / `apikeys.googleapis.com` |
+| Picker API キー | 作成済み（表示名 `Ligrol Picker`、ID `56ba5131-…`）。参照元は ligrol.pages.dev / ligrol-staging…workers.dev / ligrol…workers.dev / localhost:5173 に制限済み。**値はここに書かない**（Web の `VITE_GOOGLE_API_KEY`） |
+| OAuth | **作成済み**: デスクトップ アプリ `Ligrol Desktop`（アプリの既定値に埋め込み済み）と ウェブ アプリケーション `Ligrol Web`（redirect 8本 / JS 生成元5本）。どちらもプロジェクト `786418602386` |
+| OAuth 同意画面 | 設定済み（External / テスト / スコープ `openid` `email` `drive.file` / テストユーザー2人） |
+| OAuth secret の置き場所 | デスクトップ用は `crates/app/src/app_state.rs` に埋め込み（公開情報扱い）。Web 用は Web リポジトリの `.dev.vars` / `wrangler secret`。**このファイルには書かない** |
 | Cloudflare | アカウント `megablacklabel@gmail.com`、Worker `thundoku-shelf-staging` / `thundoku-shelf` |
 | Drive | 旧 `thundoku-shelf/` フォルダは削除対象 |
 
@@ -154,6 +191,19 @@ Windows / macOS / Linux のどこから作業しても、ここを読めば現�
 | GCP | Cloud SDK（winget `Google.CloudSDK`） | `brew install --cask google-cloud-sdk` | `apt install google-cloud-cli` |
 | 旧データ | `%APPDATA%\thundoku-shelf` | `~/Library/Application Support/thundoku-shelf` | `~/.local/share/thundoku-shelf` |
 | 旧資格情報 | 資格情報マネージャー | Keychain | Secret Service |
+
+### ローカルビルドの OAuth 設定
+
+OAuth クライアントの **secret はリポジトリに置かない**（GitHub の push protection がブロックする）。
+`option_env!` でビルド時に埋め込むので、Google ログインを試すビルドでは環境変数で渡す:
+
+```sh
+export LIGROL_GOOGLE_CLIENT_SECRET=...   # ligrol-app のデスクトップ用クライアント
+mise exec -- cargo run -p ligrol
+```
+
+`scripts/drive-audit.ps1` も同じ環境変数を読む。配布ビルド（GitHub Actions）は
+`secrets.LIGROL_GOOGLE_CLIENT_SECRET` / `vars.LIGROL_GOOGLE_CLIENT_ID` から注入する。
 
 ## 6. 検証コマンド
 
