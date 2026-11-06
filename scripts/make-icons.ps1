@@ -1,18 +1,25 @@
 ﻿# アプリアイコン（SVG）から配布用アセットを生成する（Windows 用）。
 #
-#   powershell -ExecutionPolicy Bypass -File scripts/make-icons.ps1 [-Svg <path>]
+#   powershell -ExecutionPolicy Bypass -File scripts/make-icons.ps1 [-Svg <path>] [-Magick <exe>]
 #
 # macOS / Linux は scripts/make-icons.sh を使う。WSL の bash では Windows の
 # ImageMagick を呼べないので、このスクリプトを使うこと。
 param(
-  [string]$Svg = "crates/app/assets/app-icon/app-icon-ligrol-w6b-original-tab.svg"
+  [string]$Svg = "crates/app/assets/app-icon/app-icon-ligrol-w6b-original-tab.svg",
+  [string]$Magick = ""
 )
 
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 $out = Join-Path $repo "crates/app/assets/app-icon"
 
-$magick = (Get-Command magick -ErrorAction SilentlyContinue).Source
+$magick = $Magick
+if ($magick) {
+  if (-not (Test-Path $magick)) { throw "ImageMagick が見つかりません: $magick" }
+}
+if (-not $magick) {
+  $magick = (Get-Command magick -ErrorAction SilentlyContinue).Source
+}
 if (-not $magick) {
   $candidate = Get-ChildItem "C:\Program Files\ImageMagick*\magick.exe" -ErrorAction SilentlyContinue |
     Select-Object -First 1

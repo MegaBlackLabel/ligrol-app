@@ -71,7 +71,10 @@ if (-not $tok.refresh_token) { Write-Output 'ERR: keyring entry has no refresh_t
 
 $resp = Invoke-RestMethod -Method Post -Uri 'https://oauth2.googleapis.com/token' -ContentType 'application/x-www-form-urlencoded' `
   -Body @{ grant_type = 'refresh_token'; refresh_token = $tok.refresh_token; client_id = $ClientId; client_secret = $ClientSecret }
-$H = @{ Authorization = "Bearer $($resp.access_token)" }
+# 直前のトークン交換で得たアクセストークンで Drive API を叩く
+$accessToken = $resp.access_token
+if (-not $accessToken) { Write-Output 'ERR: アクセストークンを取得できませんでした'; exit 1 }
+$H = @{ Authorization = "Bearer $accessToken" }
 
 function List-Files([string]$q, [string]$fields) {
   $uri = "https://www.googleapis.com/drive/v3/files?spaces=drive&pageSize=1000&fields=files($fields)&q=" + [Uri]::EscapeDataString($q)

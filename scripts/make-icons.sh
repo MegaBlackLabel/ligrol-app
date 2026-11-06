@@ -3,8 +3,9 @@
 #
 #   bash scripts/make-icons.sh [svg]
 #
-# ImageMagick の librsvg で描画するので、macOS / Windows / Linux のどれでも
-# 同じ手順で作れる。Rust は使わないので mise 環境は不要。
+# ImageMagick（librsvg 入り）と Python 3 が必要。Rust / mise は使わない。
+# Windows は WSL の bash から Windows の ImageMagick を呼べないので
+# scripts/make-icons.ps1 を使うこと。
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -60,10 +61,10 @@ cp "$TMP/256.png" "$OUT/icon_256.png"
 "$MAGICK" "$TMP/1024.png" -define icon:auto-resize=256,128,64,48,32,16 "$OUT/icon.ico"
 
 # macOS: icns を自前で組み立てる（iconutil 非依存）
-if [ -n "$PYTHON" ]; then
-  "$PYTHON" "$REPO_ROOT/scripts/make-icns.py" "$OUT/icon.icns" "$TMP"
-else
-  mise exec -- python "$REPO_ROOT/scripts/make-icns.py" "$OUT/icon.icns" "$TMP"
+if [ -z "$PYTHON" ]; then
+  echo "python3 / python が見つかりません（icns の生成に必要）" >&2
+  exit 1
 fi
+"$PYTHON" "$REPO_ROOT/scripts/make-icns.py" "$OUT/icon.icns" "$TMP"
 
 echo "generated: icon.icns / icon.ico / icon_1024.png / icon_512.png / icon_256.png"
