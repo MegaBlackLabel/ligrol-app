@@ -4,6 +4,29 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-06
+
+### Changed
+
+- **アプリ名を Ligrol、パック形式を nartik に改名**（公開前でユーザーゼロのため互換は切った）
+  - クレート: `thundoku-shelf` / `thundoku-core` → `ligrol` / `ligrol-core`
+  - パック形式: `opfspack` → `nartik`（拡張子 `.nartik`、マジック `NRTK`、AAD と鍵導出の
+    ラベルも `nartik-*` / `ligrol-*` へ）。旧 `.opfspack` は開けない（再取り込みが必要）
+  - keyring のサービス名・スロット、データディレクトリ（`%APPDATA%\ligrol` など）、
+    DB / ログ名、Drive の同期フォルダ（`ligrol/`）とファイル
+    （`ligrol-keys.json` / `ligrol-backup.json` / `ligrol-thumbs.json`）、UA、環境変数
+    （`LIGROL_*`）をまとめて変更
+  - Google OAuth クライアントを新プロジェクト `ligrol-app` に移行（デスクトップ用 / Web 用の
+    2 本構成）。**client secret はリポジトリに置かず、ビルド時の
+    `LIGROL_GOOGLE_CLIENT_SECRET` で埋め込む**
+  - アイコン一式を刷新（メイン + 32px / 16px の小サイズ）
+
+### Added
+
+- 契約テスト `crates/core/tests/rename_contract.rs`（マジック・拡張子・AAD・keyring・Drive 名を固定）
+- アイコン生成スクリプト `scripts/make-icons.ps1` / `make-icons.sh` / `make-icns.py`
+- 引き継ぎ用ドキュメント `docs/rename-status.md`（マシン間・エージェント間の作業状態）
+
 ## [0.2.13] - 2026-10-27
 
 ### Added
