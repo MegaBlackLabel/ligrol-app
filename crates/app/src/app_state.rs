@@ -38,6 +38,21 @@ pub const DEFAULT_GOOGLE_CLIENT_SECRET: Option<&str> =
         _ => None,
     };
 
+/// このビルドに Google のクライアントシークレットが埋め込まれているか。
+///
+/// 未設定のビルドでは Google ログインも Drive 同期も動かせない（core 側の
+/// [`ligrol_core::google::GoogleError::NotConfigured`] を参照）。
+pub fn google_oauth_configured() -> bool {
+    DEFAULT_GOOGLE_CLIENT_SECRET.is_some()
+}
+
+/// クライアントシークレット未埋め込みのビルドに出す案内（設定済みなら `None`）。
+///
+/// 文言は core のエラーと同一にする（画面ごとに言い回しを分けない）。
+pub fn google_unavailable_notice(configured: bool) -> Option<String> {
+    (!configured).then(|| ligrol_core::google::GoogleError::NotConfigured.to_string())
+}
+
 /// ログアウト時に削除できなかった資格情報の印に使うスロット名（Google）。
 pub const GOOGLE_LOGOUT_SLOT: &str = "google";
 
@@ -904,6 +919,12 @@ pub fn handle_google_auth_expiry(message: &str, cx: &mut App) -> bool {
 /// モーダルを作ると `Workspace` の再入でアプリが落ちる（実測 2026-09-30）。あちらは通知だけで
 /// 案内し、利用者にアカウントメニューからログインしてもらう。
 pub fn open_google_login(cx: &mut App) {
+    // シークレット未埋め込みのビルドではブラウザを開く前に止める（認可まで進めて
+    // 最後に 400 で失敗すると、何が悪いのか利用者に分からない）。
+    if let Some(notice) = google_unavailable_notice(google_oauth_configured()) {
+        set_toast_kind(cx, ToastKind::Error, notice);
+        return;
+    }
     cx.defer(move |cx| {
         let ws_weak = AppState::global(cx).workspace.lock().clone();
         if let Some(ws) = ws_weak.and_then(|w| w.upgrade()) {
@@ -1260,6 +1281,23 @@ fn clear_pending_logout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// secret 未埋め込みビルドでは、Drive / Google ログインを案内つきで止める。
+    ///
+    /// 埋め込みが無いまま動かすと Google が 400 `client_secret is missing.` を返し、
+    /// 生の英語が画面に出る（実測 2026-11-07）。原因が分かる文言を出す。
+    #[test]
+    fn unconfigured_build_notice_names_the_missing_client_secret() {
+        let notice = google_unavailable_notice(false).expect("未設定なら案内がある");
+        assert!(
+            notice.contains("クライアントシークレット"),
+            "原因が分かる文言になっていない: {notice}"
+        );
+        assert!(
+            google_unavailable_notice(true).is_none(),
+            "設定済みビルドで案内を出してしまう"
+        );
+    }
 
     /// 保存先が一時ディレクトリ配下かを判定できる（OS が消す場所を保存先にしない）。
     #[test]
