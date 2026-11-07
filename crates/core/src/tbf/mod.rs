@@ -18,7 +18,6 @@ pub use transport::{RequestSpec, ResponseSpec, Transport, UreqTransport};
 
 pub const TBF_HOME: &str = "https://techbookfest.org/";
 pub const TBF_GRAPHQL: &str = "https://techbookfest.org/api/graphql";
-pub const TBF_GRAPHQL_V2: &str = "https://techbookfest.org/api/2/graphql";
 pub const TBF_DOWNLOAD_BASE: &str = "https://techbookfest.org/api/product-dlc";
 pub const SITE_ID_TECHBOOKFEST: &str = "techbookfest";
 
@@ -194,7 +193,10 @@ const TBF_DOWNLOAD_RULES: &[crate::download_url::HostRule] = &[
 /// 逆に画像パスを本体用に混ぜると「画像取得のつもりで本体の URL を渡す」経路ができるので、
 /// 入口ごとに分ける。同じサイトの画像なので [`download_headers`] が Cookie を付ける。
 const TBF_SITE_IMAGE_RULES: &[crate::download_url::HostRule] =
-    &[crate::download_url::HostRule::exact(SITE_HOST, Some("/api/image/"))];
+    &[crate::download_url::HostRule::exact(
+        SITE_HOST,
+        Some("/api/image/"),
+    )];
 
 pub struct TbfClient {
     transport: Box<dyn Transport>,
@@ -401,10 +403,13 @@ impl TbfClient {
     }
 
     /// Event masters: canonical list (Web `CANONICAL_EVENT_MASTERS`) plus
-    /// best-effort live discovery of future events (tbf21..tbf30).
+    /// best-effort live discovery of future events (tbf22..tbf30).
+    ///
+    /// `tbf21` は canonical に含めたので探索対象から外す（探索結果は開催期間を
+    /// 持たないため、canonical の行を上書きしないようにする）。
     pub fn events(&mut self) -> Result<Vec<TbfEventInfo>, TbfError> {
         let mut discovered: Vec<TbfEventInfo> = Vec::new();
-        for n in (21..=30).rev() {
+        for n in (22..=30).rev() {
             let slug = format!("tbf{n}");
             let Ok(name) = self.discover_event_name(&slug) else {
                 continue;
@@ -446,9 +451,11 @@ impl TbfClient {
             "query": queries::EVENT_QUERY,
             "variables": { "eventID": format!("Event:{slug}") },
         });
+        // `/api/2/graphql` は廃止され 404 を返す（2026-11 実測）。
+        // Web 本体と同じ `/api/graphql` を使う。
         let resp = self.request(
             "POST",
-            &format!("{TBF_GRAPHQL_V2}?operationName=TbfEventQuery"),
+            &format!("{TBF_GRAPHQL}?operationName=TbfEventQuery"),
             &[("Content-Type", "application/json")],
             Some(serde_json::to_vec(&body).map_err(|e| TbfError::InvalidResponse(e.to_string()))?),
             5,
@@ -471,24 +478,26 @@ impl TbfClient {
     }
 
     /// Checklist for one event (EventOfflineCircleChecklistQuery,
-    /// checkedProductInfos pagination, followingOrganizations: 0 — same as
-    /// the Web favorites import).
+    /// checkedProductInfos pagination; followingOrganizations is skipped).
     pub fn checklist(&mut self, event_slug: &str) -> Result<Vec<TbfChecklistEntry>, TbfError> {
         let event_id = format!("Event:{event_slug}");
         let mut all = Vec::new();
-        // 購入日時フィルタ用の開催期間（ループ前に 1 回だけ計算）
-        let window = event_window(event_slug);
         let mut cursor: Option<String> = None;
         loop {
             let mut variables = serde_json::Map::new();
             variables.insert("checkedProductInfosFirst".into(), json!(100));
             variables.insert("checkedProductInfosAfter".into(), json!(cursor));
-            variables.insert("followingOrganizationsFirst".into(), json!(0));
+            variables.insert("checkedProductInfosSkip".into(), json!(false));
+            // `first: 0` はスキーマ検証で弾かれることがあるため 1 を送り、
+            // `@skip` で実行させない（フォロー一覧はチェックリストに不要）。
+            variables.insert("followingOrganizationsFirst".into(), json!(1));
+            variables.insert("followingOrganizationsAfter".into(), json!(null));
+            variables.insert("followingOrganizationsSkip".into(), json!(true));
             variables.insert("eventID".into(), json!(event_id));
             let payload = self.graphql(
                 "EventOfflineCircleChecklistQuery",
                 &format!(
-                    "{TBF_GRAPHQL}?operationName=EventOfflineCircleChecklistQuery&appVersion=20260424a-web"
+                    "{TBF_GRAPHQL}?operationName=EventOfflineCircleChecklistQuery&appVersion=20261104a-web"
                 ),
                 Value::Object(variables),
                 queries::CHECKLIST_QUERY,
@@ -504,12 +513,12 @@ impl TbfClient {
             {
                 if let Some(entry) = map_checked_product(&edge["node"]) {
                     // checkedProductInfos はセッション全体（全イベント）の
-                    // 購入商品を返すため、サークルのイベントで絞り込む
+                    // お気に入りを返すため、サークルのイベントで絞り込む
                     // （id は `{eventSlug}:{product}` 形式）。
-                    // さらに購入日時が対象イベントの開催期間内かも確認する
-                    // （対象イベントに出展しているだけの商品を除外）。
+                    // 別イベントの開催期間中に入れた項目だけを除外する
+                    // （開催前に入れた対象イベントの項目は残す）。
                     if entry.id.starts_with(&format!("{event_slug}:"))
-                        && within_event_window(&window, entry.created_at.as_deref())
+                        && created_at_belongs_to_event(event_slug, entry.created_at.as_deref())
                     {
                         all.push(entry);
                     }
@@ -661,12 +670,8 @@ impl TbfClient {
     ) -> Result<u64, TbfError> {
         let file = std::fs::File::create(path).map_err(|error| TbfError::Io(error.to_string()))?;
         let mut sink = std::io::BufWriter::new(file);
-        let (_, bytes) = self.download_with_rules_into(
-            url,
-            TBF_DOWNLOAD_RULES,
-            Some(&mut sink),
-            on_progress,
-        )?;
+        let (_, bytes) =
+            self.download_with_rules_into(url, TBF_DOWNLOAD_RULES, Some(&mut sink), on_progress)?;
         std::io::Write::flush(&mut sink).map_err(|error| TbfError::Io(error.to_string()))?;
         Ok(bytes)
     }
@@ -714,11 +719,7 @@ impl TbfClient {
         let cookie_header = self.cookie_header();
         let xsrf_token = self.xsrf_token.clone();
         let mut credentials = |destination: &url::Url| {
-            download_credential_headers(
-                &cookie_header,
-                xsrf_token.as_deref(),
-                destination.as_str(),
-            )
+            download_credential_headers(&cookie_header, xsrf_token.as_deref(), destination.as_str())
         };
         let request = RequestSpec {
             method: "GET".to_string(),
@@ -801,9 +802,13 @@ impl TbfClient {
             if is_auth_related(&payload) {
                 return Err(TbfError::SessionExpired);
             }
-            return Err(TbfError::Upstream(
-                "GraphQL response contained errors".into(),
-            ));
+            // サーバーが返した理由を画面まで通す（「contained errors」だけでは
+            // スキーマ変更か一時障害かを切り分けられない）。
+            let detail = payload
+                .pointer("/errors/0/message")
+                .and_then(Value::as_str)
+                .unwrap_or("GraphQL response contained errors");
+            return Err(TbfError::Upstream(detail.to_string()));
         }
         Ok(payload)
     }
@@ -940,7 +945,7 @@ fn map_checked_product(node: &Value) -> Option<TbfChecklistEntry> {
     if exhibit["hasOfflineCourse"].as_bool() == Some(false) {
         return None;
     }
-    let event_slug = resolve_event_slug(str_of(&exhibit["event"]["databaseID"]))?;
+    let event_slug = circle_event_slug(exhibit)?;
     let product_identity = str_of(&product_info["databaseID"])
         .or_else(|| str_of(&product_info["id"]))
         .unwrap_or("")
@@ -968,12 +973,20 @@ fn map_checked_product(node: &Value) -> Option<TbfChecklistEntry> {
     })
 }
 
+/// サークルの出展イベント slug。現行クエリは `event { id }` だけを返すため、
+/// `Event:tbf21` から `tbf21` を解決する（旧クエリの `databaseID` も許容する）。
+fn circle_event_slug(node: &Value) -> Option<String> {
+    resolve_event_slug(
+        str_of(&node["event"]["databaseID"]).or_else(|| str_of(&node["event"]["id"])),
+    )
+}
+
 /// Lowest tbf number wins (`chooseBestCircle`).
 fn choose_best_circle(edges: &[Value]) -> Option<&Value> {
     let mut best: Option<(&Value, u32)> = None;
     for edge in edges {
         let node = &edge["node"];
-        let Some(slug) = resolve_event_slug(str_of(&node["event"]["databaseID"])) else {
+        let Some(slug) = circle_event_slug(node) else {
             continue;
         };
         let Some(number) = parse_tbf_number(&slug) else {
@@ -1131,6 +1144,40 @@ pub(crate) fn within_event_window(
     day >= start.as_str() && day <= end.as_str()
 }
 
+/// チェックリスト項目（お気に入り）の日時が対象イベントのものか。
+///
+/// `checkedProductInfos` はセッション全体を返し、サークルの `criteria(eventID)` で
+/// 対象イベントのサークルに紐づく。そのため他イベントでお気に入りにした商品も
+/// `{対象イベント}:` の id になり得る。従来は対象イベントの開催期間内かで
+/// 除外していたが、それだと**開催前にお気に入りへ入れた項目**（例: 技術書典21 の
+/// 開催前に登録した本）まで消える。そこで「対象イベントの期間内」または
+/// 「どのイベントの期間にも入っていない」日時は残し、**別イベントの開催期間中**
+/// に入れた項目だけを除外する。
+pub(crate) fn created_at_belongs_to_event(event_slug: &str, created_at: Option<&str>) -> bool {
+    let Some(created) = created_at else {
+        return true;
+    };
+    let day = created.get(..10).unwrap_or(created);
+    let own = event_window(event_slug);
+    if within_event_window(&own, Some(created)) {
+        return true;
+    }
+    // どの既知イベントの開催期間にも入っていなければ、開催前後の
+    // お気に入り（対象イベントのもの）として残す。
+    !canonical_events().iter().any(|event| {
+        if event.slug == event_slug {
+            return false;
+        }
+        let (Some(start), Some(end)) = (
+            event.event_start_date.as_deref(),
+            event.event_end_date.as_deref(),
+        ) else {
+            return false;
+        };
+        day >= start && day <= end
+    })
+}
+
 pub(crate) fn canonical_events() -> Vec<TbfEventInfo> {
     type CanonicalEvent = (
         &'static str,
@@ -1141,6 +1188,14 @@ pub(crate) fn canonical_events() -> Vec<TbfEventInfo> {
         bool,
     );
     const ENTRIES: &[CanonicalEvent] = &[
+        (
+            "tbf21",
+            "技術書典21",
+            Some("2026-11-21"),
+            Some("2026-12-06"),
+            "hybrid",
+            false,
+        ),
         (
             "tbf20",
             "技術書典20",
@@ -1437,6 +1492,43 @@ mod tests {
         // 期間境界（開始日・終了日）も含む
         assert!(within("2026-04-11T00:00:00+09:00"));
         assert!(within("2026-04-26T23:59:59+09:00"));
+    }
+
+    #[test]
+    fn checklist_keeps_favorites_added_before_the_event_starts() {
+        // 技術書典21 の開催前（2026-11-07）にお気に入りへ入れた本も、
+        // 開催期間内の購入と同じように対象イベントの項目として残す。
+        assert!(created_at_belongs_to_event(
+            "tbf21",
+            Some("2026-11-07T12:00:00+09:00")
+        ));
+        // 開催期間内・境界も残す
+        assert!(created_at_belongs_to_event(
+            "tbf21",
+            Some("2026-11-21T00:00:00+09:00")
+        ));
+        assert!(created_at_belongs_to_event(
+            "tbf21",
+            Some("2026-12-06T23:59:59+09:00")
+        ));
+        // 別イベント（技術書典19: 2025-11-15〜11-30）の開催期間中に
+        // 入れた項目は、そのイベントのチェックリストへ混ざらない
+        assert!(!created_at_belongs_to_event(
+            "tbf20",
+            Some("2025-11-20T22:48:08+09:00")
+        ));
+        // どのイベントの期間でもない日（開催前）は残す
+        assert!(created_at_belongs_to_event(
+            "tbf20",
+            Some("2025-11-13T22:48:08+09:00")
+        ));
+        // 対象イベントの開催期間内なら残す
+        assert!(created_at_belongs_to_event(
+            "tbf20",
+            Some("2026-04-12T09:16:36+09:00")
+        ));
+        // 日時不明は残す（フォールバック）
+        assert!(created_at_belongs_to_event("tbf21", None));
     }
 
     #[test]

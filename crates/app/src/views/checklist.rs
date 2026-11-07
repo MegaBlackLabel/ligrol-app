@@ -23,7 +23,7 @@ use ligrol_core::tbf;
 
 use crate::app_state::AppState;
 use crate::icons::AppIcon;
-use crate::views::bookshelf::progress_ring_image;
+use crate::views::bookshelf::{progress_ring_image, rasterize_svg_scaled};
 use image::GenericImageView as _;
 
 /// デコード済みサムネイルの保持上限（1 ページ = 50 件 + 余裕を持たせた値）。
@@ -94,7 +94,37 @@ pub struct ChecklistView {
     /// 空のイベントを開いたときに自動同期を試した slug（同じイベントを開き直しても
     /// 繰り返し叩かない。ビューの寿命 = アプリを閉じるまで）
     auto_sync_attempted: HashSet<String>,
+    /// 取得済みのサークルマップ（イベント slug → 原寸画像）。ネットワークへは
+    /// 「サークルマップ」を開いたときにだけ出る。
+    circle_map_images: HashMap<String, Arc<RenderImage>>,
+    /// サークルマップ取得中のイベント slug（重複取得の防止）
+    circle_map_fetching: HashSet<String>,
+    /// サークルマップの取得失敗（イベント slug → 表示するエラー）
+    circle_map_error: HashMap<String, String>,
+    /// 選択中イベントのサークルマップを表示中か
+    show_circle_map: bool,
+    /// 地図の倍率（1.0 = 原寸）
+    circle_map_zoom: f32,
+    /// 「全体表示」中か（倍率は viewport にフィット）
+    circle_map_fit: bool,
+    /// 地図の平行移動（画像中心からのずれ）
+    circle_map_pan: gpui_kit::Point<f32>,
+    /// ドラッグ開始位置
+    circle_map_drag_start: Option<gpui_kit::Point<f32>>,
+    /// ドラッグの慣性速度（px/秒）
+    circle_map_pan_velocity: gpui_kit::Point<f32>,
+    /// 慣性アニメーションの世代（新しい操作で古いループを止める）
+    circle_map_inertia_generation: u64,
+    /// ダブルクリック判定
+    circle_map_last_click: Option<std::time::Instant>,
 }
+
+/// 地図の表示領域（960px のパネル - `p_3` の左右 24px）。
+const CIRCLE_MAP_VIEWPORT_WIDTH: f32 = 936.0;
+const CIRCLE_MAP_VIEWPORT_HEIGHT: f32 = 520.0;
+/// 地図モードの倍率（1.0 = 原寸）。全体表示まで縮小できる。
+const CIRCLE_MAP_MIN_ZOOM: f32 = 0.2;
+const CIRCLE_MAP_MAX_ZOOM: f32 = 6.0;
 
 impl ChecklistView {
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -117,6 +147,17 @@ impl ChecklistView {
             thumbnail_fetching: HashSet::new(),
             fetch_failed: HashSet::new(),
             auto_sync_attempted: HashSet::new(),
+            circle_map_images: HashMap::new(),
+            circle_map_fetching: HashSet::new(),
+            circle_map_error: HashMap::new(),
+            show_circle_map: false,
+            circle_map_zoom: 1.0,
+            circle_map_fit: false,
+            circle_map_pan: gpui_kit::Point::new(0.0, 0.0),
+            circle_map_drag_start: None,
+            circle_map_pan_velocity: gpui_kit::Point::new(0.0, 0.0),
+            circle_map_inertia_generation: 0,
+            circle_map_last_click: None,
         };
         view.reload(cx);
         view
@@ -134,6 +175,9 @@ impl ChecklistView {
         let (events, items, last_sync, selected) = {
             let state = AppState::global(cx);
             let db = &state.db_pool;
+            // 同期前でも canonical イベント（技術書典21 など）を一覧に出す。
+            // 既存行は書き換えない（利用者のポーリング設定を保持する）。
+            let _ = tbf::sync::ensure_canonical_events(db);
             let events = db::checklist::list_events(db).unwrap_or_default();
             let selected = self.selected_slug.clone();
             let items = match &selected {
@@ -147,6 +191,13 @@ impl ChecklistView {
         self.events = events;
         self.items = items;
         self.last_sync = last_sync;
+        // 本が変わったら自作マップの色付けも作り直す（表示中だけ）。
+        if self.show_circle_map
+            && let Some(slug) = self.selected_slug.clone()
+        {
+            self.circle_map_images.remove(&slug);
+            self.build_circle_map(cx, slug);
+        }
         self.fetch_missing_thumbnails(cx);
         self.decode_cached_thumbnails(cx);
         cx.notify();
@@ -414,6 +465,9 @@ impl ChecklistView {
     fn select_event(&mut self, cx: &mut Context<Self>, slug: &str) {
         self.selected_slug = Some(slug.to_string());
         self.page = 0;
+        // イベントを切り替えたらマップは畳む（取得済み画像は slug ごとに残す）
+        self.show_circle_map = false;
+        self.reset_circle_map_view();
         self.reload(cx);
         self.maybe_auto_sync(cx);
     }
@@ -441,6 +495,8 @@ impl ChecklistView {
     /// イベント一覧に戻る（Web の「← イベント一覧に戻る」相当）。
     fn back_to_list(&mut self, cx: &mut Context<Self>) {
         self.selected_slug = None;
+        self.show_circle_map = false;
+        self.reset_circle_map_view();
         self.reload(cx);
     }
 
@@ -453,6 +509,182 @@ impl ChecklistView {
             self.sort_ascending = true;
         }
         self.page = 0;
+        cx.notify();
+    }
+
+    /// サークルマップの表示を切り替える。未取得なら取得を開始する。
+    fn toggle_circle_map(&mut self, cx: &mut Context<Self>) {
+        if self.show_circle_map {
+            self.show_circle_map = false;
+            cx.notify();
+            return;
+        }
+        let Some(slug) = self.selected_slug.clone() else {
+            return;
+        };
+        self.show_circle_map = true;
+        self.reset_circle_map_view();
+        if !self.circle_map_images.contains_key(&slug) && !self.circle_map_fetching.contains(&slug)
+        {
+            // 再取得ボタンは置かない。失敗していたら、もう一度開いたときに再試行する。
+            self.circle_map_error.remove(&slug);
+            self.build_circle_map(cx, slug);
+        }
+        cx.notify();
+    }
+
+    /// サークルマップ（自作 SVG）を生成してキャッシュする。
+    ///
+    /// 技術書典サイトの画像は使わない。チェックリストのスペース番号から
+    /// 会場のブロックを組み立て、本があるブロックを色付きで描く。
+    fn build_circle_map(&mut self, cx: &mut Context<Self>, slug: String) {
+        if self.circle_map_fetching.contains(&slug) {
+            return;
+        }
+        self.circle_map_fetching.insert(slug.clone());
+        self.circle_map_error.remove(&slug);
+        let event_name = self
+            .events
+            .iter()
+            .find(|event| event.slug.as_deref() == Some(slug.as_str()))
+            .map(|event| event.event_name.clone())
+            .unwrap_or_else(|| slug.clone());
+        let spaces: Vec<(String, u32)> = self
+            .items
+            .iter()
+            .filter_map(|item| parse_space(&item.space_number))
+            .collect();
+        let svg = build_circle_map_svg(&slug, &event_name, &spaces);
+        let handle = cx.entity();
+        let task: gpui_kit::Task<Result<Arc<RenderImage>, String>> =
+            cx.background_executor().spawn(async move {
+                rasterize_svg_scaled(&svg, 2.0)
+                    .ok_or_else(|| "サークルマップを描画できませんでした".into())
+            });
+        cx.spawn(async move |_window, cx| {
+            let result = task.await;
+            handle.update(cx, |this, cx| {
+                this.circle_map_fetching.remove(&slug);
+                match result {
+                    Ok(image) => {
+                        this.circle_map_images.insert(slug, image);
+                    }
+                    Err(message) => {
+                        this.circle_map_error.insert(slug, message);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 取得済みのサークルマップをキャッシュへ入れる（テスト用）。
+    #[cfg(test)]
+    fn apply_circle_map(&mut self, slug: &str, image: Arc<RenderImage>) {
+        self.circle_map_fetching.remove(slug);
+        self.circle_map_error.remove(slug);
+        self.circle_map_images.insert(slug.to_string(), image);
+    }
+
+    /// 地図モードの倍率・位置を初期状態へ戻す。
+    fn reset_circle_map_view(&mut self) {
+        self.circle_map_zoom = 1.0;
+        self.circle_map_fit = false;
+        self.circle_map_pan = gpui_kit::Point::new(0.0, 0.0);
+        self.circle_map_drag_start = None;
+        self.circle_map_pan_velocity = gpui_kit::Point::new(0.0, 0.0);
+        self.circle_map_inertia_generation = self.circle_map_inertia_generation.wrapping_add(1);
+        self.circle_map_last_click = None;
+    }
+
+    /// 選択中イベントの配置図の原寸（px）。
+    fn circle_map_image_size(&self) -> Option<(f32, f32)> {
+        let slug = self.selected_slug.as_ref()?;
+        let image = self.circle_map_images.get(slug)?;
+        let size = image.size(0);
+        Some((size.width.0 as f32, size.height.0 as f32))
+    }
+
+    /// 地図モードの平行移動を画像の端までに clamp する。
+    fn clamp_circle_map_pan(&mut self) {
+        let Some((width, height)) = self.circle_map_image_size() else {
+            self.circle_map_pan = gpui_kit::Point::new(0.0, 0.0);
+            return;
+        };
+        let max_x = ((width * self.circle_map_zoom - CIRCLE_MAP_VIEWPORT_WIDTH) / 2.0).max(0.0);
+        let max_y = ((height * self.circle_map_zoom - CIRCLE_MAP_VIEWPORT_HEIGHT) / 2.0).max(0.0);
+        self.circle_map_pan.x = self.circle_map_pan.x.clamp(-max_x, max_x);
+        self.circle_map_pan.y = self.circle_map_pan.y.clamp(-max_y, max_y);
+    }
+
+    /// 地図モードの倍率を掛け算で変更する（ホイール・ボタン共用）。
+    fn zoom_circle_map(&mut self, factor: f32, cx: &mut Context<Self>) {
+        self.circle_map_zoom =
+            (self.circle_map_zoom * factor).clamp(CIRCLE_MAP_MIN_ZOOM, CIRCLE_MAP_MAX_ZOOM);
+        self.circle_map_fit = false;
+        self.circle_map_pan_velocity = gpui_kit::Point::new(0.0, 0.0);
+        self.circle_map_inertia_generation = self.circle_map_inertia_generation.wrapping_add(1);
+        self.clamp_circle_map_pan();
+        cx.notify();
+    }
+
+    /// ドラッグを離したときに慣性で流す（Google マップ風）。
+    fn end_circle_map_pan(&mut self, cx: &mut Context<Self>) {
+        self.circle_map_drag_start = None;
+        let velocity = self.circle_map_pan_velocity;
+        if velocity.x.abs() < 40.0 && velocity.y.abs() < 40.0 {
+            self.circle_map_pan_velocity = gpui_kit::Point::new(0.0, 0.0);
+            cx.notify();
+            return;
+        }
+        self.circle_map_inertia_generation = self.circle_map_inertia_generation.wrapping_add(1);
+        let generation = self.circle_map_inertia_generation;
+        let handle = cx.entity();
+        cx.spawn(async move |_window, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(16))
+                    .await;
+                let stop = handle.update(cx, |this, cx| {
+                    if this.circle_map_inertia_generation != generation {
+                        return true;
+                    }
+                    let velocity = this.circle_map_pan_velocity;
+                    if velocity.x.abs() < 15.0 && velocity.y.abs() < 15.0 {
+                        this.circle_map_pan_velocity = gpui_kit::Point::new(0.0, 0.0);
+                        return true;
+                    }
+                    this.circle_map_pan.x += velocity.x * 0.016;
+                    this.circle_map_pan.y += velocity.y * 0.016;
+                    this.clamp_circle_map_pan();
+                    // 減速をゆるめにして、少し長く滑る（Google マップ寄り）。
+                    this.circle_map_pan_velocity.x *= 0.92;
+                    this.circle_map_pan_velocity.y *= 0.92;
+                    cx.notify();
+                    false
+                });
+                if stop {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// 配置図全体が表示領域に収まる倍率へ戻す。
+    fn fit_circle_map(&mut self, cx: &mut Context<Self>) {
+        let Some((width, height)) = self.circle_map_image_size() else {
+            return;
+        };
+        let fit = (CIRCLE_MAP_VIEWPORT_WIDTH / width)
+            .min(CIRCLE_MAP_VIEWPORT_HEIGHT / height)
+            .clamp(CIRCLE_MAP_MIN_ZOOM, CIRCLE_MAP_MAX_ZOOM);
+        self.circle_map_zoom = fit;
+        self.circle_map_fit = true;
+        self.circle_map_pan = gpui_kit::Point::new(0.0, 0.0);
+        self.circle_map_pan_velocity = gpui_kit::Point::new(0.0, 0.0);
+        self.circle_map_inertia_generation = self.circle_map_inertia_generation.wrapping_add(1);
         cx.notify();
     }
 
@@ -1039,6 +1271,128 @@ impl ChecklistView {
             )
     }
 
+    /// 地図の表示領域（ドラッグ移動・ホイール拡大・慣性スクロール）。
+    fn render_circle_map_viewport(&self, handle: gpui_kit::Entity<Self>) -> gpui_kit::AnyElement {
+        let Some(slug) = self.selected_slug.as_ref() else {
+            return div().into_any_element();
+        };
+        let Some(image) = self.circle_map_images.get(slug).cloned() else {
+            return div().into_any_element();
+        };
+        let size = image.size(0);
+        let (width, height) = (size.width.0 as f32, size.height.0 as f32);
+        let zoom = self.circle_map_zoom;
+        let pan = self.circle_map_pan;
+        let dragging = self.circle_map_drag_start.is_some();
+        let down_handle = handle.clone();
+        let move_handle = handle.clone();
+        let up_handle = handle.clone();
+        let out_handle = handle.clone();
+        let wheel_handle = handle;
+        div()
+            .id("circle-map-viewport")
+            .debug_selector(|| "circle-map-image".into())
+            .w_full()
+            .h(px(CIRCLE_MAP_VIEWPORT_HEIGHT))
+            .relative()
+            .overflow_hidden()
+            .bg(gpui_kit::white())
+            .cursor(if dragging {
+                gpui_kit::CursorStyle::ClosedHand
+            } else {
+                gpui_kit::CursorStyle::OpenHand
+            })
+            .on_mouse_down(gpui_kit::MouseButton::Left, move |event, _window, cx| {
+                let position =
+                    gpui_kit::Point::new(event.position.x.as_f32(), event.position.y.as_f32());
+                let now = std::time::Instant::now();
+                down_handle.update(cx, |this, cx| {
+                    let double = this
+                        .circle_map_last_click
+                        .map(|last| now.duration_since(last).as_millis() < 350)
+                        .unwrap_or(false);
+                    this.circle_map_last_click = Some(now);
+                    if double {
+                        this.circle_map_last_click = None;
+                        this.circle_map_drag_start = None;
+                        this.zoom_circle_map(2.0, cx);
+                    } else {
+                        this.circle_map_drag_start = Some(position);
+                        this.circle_map_pan_velocity = gpui_kit::Point::new(0.0, 0.0);
+                        this.circle_map_inertia_generation =
+                            this.circle_map_inertia_generation.wrapping_add(1);
+                        cx.notify();
+                    }
+                });
+            })
+            .on_mouse_move(move |event, _window, cx| {
+                let position =
+                    gpui_kit::Point::new(event.position.x.as_f32(), event.position.y.as_f32());
+                move_handle.update(cx, |this, cx| {
+                    if let Some(start) = this.circle_map_drag_start {
+                        let dx = position.x - start.x;
+                        let dy = position.y - start.y;
+                        // ドラッグしたらダブルクリック判定を消す（素早く続けて
+                        // ドラッグしたときに 2 回目がズーム扱いにならないように）。
+                        if dx.abs() > 2.0 || dy.abs() > 2.0 {
+                            this.circle_map_last_click = None;
+                        }
+                        this.circle_map_pan.x += dx;
+                        this.circle_map_pan.y += dy;
+                        this.circle_map_drag_start = Some(position);
+                        // 16ms 換算の速度（px/秒）。離した後に慣性で流す。
+                        this.circle_map_pan_velocity = gpui_kit::Point::new(
+                            (dx / 0.016).clamp(-4000.0, 4000.0),
+                            (dy / 0.016).clamp(-4000.0, 4000.0),
+                        );
+                        this.clamp_circle_map_pan();
+                        cx.notify();
+                    }
+                });
+            })
+            .on_mouse_up(gpui_kit::MouseButton::Left, move |_, _window, cx| {
+                up_handle.update(cx, |this, cx| this.end_circle_map_pan(cx));
+            })
+            .on_mouse_up_out(gpui_kit::MouseButton::Left, move |_, _window, cx| {
+                out_handle.update(cx, |this, cx| this.end_circle_map_pan(cx));
+            })
+            .on_scroll_wheel(move |event, _window, cx| {
+                let delta = match event.delta {
+                    gpui_kit::ScrollDelta::Pixels(point) => f32::from(point.y),
+                    gpui_kit::ScrollDelta::Lines(point) => point.y * 20.0,
+                };
+                let steps = (delta.abs() / 40.0).clamp(1.0, 3.0);
+                let factor = 1.15_f32.powf(if delta > 0.0 { steps } else { -steps });
+                wheel_handle.update(cx, |this, cx| {
+                    this.zoom_circle_map(factor, cx);
+                });
+                cx.stop_propagation();
+            })
+            .child({
+                let display_width = width * zoom;
+                let display_height = height * zoom;
+                // flex の中央寄せ + margin だと移動量が半分になる（中央寄せが
+                // margin 込みで再計算するため）。絶対座標で置いて 1:1 で動かす。
+                let left = (CIRCLE_MAP_VIEWPORT_WIDTH - display_width) / 2.0 + pan.x;
+                let top = (CIRCLE_MAP_VIEWPORT_HEIGHT - display_height) / 2.0 + pan.y;
+                div()
+                    .absolute()
+                    .left(px(left))
+                    .top(px(top))
+                    .w(px(display_width))
+                    .h(px(display_height))
+                    .child(
+                        img(image)
+                            .w_full()
+                            .h_full()
+                            .object_fit(gpui_kit::ObjectFit::Fill),
+                    )
+            })
+            .into_any_element()
+    }
+
+    /// 全画面に近い地図モードのオーバーレイ（ページスクロールの外に置く）。
+
     /// イベント詳細（Web の Checklist 相当: テーブル + 並び替え + ページネーション）。
     fn render_event_detail(
         &mut self,
@@ -1063,6 +1417,10 @@ impl ChecklistView {
         let muted = cx.theme().muted;
         let muted_fg = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
+        let show_circle_map = self.show_circle_map;
+        let circle_map = self.circle_map_images.get(&selected_slug).cloned();
+        let circle_map_loading = self.circle_map_fetching.contains(&selected_slug);
+        let circle_map_error = self.circle_map_error.get(&selected_slug).cloned();
 
         let event = events
             .iter()
@@ -1287,8 +1645,14 @@ impl ChecklistView {
             .size_full()
             .flex_1()
             .min_h_0()
-            .overflow_y_scrollbar()
+            .relative()
             .child(
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .min_h_0()
+                    .child(
                 div()
                     .mx_auto()
                     .w(px(960.0))
@@ -1297,6 +1661,8 @@ impl ChecklistView {
                     .flex()
                     .flex_col()
                     .gap_4()
+                    .flex_1()
+                    .min_h_0()
                     // 一覧に戻る（最上部・左寄せ）
                     .child(
                         div()
@@ -1415,6 +1781,25 @@ impl ChecklistView {
                                 }
                                                                 }),
                             )
+                            .child(
+                                Button::new("checklist-circle-map").cursor_pointer()
+                                    .label(if show_circle_map {
+                                        "サークルマップを隠す"
+                                    } else {
+                                        "サークルマップ"
+                                    })
+                                    .small()
+                                    .disabled(demo)
+                                    .cursor_pointer()
+                                    .on_click({
+                                        let handle = handle.clone();
+                                        move |_, _window, cx| {
+                                            handle.update(cx, |this, cx| {
+                                                this.toggle_circle_map(cx);
+                                            });
+                                        }
+                                    }),
+                            )
                             .child(div().text_sm().text_color(muted_fg).child("並び替え:"))
                             .children(
                                 [
@@ -1448,6 +1833,92 @@ impl ChecklistView {
                                 }),
                             ),
                     )
+                    // サークルマップ（会場配置図）。取得はボタンを押したときだけ。
+                    .child(if show_circle_map {
+                        let expand_handle = handle.clone();
+                        div()
+                            .id("circle-map-panel")
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(border)
+                            .p_3()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child("サークルマップ"),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                Button::new("circle-map-fit-toggle")
+                                                    .label(if self.circle_map_fit {
+                                                        "等倍表示"
+                                                    } else {
+                                                        "全体表示"
+                                                    })
+                                                    .small()
+                                                    .disabled(circle_map.is_none())
+                                                    .cursor_pointer()
+                                                    .on_click(move |_, _window, cx| {
+                                                        expand_handle.update(cx, |this, cx| {
+                                                            if this.circle_map_fit {
+                                                                this.circle_map_zoom = 1.0;
+                                                                this.circle_map_fit = false;
+                                                                this.circle_map_pan = gpui_kit::Point::new(0.0, 0.0);
+                                                                this.circle_map_pan_velocity = gpui_kit::Point::new(0.0, 0.0);
+                                                                this.circle_map_inertia_generation = this
+                                                                    .circle_map_inertia_generation
+                                                                    .wrapping_add(1);
+                                                                cx.notify();
+                                                            } else {
+                                                                this.fit_circle_map(cx);
+                                                            }
+                                                        });
+                                                    }),
+                                            ),
+                                    ),
+                            )
+                            .child(if let Some(error) = circle_map_error {
+                                div()
+                                    .text_sm()
+                                    .text_color(danger)
+                                    .child(format!(
+                                        "{error}（もう一度「サークルマップ」を押すと再取得します）"
+                                    ))
+                                    .into_any_element()
+                            } else if circle_map_loading {
+                                div()
+                                    .text_sm()
+                                    .text_color(muted_fg)
+                                    .child("サークルマップを作成しています…")
+                                    .into_any_element()
+                            } else if circle_map.is_some() {
+                                self.render_circle_map_viewport(handle.clone())
+                            } else {
+                                div()
+                                    .text_sm()
+                                    .text_color(muted_fg)
+                                    .child("「サークルマップ」を押すと配置図を取得します")
+                                    .into_any_element()
+                            })
+                            .into_any_element()
+                    } else {
+                        div().into_any_element()
+                    })
                     // テーブル
                     .child(if sorted.is_empty() {
                         div()
@@ -1491,10 +1962,12 @@ impl ChecklistView {
                             .into_any_element()
                     } else {
                         div()
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scrollbar()
                             .rounded_lg()
                             .border_1()
                             .border_color(border)
-                            .overflow_hidden()
                             .child(
                                 div()
                                     .flex()
@@ -1582,6 +2055,7 @@ impl ChecklistView {
                                 div().into_any_element()
                             }),
                     ),
+                ),
             )
     }
 }
@@ -1600,6 +2074,161 @@ fn decode_thumbnail(bytes: &[u8]) -> Option<Arc<RenderImage>> {
     Some(Arc::new(RenderImage::new([image::Frame::new(
         image::RgbaImage::from_raw(width, height, flat)?,
     )])))
+}
+
+/// 公式ページの配置図 SVG を同梱しているイベント。
+///
+/// 技術書典21 の公式チェックリストページは配置図をインライン SVG（スペースごとの
+/// path id 付き）で描いている。PNG より輪郭・文字が綺麗なので、同梱している
+/// イベントではネットワークへ取りに行かずこちらを 2 倍で rasterize する。
+
+/// サークルマップ（会場配置図）を**原寸のまま** RenderImage にする。
+///
+/// 表紙の `decode_thumbnail` は 256px に縮小するが、配置図はスペース名を
+/// 読む必要があるので縮小しない。
+
+/// スペース名（例: `き05`, `あ-01`, `協01`）を（列, 番号）に分解する。
+fn parse_space(space: &str) -> Option<(String, u32)> {
+    let text = space.trim();
+    if text.is_empty() || text.eq_ignore_ascii_case("TBD") {
+        return None;
+    }
+    let digit_index = text.char_indices().find(|(_, c)| c.is_ascii_digit())?.0;
+    let letter = text[..digit_index]
+        .trim()
+        .trim_end_matches(['-', 'ー', '−', ' '])
+        .to_string();
+    if letter.is_empty() {
+        return None;
+    }
+    let digits: String = text[digit_index..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    Some((letter, digits.parse().ok()?))
+}
+
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+/// 自作サークルマップの SVG。
+///
+/// 技術書典21 は公式ページの配置（列・通路・設備）を再現した自前レイアウトに、
+/// 10 個ずつのグループ名（`き(1-10)` など）を重ねた SVG を使う。
+/// それ以外のイベントはチェックリストのスペース番号から簡易マップを作る。
+fn build_circle_map_svg(event_slug: &str, event_name: &str, spaces: &[(String, u32)]) -> String {
+    if event_slug == "tbf21" {
+        return include_str!("../../assets/tbf/tbf21-layout.svg").to_string();
+    }
+
+    use std::collections::{BTreeMap, BTreeSet};
+
+    // イベントごとの会場データが無いときは、チェックリストの
+    // スペース番号から 10 個ずつのブロックを組み立てる。
+    let mut by_letter: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
+    for (letter, number) in spaces {
+        by_letter.entry(letter.clone()).or_default().insert(*number);
+    }
+    let left: Vec<(String, Vec<(u32, u32)>)> = by_letter
+        .into_iter()
+        .map(|(letter, numbers)| {
+            let mut groups: Vec<(u32, u32)> = Vec::new();
+            for number in numbers {
+                let start = ((number.saturating_sub(1)) / 10) * 10 + 1;
+                let end = start + 9;
+                if groups.last().map(|(_, e)| *e) != Some(end) {
+                    groups.push((start, end));
+                }
+            }
+            (letter, groups)
+        })
+        .collect();
+    let right: Vec<(String, Vec<(u32, u32)>)> = Vec::new();
+
+    let is_highlighted = |letter: &str, start: u32, end: u32| {
+        spaces.iter().any(|(space_letter, number)| {
+            space_letter == letter && *number >= start && *number <= end
+        })
+    };
+
+    let mut body = String::new();
+    let title = xml_escape(event_name);
+    body.push_str(&format!(
+        "<text x=\"40\" y=\"36\" font-family=\"Noto Sans JP, sans-serif\" font-size=\"22\" font-weight=\"700\" fill=\"#111827\">{title} サークルマップ</text>\
+         <text x=\"40\" y=\"58\" font-family=\"Noto Sans JP, sans-serif\" font-size=\"11\" fill=\"#4b5563\">ブロックは 10 個ずつまとめて表示。色付きはチェックリストに本があるブロック。</text>"
+    ));
+
+    let card_width = 108.0;
+    let card_height = 34.0;
+    let gap = 6.0;
+    let row_height = 44.0;
+    let left_x = 40.0;
+    let right_x = 560.0;
+    let rows_y = 86.0;
+
+    let mut draw_section = |rows: &[(String, Vec<(u32, u32)>)], x: f32, label: &str| {
+        if rows.is_empty() {
+            return;
+        }
+        body.push_str(&format!(
+            "<text x=\"{x}\" y=\"{}\" font-family=\"Noto Sans JP, sans-serif\" font-size=\"13\" font-weight=\"700\" fill=\"#374151\">{label}</text>",
+            rows_y - 10.0
+        ));
+        for (row_index, (letter, groups)) in rows.iter().enumerate() {
+            let y = rows_y + row_index as f32 * row_height;
+            for (group_index, (start, end)) in groups.iter().enumerate() {
+                let card_x = x + group_index as f32 * (card_width + gap);
+                let highlighted = is_highlighted(letter, *start, *end);
+                let (fill, stroke) = if highlighted {
+                    ("#bbf7d0", "#15803d")
+                } else {
+                    ("#f8fafc", "#334155")
+                };
+                body.push_str(&format!(
+                    "<rect x=\"{card_x}\" y=\"{y}\" width=\"{card_width}\" height=\"{card_height}\" rx=\"6\" fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"1.2\"/>\
+                     <text x=\"{}\" y=\"{}\" text-anchor=\"middle\" font-family=\"Noto Sans JP, sans-serif\"><tspan font-size=\"18\" font-weight=\"700\" fill=\"#111827\">{}</tspan><tspan font-size=\"8\" fill=\"#4b5563\">({}-{})</tspan></text>",
+                    card_x + card_width / 2.0,
+                    y + 22.0,
+                    xml_escape(letter),
+                    start,
+                    end
+                ));
+            }
+        }
+    };
+
+    draw_section(&left, left_x, "左側（西）");
+    draw_section(&right, right_x, "右側（東）");
+
+    // 会場の設備（簡略図）。
+    for (x, y, w, h, label) in [
+        (right_x, 430.0, 190.0, 70.0, "企画展示"),
+        (right_x + 210.0, 430.0, 110.0, 70.0, "運営"),
+        (right_x + 340.0, 430.0, 140.0, 70.0, "荷捌所"),
+    ] {
+        body.push_str(&format!(
+            "<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" rx=\"4\" fill=\"#e5e7eb\" stroke=\"#6b7280\"/>\
+             <text x=\"{}\" y=\"{}\" text-anchor=\"middle\" font-family=\"Noto Sans JP, sans-serif\" font-size=\"14\" fill=\"#374151\">{label}</text>",
+            x + w / 2.0,
+            y + h / 2.0 + 5.0
+        ));
+    }
+    body.push_str(
+        "<text x=\"40\" y=\"670\" font-family=\"Noto Sans JP, sans-serif\" font-size=\"11\" fill=\"#6b7280\">左側（西） / 右側（東）は会場の配置を簡略化したものです。数字はスペース番号の範囲。</text>\
+         <text x=\"20\" y=\"620\" font-family=\"Noto Sans JP, sans-serif\" font-size=\"12\" fill=\"#9ca3af\">出口</text>\
+         <text x=\"1160\" y=\"74\" font-family=\"Noto Sans JP, sans-serif\" font-size=\"12\" fill=\"#9ca3af\">入口</text>\
+         <text x=\"500\" y=\"300\" transform=\"rotate(90 500 300)\" font-family=\"Noto Sans JP, sans-serif\" font-size=\"12\" fill=\"#9ca3af\">通路</text>"
+    );
+
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1200\" height=\"700\" viewBox=\"0 0 1200 700\">\
+         <rect width=\"1200\" height=\"700\" fill=\"#ffffff\"/>{body}</svg>"
+    )
 }
 
 /// 画像バイト列を幅 256px 上限まで縮小した RGBA 画像にする。
@@ -1713,6 +2342,30 @@ mod tests {
         });
     }
 
+    /// canonical イベント（技術書典21 を含む）は、まだ同期していなくても
+    /// イベント一覧に出る。DB に前回のイベント行しか無い状態で開いたときに
+    /// 「技術書典20まで」で止まらないようにする。
+    #[gpui_kit::test]
+    async fn canonical_events_appear_without_a_sync(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::component::init);
+        cx.update(AppState::init_test);
+        seed_event(cx, "tbf20", "技術書典20");
+        let view = cx.new(ChecklistView::new);
+        let events = view.read_with(cx, |v, _| v.events.clone());
+        let tbf21 = events
+            .iter()
+            .find(|event| event.slug.as_deref() == Some("tbf21"))
+            .expect("技術書典21 がイベント一覧に無い");
+        assert_eq!(tbf21.event_name, "技術書典21");
+        assert_eq!(tbf21.event_start_date.as_deref(), Some("2026-11-21"));
+        assert_ne!(tbf21.is_featured, 0, "技術書典21 が注目イベントでない");
+        assert_eq!(
+            events.iter().filter(|event| event.is_featured != 0).count(),
+            1,
+            "注目イベントが複数ある"
+        );
+    }
+
     #[gpui_kit::test]
     async fn loads_events_and_items_for_selection(cx: &mut TestAppContext) {
         cx.update(gpui_kit::component::init);
@@ -1722,7 +2375,16 @@ mod tests {
         seed_item(cx, "item-1", "tbf20", "サークルA");
         seed_item(cx, "item-2", "tbf19", "サークルB");
         let view = cx.new(ChecklistView::new);
-        assert_eq!(view.read_with(cx, |v, _| v.events.len()), 2);
+        // canonical イベント（tbf21 など）も種まきされるため、seed した 2 件だけではない
+        assert!(view.read_with(cx, |v, _| v.events.len()) >= 2);
+        assert!(
+            view.read_with(cx, |v, _| {
+                v.events
+                    .iter()
+                    .any(|event| event.slug.as_deref() == Some("tbf20"))
+            }),
+            "seed した tbf20 が消えている"
+        );
         // Web と同じ: 最初はイベント一覧表示（選択なし）
         assert!(view.read_with(cx, |v, _| v.selected_slug.is_none()));
         assert!(view.read_with(cx, |v, _| v.items.is_empty()));
@@ -1874,6 +2536,17 @@ mod tests {
             thumbnail_fetching: HashSet::new(),
             fetch_failed: HashSet::new(),
             auto_sync_attempted: HashSet::new(),
+            circle_map_images: HashMap::new(),
+            circle_map_fetching: HashSet::new(),
+            circle_map_error: HashMap::new(),
+            show_circle_map: false,
+            circle_map_zoom: 1.0,
+            circle_map_fit: false,
+            circle_map_pan: gpui_kit::Point::new(0.0, 0.0),
+            circle_map_drag_start: None,
+            circle_map_pan_velocity: gpui_kit::Point::new(0.0, 0.0),
+            circle_map_inertia_generation: 0,
+            circle_map_last_click: None,
         }
     }
 
@@ -2070,6 +2743,250 @@ mod tests {
         assert_eq!(sample_progress_fraction(0, 0, 0, 0), 0.0);
         // 端は 0..1 に収める
         assert_eq!(sample_progress_fraction(5, 6, 999, 10), 1.0);
+    }
+
+    /// サークルマップは取得済みなら即座に表示し、トグルで隠せる。
+    /// 取得（ネットワーク）はボタンを押したときだけ走らせる。
+    #[gpui_kit::test]
+    async fn circle_map_toggle_renders_the_cached_map(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::component::init);
+        cx.update(AppState::init_test);
+        seed_event(cx, "tbf20", "技術書典20");
+        seed_item(cx, "item-1", "tbf20", "サークルA");
+        let view = cx.new(ChecklistView::new);
+        let window = cx.open_window(
+            gpui_kit::Size {
+                width: gpui_kit::px(1200.0),
+                height: gpui_kit::px(800.0),
+            },
+            |window, cx| gpui_kit::component::Root::new(view.clone(), window, cx),
+        );
+        let visual = gpui_kit::VisualTestContext::from_window(*window, cx).into_mut();
+        let draw = |visual: &mut gpui_kit::VisualTestContext| {
+            visual.update(|window, cx| {
+                let arena_clear = window.draw(cx);
+                arena_clear.clear(cx);
+            });
+        };
+
+        cx.update(|cx| {
+            view.update(cx, |this, cx| {
+                this.select_event(cx, "tbf20");
+                this.apply_circle_map("tbf20", dummy_render_image());
+                this.toggle_circle_map(cx);
+            })
+        });
+        draw(visual);
+        assert!(
+            visual.debug_bounds("circle-map-image").is_some(),
+            "取得済みのサークルマップが表示されていない"
+        );
+
+        cx.update(|cx| view.update(cx, |this, cx| this.toggle_circle_map(cx)));
+        draw(visual);
+        assert!(
+            visual.debug_bounds("circle-map-image").is_none(),
+            "トグルを戻してもサークルマップが残っている"
+        );
+    }
+
+    #[test]
+    fn parse_space_handles_common_formats() {
+        assert_eq!(parse_space("き05"), Some(("き".into(), 5)));
+        assert_eq!(parse_space("あ-01"), Some(("あ".into(), 1)));
+        assert_eq!(parse_space("協01"), Some(("協".into(), 1)));
+        assert_eq!(parse_space("TBD"), None);
+        assert_eq!(parse_space(""), None);
+    }
+
+    /// 自作マップ: 公式画像を使わず、ブロックを 10 個ずつまとめて描く。
+    #[test]
+    fn self_made_tbf21_map_uses_one_block_name_and_centered_numbers() {
+        let spaces = vec![
+            ("き".to_string(), 5),
+            ("あ".to_string(), 22),
+            ("せ".to_string(), 30),
+        ];
+        let svg = build_circle_map_svg("tbf21", "技術書典21", &spaces);
+        // ブロック名は 1 回だけ（丸なし）
+        assert_eq!(svg.matches(">き</text>").count(), 1);
+        assert_eq!(svg.matches(">あ</text>").count(), 1);
+        assert_eq!(svg.matches(">そ</text>").count(), 1);
+        assert!(
+            !svg.contains("<circle cx=\"346\""),
+            "ブロック名に丸が付いている"
+        );
+        assert!(svg.contains(">1</text>"), "開始番号 1 が無い");
+        assert!(svg.contains(">10</text>"), "終了番号 10 が無い");
+        // あ の各列の終了番号（22-31 / 32-40 / 41-49）
+        for n in ["22", "31", "32", "40", "41", "49"] {
+            assert!(
+                svg.contains(&format!(">{n}</text>")),
+                "あ の配置番号 {n} が無い"
+            );
+        }
+        // 回転 transform を反映したセル中央（き01 の中心 803.5,233 に baseline 236）
+        assert!(
+            svg.contains("x=\"803.5\" y=\"236\""),
+            "き01 の番号がセル中央に無い"
+        );
+        assert!(
+            svg.contains("x=\"1202\" y=\"94.5\""),
+            "あ01 の番号がセル中央に無い"
+        );
+        // き の名前はセルの外（左上）: き01 の左上 796.5,224.5 の上
+        assert!(
+            svg.contains("x=\"798.5\" y=\"221.5\""),
+            "き の名前がセルの外に無い"
+        );
+        // 結合した「き(1-10)」表記は使わない
+        assert!(!svg.contains("(1-10)"));
+        // 赤い順番矢印は無い
+        assert!(!svg.contains("fill=\"red\""));
+        // SVG として描画できる（公式レイアウト 1416×379 の 2 倍）
+        let image = rasterize_svg_scaled(&svg, 2.0).expect("自作マップを描画できない");
+        assert_eq!(image.size(0).width.0, 2832);
+        assert_eq!(image.size(0).height.0, 758);
+    }
+
+    /// 会場データの無いイベントは、チェックリストのスペースから 10 個ずつ作る。
+    #[test]
+    fn self_made_map_derives_groups_for_other_events() {
+        let spaces = vec![
+            ("き".to_string(), 5),
+            ("き".to_string(), 17),
+            ("あ".to_string(), 3),
+        ];
+        let svg = build_circle_map_svg("tbf20", "技術書典20", &spaces);
+        assert!(svg.contains("技術書典20 サークルマップ"));
+        assert!(svg.contains("き"));
+        assert!(svg.contains("(1-10)"));
+        assert!(svg.contains("(11-20)"));
+        assert!(svg.contains("あ"));
+    }
+
+    /// 地図モード: ドラッグで移動、ホイールで拡大縮小できる。
+    #[gpui_kit::test]
+    async fn circle_map_drag_pans_and_wheel_zooms(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::component::init);
+        cx.update(AppState::init_test);
+        seed_event(cx, "tbf20", "技術書典20");
+        seed_item(cx, "item-1", "tbf20", "サークルA");
+        // ドラッグ範囲を作るため横長の仮画像（2000×1000）
+        let image = Arc::new(RenderImage::new([image::Frame::new(
+            image::RgbaImage::from_pixel(2000, 1000, image::Rgba([240, 240, 240, 255])),
+        )]));
+        let view = cx.new(ChecklistView::new);
+        let window = cx.open_window(
+            gpui_kit::Size {
+                width: gpui_kit::px(1200.0),
+                height: gpui_kit::px(1000.0),
+            },
+            |window, cx| gpui_kit::component::Root::new(view.clone(), window, cx),
+        );
+        let visual = gpui_kit::VisualTestContext::from_window(*window, cx).into_mut();
+        let draw = |visual: &mut gpui_kit::VisualTestContext| {
+            visual.update(|window, cx| {
+                let arena_clear = window.draw(cx);
+                arena_clear.clear(cx);
+            });
+        };
+        cx.update(|cx| {
+            view.update(cx, |this, cx| {
+                this.select_event(cx, "tbf20");
+                this.apply_circle_map("tbf20", image);
+                this.show_circle_map = true;
+                cx.notify();
+            })
+        });
+        draw(visual);
+        let bounds = visual
+            .debug_bounds("circle-map-image")
+            .expect("地図の表示領域が無い");
+        let start = bounds.center();
+        let down = start;
+        let moved = gpui_kit::point(start.x + gpui_kit::px(60.0), start.y + gpui_kit::px(30.0));
+        visual.simulate_event(gpui_kit::MouseDownEvent {
+            position: down,
+            modifiers: Default::default(),
+            button: gpui_kit::MouseButton::Left,
+            click_count: 1,
+            first_mouse: false,
+        });
+        visual.simulate_event(gpui_kit::MouseMoveEvent {
+            position: moved,
+            modifiers: Default::default(),
+            pressed_button: Some(gpui_kit::MouseButton::Left),
+        });
+        visual.simulate_event(gpui_kit::MouseUpEvent {
+            button: gpui_kit::MouseButton::Left,
+            position: moved,
+            modifiers: Default::default(),
+            click_count: 1,
+        });
+        draw(visual);
+        let pan = view.read_with(cx, |v, _| v.circle_map_pan);
+        assert!(pan.x > 10.0, "ドラッグで横に動いていない: {pan:?}");
+        assert!(pan.y > 5.0, "ドラッグで縦に動いていない: {pan:?}");
+        let velocity = view.read_with(cx, |v, _| v.circle_map_pan_velocity);
+        assert!(
+            velocity.x.abs() > 100.0,
+            "ドラッグの速度が慣性用に記録されていない: {velocity:?}"
+        );
+        assert!(
+            view.read_with(cx, |v, _| v.circle_map_drag_start.is_none()),
+            "ドラッグ終了後もドラッグ中扱いになっている"
+        );
+
+        // 端まで移動できる（中央寄せの margin 方式だと移動量が半分になり、
+        // 端のブロックまで届かなかった）。2 回ドラッグして clamp に当てる。
+        let edge = gpui_kit::point(
+            bounds.origin.x + gpui_kit::px(12.0),
+            bounds.origin.y + gpui_kit::px(12.0),
+        );
+        for _ in 0..2 {
+            visual.simulate_event(gpui_kit::MouseDownEvent {
+                position: start,
+                modifiers: Default::default(),
+                button: gpui_kit::MouseButton::Left,
+                click_count: 1,
+                first_mouse: false,
+            });
+            visual.simulate_event(gpui_kit::MouseMoveEvent {
+                position: edge,
+                modifiers: Default::default(),
+                pressed_button: Some(gpui_kit::MouseButton::Left),
+            });
+            visual.simulate_event(gpui_kit::MouseUpEvent {
+                button: gpui_kit::MouseButton::Left,
+                position: edge,
+                modifiers: Default::default(),
+                click_count: 1,
+            });
+            draw(visual);
+        }
+        let pan = view.read_with(cx, |v, _| v.circle_map_pan);
+        assert!(
+            (pan.x + (2000.0 - 936.0) / 2.0).abs() < 1.5,
+            "横の端まで移動できていない: {pan:?}"
+        );
+        assert!(
+            (pan.y + (1000.0 - 520.0) / 2.0).abs() < 1.5,
+            "縦の端まで移動できていない: {pan:?}"
+        );
+
+        let before = view.read_with(cx, |v, _| v.circle_map_zoom);
+        visual.simulate_event(gpui_kit::ScrollWheelEvent {
+            position: start,
+            delta: gpui_kit::ScrollDelta::Lines(gpui_kit::point(0.0, 3.0)),
+            ..Default::default()
+        });
+        draw(visual);
+        let after = view.read_with(cx, |v, _| v.circle_map_zoom);
+        assert!(
+            after > before,
+            "ホイールで拡大していない: {before} -> {after}"
+        );
     }
 
     /// 取得中はその行の表紙に進捗リングを出し、終わったら消す。
