@@ -1,8 +1,8 @@
 //! TbfClient tests against a scripted mock transport (no network).
 
+use ligrol_core::tbf::{RequestSpec, ResponseSpec, TbfClient, TbfError, Transport};
 use parking_lot::Mutex;
 use std::sync::Arc;
-use ligrol_core::tbf::{RequestSpec, ResponseSpec, TbfClient, TbfError, Transport};
 
 type MockFn = Box<dyn FnMut(RequestSpec) -> Result<ResponseSpec, TbfError> + Send>;
 
@@ -487,6 +487,13 @@ fn checklist_maps_circles_with_price_and_purchase_state() {
         let body = json_body(&spec);
         assert_eq!(body["operationName"], "EventOfflineCircleChecklistQuery");
         assert_eq!(body["variables"]["eventID"], "Event:tbf20");
+        // フォロー一覧は取得しない（`first: 0` はスキーマ検証で弾かれるため 1 + skip）
+        assert_eq!(body["variables"]["followingOrganizationsSkip"], true);
+        assert_eq!(body["variables"]["followingOrganizationsFirst"], 1);
+        // 現行スキーマに無いフィールドを要求していない
+        let query = body["query"].as_str().unwrap();
+        assert!(!query.contains("firstAppearanceEventName"));
+        assert!(!query.contains("event { id databaseID"));
         Ok(response(200, payload))
     }))));
     client.restore_session(ligrol_core::tbf::TbfSession {
@@ -520,11 +527,100 @@ fn events_returns_canonical_list_without_network() {
         xsrf_token: "x".into(),
     });
     let events = client.events().unwrap();
-    assert!(events.len() >= 21);
-    let first = events.iter().find(|e| e.slug == "tbf20").unwrap();
+    assert!(events.len() >= 22);
+    let first = events.iter().find(|e| e.slug == "tbf21").unwrap();
     assert!(first.is_featured);
-    assert_eq!(first.event_name, "技術書典20");
+    assert_eq!(first.event_name, "技術書典21");
+    assert_eq!(first.event_start_date.as_deref(), Some("2026-11-21"));
+    assert_eq!(first.event_end_date.as_deref(), Some("2026-12-06"));
     // cancelled event preserved
     let tbf8 = events.iter().find(|e| e.slug == "tbf8").unwrap();
     assert!(tbf8.is_cancelled);
+}
+
+#[test]
+fn checklist_for_tbf21_keeps_favorites_created_before_the_event() {
+    let payload = r#"{
+      "data": { "viewer": { "checkedProductInfos": {
+        "pageInfo": { "hasNextPage": false, "endCursor": null },
+        "edges": [
+          { "node": {
+            "createdAt": "2026-11-07T12:00:00+09:00",
+            "productInfo": {
+              "id": "ProductInfo:p1",
+              "databaseID": "p1",
+              "name": "会期前にいいねした本",
+              "loginUserBookShelfItem": null,
+              "coverImage": null,
+              "productVariants": { "edges": [] },
+              "organization": {
+                "id": "Org:1",
+                "name": "Studio Cyan",
+                "circles": { "edges": [
+                  { "node": { "id": "Circle:c1", "databaseID": "c1", "spaces": ["あ-01"], "hasOfflineCourse": true, "event": { "id": "Event:tbf21", "databaseID": "tbf21" } } }
+                ] }
+              }
+            }
+          } }
+        ]
+      } } }
+    }"#;
+    let mut client = TbfClient::with_transport(Box::new(Mock(Box::new(move |spec| {
+        let body = json_body(&spec);
+        assert_eq!(body["variables"]["eventID"], "Event:tbf21");
+        Ok(response(200, payload))
+    }))));
+    client.restore_session(ligrol_core::tbf::TbfSession {
+        cookies: vec![],
+        xsrf_raw: "x".into(),
+        xsrf_token: "x".into(),
+    });
+    let entries = client.checklist("tbf21").unwrap();
+    assert_eq!(entries.len(), 1, "会期前のお気に入りが消えている");
+    assert_eq!(entries[0].id, "tbf21:p1");
+    assert_eq!(entries[0].space_number, "あ-01");
+}
+
+#[test]
+fn graphql_errors_surface_the_server_message() {
+    let mut client = TbfClient::with_transport(Box::new(Mock(Box::new(|_| {
+        Ok(response(
+            200,
+            r#"{"errors":[{"message":"Cannot query field \"firstAppearanceEventName\" on type \"ProductInfo\"."}]}"#,
+        ))
+    }))));
+    client.restore_session(ligrol_core::tbf::TbfSession {
+        cookies: vec![],
+        xsrf_raw: "x".into(),
+        xsrf_token: "x".into(),
+    });
+    let error = client.checklist("tbf21").unwrap_err();
+    assert!(
+        error.to_string().contains("Cannot query field"),
+        "サーバーのエラー理由が失われている: {error}"
+    );
+}
+
+#[test]
+fn future_event_discovery_uses_the_live_graphql_endpoint() {
+    let captured = Arc::new(Mutex::new(Vec::<String>::new()));
+    let log = captured.clone();
+    let mut client = TbfClient::with_transport(Box::new(Mock(Box::new(move |spec| {
+        log.lock().push(spec.url.clone());
+        assert!(
+            spec.url
+                .starts_with("https://techbookfest.org/api/graphql?operationName=TbfEventQuery"),
+            "廃止済みのエンドポイントへ送っている: {}",
+            spec.url
+        );
+        let body = json_body(&spec);
+        let event_id = body["variables"]["eventID"].as_str().unwrap();
+        Ok(response(
+            200,
+            &format!(r#"{{"data":{{"event":{{"id":"{event_id}","name":"技術書典22"}}}}}}"#),
+        ))
+    }))));
+    let events = client.events().unwrap();
+    assert!(events.iter().any(|event| event.slug == "tbf22"));
+    assert!(!captured.lock().is_empty());
 }

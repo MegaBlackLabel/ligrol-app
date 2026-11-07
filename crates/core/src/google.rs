@@ -122,6 +122,16 @@ pub enum GoogleError {
     RefreshTokenRevoked,
     #[error("not authorized")]
     NotAuthorized,
+    /// このビルドに `client_secret` が埋め込まれていない（配布ビルドの設定漏れ）。
+    ///
+    /// Google のデスクトップ用クライアントはトークン交換・リフレッシュに
+    /// `client_secret` を要求する。未設定のまま問い合わせると 400
+    /// `client_secret is missing.` が返り、生の英語の応答が画面に出るため、
+    /// **ネットワークに出る前に**ここで止めて原因が分かる文言を返す。
+    #[error(
+        "このビルドは Google 連携が無効です（クライアントシークレット未設定）。Google ログインと Drive 同期は使えません"
+    )]
+    NotConfigured,
     #[error("authorization cancelled")]
     Cancelled,
 }
@@ -622,9 +632,12 @@ impl GoogleClient {
             percent_encode(&self.client_id),
             percent_encode(verifier),
         );
-        if let Some(secret) = &self.client_secret {
-            form.push_str(&format!("&client_secret={}", percent_encode(secret)));
-        }
+        // 未設定のまま問い合わせると 400 `client_secret is missing.` になる（実測）。
+        // 生の応答を画面に出さず、ここで止める。
+        let Some(secret) = &self.client_secret else {
+            return Err(GoogleError::NotConfigured);
+        };
+        form.push_str(&format!("&client_secret={}", percent_encode(secret)));
         let response = self.post_token_form(&form)?;
         if !(200..300).contains(&response.status) {
             log::error!(
@@ -654,14 +667,16 @@ impl GoogleClient {
             .as_ref()
             .and_then(|t| t.refresh_token.clone())
             .ok_or(GoogleError::NoRefreshToken)?;
+        // 未設定ビルドはここで止める（Drive の鍵取得が 400 の生の応答を画面に出していた）。
+        let Some(secret) = &self.client_secret else {
+            return Err(GoogleError::NotConfigured);
+        };
         let mut form = format!(
             "grant_type=refresh_token&refresh_token={}&client_id={}",
             percent_encode(&refresh_token),
             percent_encode(&self.client_id),
         );
-        if let Some(secret) = &self.client_secret {
-            form.push_str(&format!("&client_secret={}", percent_encode(secret)));
-        }
+        form.push_str(&format!("&client_secret={}", percent_encode(secret)));
         let response = self.post_token_form(&form)?;
         if !(200..300).contains(&response.status) {
             let body = String::from_utf8_lossy(&response.body);
@@ -953,17 +968,43 @@ mod tests {
         );
     }
 
+    /// secret を埋めていないビルドでは、トークン交換を**ネットワークに出る前に**止める。
+    ///
+    /// そのまま問い合わせると Google が 400 `client_secret is missing.` を返し、
+    /// 生の英語の応答が「本の鍵を取得できませんでした: …」として画面に出る（実測）。
     #[test]
-    fn exchange_omits_client_secret_when_not_configured() {
+    fn exchange_without_client_secret_fails_without_a_request() {
         let (mut client, transport) = client_with(None);
-        client
+        let error = client
             .exchange_code("code", "verifier", "http://127.0.0.1:38387")
-            .expect("exchange");
-        let req = transport.lock().unwrap().take().unwrap();
-        let body = String::from_utf8(req.body.unwrap()).unwrap();
+            .expect_err("未設定なら失敗する");
         assert!(
-            !body.contains("client_secret="),
-            "client_secret must not be sent when unconfigured: {body}"
+            error.to_string().contains("クライアントシークレット"),
+            "未設定ビルドだと分かる文言になっていない: {error}"
+        );
+        assert!(
+            transport.lock().unwrap().is_none(),
+            "未設定なのに Google へ問い合わせている（400 を画面に出してしまう）"
+        );
+    }
+
+    /// リフレッシュも同じ: 未設定ビルドでは Drive の鍵取得がネットワークに出ない。
+    #[test]
+    fn refresh_without_client_secret_fails_without_a_request() {
+        let (mut client, transport) = client_with(None);
+        client.restore_tokens(OAuthTokens {
+            access_token: "old".to_string(),
+            expires_at: 0,
+            refresh_token: Some("r".to_string()),
+        });
+        let error = client.refresh_tokens().expect_err("未設定なら失敗する");
+        assert!(
+            error.to_string().contains("クライアントシークレット"),
+            "未設定ビルドだと分かる文言になっていない: {error}"
+        );
+        assert!(
+            transport.lock().unwrap().is_none(),
+            "未設定なのに Google へ問い合わせている（400 を画面に出してしまう）"
         );
     }
 
@@ -995,7 +1036,7 @@ mod tests {
                 calls: calls.clone(),
             }),
             "cid",
-            None,
+            Some("csecret".to_string()),
         );
         client.restore_tokens(OAuthTokens {
             access_token: "old".to_string(),
@@ -1048,7 +1089,8 @@ mod tests {
             }
         }
 
-        let mut client = GoogleClient::with_transport(Box::new(RevokedTransport), "cid", None);
+        let mut client =
+            GoogleClient::with_transport(Box::new(RevokedTransport), "cid", Some("csecret".to_string()));
         client.restore_tokens(OAuthTokens {
             access_token: "old".to_string(),
             expires_at: 0,

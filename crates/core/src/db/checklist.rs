@@ -123,6 +123,24 @@ pub fn set_poll_enabled(pool: &SqlitePool, slug: &str, enabled: bool) -> Result<
     })
 }
 
+/// `keep_slug` 以外の注目イベントを非注目へ戻す（注目イベントは 1 つだけ）。
+///
+/// canonical イベントを DB へ種まきしたとき、旧版が注目にしていた行
+/// （技術書典20 など）が残ると注目が 2 つになるため、現在の注目イベントへ揃える。
+/// `poll_sync_enabled` は変更しない（利用者のポーリング設定を保持する）。
+pub fn demote_featured_except(pool: &SqlitePool, keep_slug: &str) -> Result<u64, sqlx::Error> {
+    crate::db::block_on(async {
+        let result = sqlx::query(
+            "UPDATE tbf_events SET is_featured = 0, updated_at = CURRENT_TIMESTAMP \
+             WHERE is_featured <> 0 AND (slug IS NULL OR slug <> ?1)",
+        )
+        .bind(keep_slug)
+        .execute(pool)
+        .await?;
+        Ok(result.rows_affected())
+    })
+}
+
 /// ポーリング対象（poll_sync_enabled = 1）のイベント slug 一覧を返す。
 pub fn list_enabled_slugs(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
     crate::db::block_on(async {

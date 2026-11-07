@@ -85,8 +85,8 @@
 | コールバックの read タイムアウト | 120 秒 | `crates/core/src/google.rs:168` |
 | コールバック受信バッファ | 4096 byte | `crates/core/src/google.rs:170` |
 | `expires_in` 既定値 | 3600 秒（応答に無い場合） | `crates/core/src/google.rs:126-129` |
-| 既定 client_id（ビルド時 `LIGROL_GOOGLE_CLIENT_ID` 未設定時） | `786418602386-r4ofkd1sr0j0ip4d7ps4unt5ldtfe63t.apps.googleusercontent.com` | `crates/app/src/app_state.rs:21-25` |
-| 既定 client_secret | コード内の `DEFAULT_GOOGLE_CLIENT_SECRET`（`LIGROL_GOOGLE_CLIENT_SECRET` で上書き可）。**デスクトップではクライアント種別が「デスクトップ アプリ」である前提**で扱う（§2.5）。実値は仕様書に転記しない | `crates/app/src/app_state.rs:27-32` |
+| 既定 client_id（ビルド時 `LIGROL_GOOGLE_CLIENT_ID` 未設定時） | `786418602386-r4ofkd1sr0j0ip4d7ps4unt5ldtfe63t.apps.googleusercontent.com` | `crates/app/src/app_state.rs:24-30` |
+| 既定 client_secret | コード内の `DEFAULT_GOOGLE_CLIENT_SECRET`（`LIGROL_GOOGLE_CLIENT_SECRET` で上書き可）。**デスクトップではクライアント種別が「デスクトップ アプリ」である前提**で扱う（§2.5）。未設定でビルドすると Google 連携（ログイン・Drive 同期・本の鍵）は使えない: トークン交換・リフレッシュは `GoogleError::NotConfigured` で**ネットワークに出る前に**失敗し、`open_google_login` も案内のトーストだけで止まる。実値は仕様書に転記しない | `crates/app/src/app_state.rs:35-54` |
 
 ### 2.2 OAuth フロー（installed-app / PKCE S256 + ループバック受信）
 
@@ -116,7 +116,7 @@
    （待ちは最大 300 秒あり、保持すると UI 側の `google.lock()` が止まり、ログインモーダルの ✕ も
    効かなくなる）。ロックは `complete_authorize` のときだけ取る `crates/app/src/views/google_login.rs`, `crates/core/src/google.rs`。
 8. `receive_callback`: 非ブロッキング accept ループ。`cancel: AtomicBool` が立っていれば `GoogleError::Cancelled`、300 秒で `Auth("authorization timed out")`。1 接続のみ受けて HTTP リクエスト行の query を `percent_decode` し、`error` → `Auth`、`state` 不一致 → `Auth("state mismatch")`、`code` 無し → `Auth("missing code")`。応答は `HTTP/1.1 200 OK` + `text/html; charset=utf-8` の短文（成功時「認証完了。このタブを閉じてください。」）`crates/core/src/google.rs:142-237`。
-9. `exchange_code`: `POST https://oauth2.googleapis.com/token`、`Content-Type: application/x-www-form-urlencoded`、form は `grant_type=authorization_code&code&redirect_uri&client_id&code_verifier`（`client_secret` が設定されていれば `&client_secret=` を追加）。HTTP ステータスが 2xx 以外は `GoogleError::Token` `crates/core/src/google.rs:446-488`。
+9. `exchange_code`: `POST https://oauth2.googleapis.com/token`、`Content-Type: application/x-www-form-urlencoded`、form は `grant_type=authorization_code&code&redirect_uri&client_id&code_verifier&client_secret`。`client_secret` 未設定のビルドは問い合わせずに `GoogleError::NotConfigured`（Google は 400 `client_secret is missing.` を返すため、生の応答を画面に出さない）。HTTP ステータスが 2xx 以外は `GoogleError::Token` `crates/core/src/google.rs`。
 10. `parse_token_response`: JSON の `error` を検査。`access_token` 必須（空文字不可）。`refresh_token` は任意。`expires_at = 現在時刻(Unix 秒) + expires_in` `crates/core/src/google.rs:105-140`。
 11. `profile()`: userinfo に `Authorization: Bearer {token}` で GET（リダイレクト追跡 5）。2xx 以外は `Auth`。`sub` / `email` / `name` / `picture` を取り出し（欠落は空文字 / None）`crates/core/src/google.rs:537-575`。
 12. トークンを keyring に JSON で保存（`USER_GOOGLE`）。refresh_token を含むため期限切れ後も自動リフレッシュ可 `crates/app/src/views/google_login.rs`。

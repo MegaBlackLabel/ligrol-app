@@ -10368,6 +10368,25 @@ pub fn app_logo_image() -> Option<Arc<RenderImage>> {
     LOGO.clone()
 }
 
+/// タイトルバー用のロゴ（`assets/icons/ligrol-mark.svg` を 2 倍の 32px でラスタライズ）。
+///
+/// `Icon`（gpui の `svg()`）は**アルファマスクを text_color で塗る**ため、色付きの
+/// ロゴは単色の四角になる（実測: グレーの四角）。色を保つには `img()` へ
+/// `RenderImage` を渡す。SVG の intrinsic サイズは 1254px なので、そのまま
+/// `rasterize_svg` すると巨大な pixmap を作る — width/height を差し替えてから描く。
+pub fn title_logo_image() -> Option<Arc<RenderImage>> {
+    static LOGO: LazyLock<Option<Arc<RenderImage>>> = LazyLock::new(|| {
+        let svg = std::str::from_utf8(include_bytes!("../../assets/icons/ligrol-mark.svg")).ok()?;
+        let svg = svg.replacen(
+            "width=\"1254\" height=\"1254\"",
+            "width=\"32\" height=\"32\"",
+            1,
+        );
+        rasterize_svg(&svg)
+    });
+    LOGO.clone()
+}
+
 /// 表紙画像が取得できなかったカード用の NoImage ダミー（グレー背景 + NoImage 表記）。
 pub(crate) fn no_image_cover() -> Option<Arc<RenderImage>> {
     let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 320' width='240' height='320'><rect width='240' height='320' fill='#e5e7eb'/><rect x='60' y='90' width='120' height='90' fill='none' stroke='#9ca3af' stroke-width='6'/><path d='M70 165 L100 135 L125 155 L150 130 L170 165 Z' fill='#9ca3af'/><text x='120' y='200' text-anchor='middle' font-family='sans-serif' font-size='16' font-weight='bold' fill='#6b7280'>NoImage</text></svg>";
@@ -10434,15 +10453,26 @@ fn sans_serif_family(db: &usvg::fontdb::Database) -> Option<String> {
 /// **`image` クレートは SVG を復号できない**ため、表紙のプレースホルダはこちらを通す
 /// （以前は `decode_bytes_to_render_image` に SVG を渡していて常に `None` になっていた）。
 pub(crate) fn rasterize_svg(svg: &str) -> Option<Arc<RenderImage>> {
+    rasterize_svg_scaled(svg, 1.0)
+}
+
+/// SVG を任意の倍率で rasterize する（等倍より大きい画像が必要なとき用）。
+pub(crate) fn rasterize_svg_scaled(svg: &str, scale: f32) -> Option<Arc<RenderImage>> {
     let tree = usvg::Tree::from_str(svg, svg_options()).ok()?;
-    let size = tree.size().to_int_size();
-    let mut pixmap = tiny_skia::Pixmap::new(size.width(), size.height())?;
-    resvg::render(&tree, tiny_skia::Transform::default(), &mut pixmap.as_mut());
+    let size = tree.size();
+    let width = (size.width() * scale).round().max(1.0) as u32;
+    let height = (size.height() * scale).round().max(1.0) as u32;
+    let mut pixmap = tiny_skia::Pixmap::new(width, height)?;
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
     let mut data = pixmap.data().to_vec();
     for pixel in data.chunks_exact_mut(4) {
         pixel.swap(0, 2);
     }
-    let rgba = image::RgbaImage::from_raw(size.width(), size.height(), data)?;
+    let rgba = image::RgbaImage::from_raw(width, height, data)?;
     Some(Arc::new(RenderImage::new([image::Frame::new(rgba)])))
 }
 
@@ -11249,6 +11279,37 @@ mod tests {
             has_glyph_pixel,
             "テキストのグリフが 1 ピクセルも描画されていない（フォントDBが空のまま）"
         );
+    }
+
+    /// タイトルバーのロゴ: 32px でラスタライズされ、紺と白が残っていること。
+    ///
+    /// `Icon`（gpui の `svg()`）はアルファマスクに text_color を塗るので、色付きの
+    /// ロゴが単色の四角になる（実測: グレーの四角）。`img()` 用の `RenderImage` を
+    /// 自前で作って色を保つ。
+    #[test]
+    fn title_logo_image_keeps_the_brand_colors() {
+        let image = title_logo_image().expect("ロゴをラスタライズできない");
+        let size = image.size(0);
+        assert_eq!(
+            (size.width.0, size.height.0),
+            (32, 32),
+            "32px で作っていない"
+        );
+        let bytes = image.as_bytes(0).expect("フレームが無い");
+        let mut navy = 0;
+        let mut white = 0;
+        for pixel in bytes.chunks_exact(4) {
+            // BGRA
+            let (b, g, r) = (pixel[0], pixel[1], pixel[2]);
+            if (60..120).contains(&b) && r < 40 && g < 60 {
+                navy += 1;
+            }
+            if r > 200 && g > 200 && b > 200 {
+                white += 1;
+            }
+        }
+        assert!(navy > 100, "紺の面が無い（単色に潰れている？）: {navy}");
+        assert!(white > 50, "白のリングと L が無い: {white}");
     }
 
     fn seed_shelf_item_for_site(
