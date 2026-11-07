@@ -20,3 +20,5 @@ password.txt
 
 # ローカル専用の作業ファイル（OAuth クライアント JSON など。コミットしない）
 /tmp/
+# ローカル専用の mise 設定（Google OAuth の client_secret を入れる。絶対にコミットしない）
+.mise.local.toml
