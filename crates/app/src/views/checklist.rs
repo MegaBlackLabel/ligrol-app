@@ -200,8 +200,12 @@ impl ChecklistView {
             self.circle_map_images.remove(&slug);
             self.build_circle_map(cx, slug);
         }
-        self.fetch_missing_thumbnails(cx);
-        self.decode_cached_thumbnails(cx);
+        // 表紙の取得・デコードはイベント詳細を開いたときだけ行う。
+        // 起動時（イベント未選択）に何十枚もデコードして UI を重くしない。
+        if self.selected_slug.is_some() {
+            self.fetch_missing_thumbnails(cx);
+            self.decode_cached_thumbnails(cx);
+        }
         cx.notify();
     }
 

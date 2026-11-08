@@ -10368,21 +10368,22 @@ pub fn app_logo_image() -> Option<Arc<RenderImage>> {
     LOGO.clone()
 }
 
-/// タイトルバー用のロゴ（`assets/icons/ligrol-mark.svg` を 2 倍の 32px でラスタライズ）。
+/// タイトルバー用のロゴ（`assets/icons/ligrol-mark-32.png`）。
 ///
 /// `Icon`（gpui の `svg()`）は**アルファマスクを text_color で塗る**ため、色付きの
 /// ロゴは単色の四角になる（実測: グレーの四角）。色を保つには `img()` へ
-/// `RenderImage` を渡す。SVG の intrinsic サイズは 1254px なので、そのまま
-/// `rasterize_svg` すると巨大な pixmap を作る — width/height を差し替えてから描く。
+/// `RenderImage` を渡す。SVG のラスタライズはフォントDBの読み込みで起動が
+/// 数十 ms 遅くなるため、32px の PNG を埋め込んでデコードだけにする。
 pub fn title_logo_image() -> Option<Arc<RenderImage>> {
     static LOGO: LazyLock<Option<Arc<RenderImage>>> = LazyLock::new(|| {
-        let svg = std::str::from_utf8(include_bytes!("../../assets/icons/ligrol-mark.svg")).ok()?;
-        let svg = svg.replacen(
-            "width=\"1254\" height=\"1254\"",
-            "width=\"32\" height=\"32\"",
-            1,
-        );
-        rasterize_svg(&svg)
+        let data = include_bytes!("../../assets/icons/ligrol-mark-32.png");
+        let decoded = image::load_from_memory(data).ok()?;
+        let mut rgba = decoded.to_rgba8();
+        // GPUI は BGRA を期待する。
+        for pixel in rgba.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+        Some(Arc::new(RenderImage::new([image::Frame::new(rgba)])))
     });
     LOGO.clone()
 }
