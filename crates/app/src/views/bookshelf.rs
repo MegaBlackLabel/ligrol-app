@@ -10346,17 +10346,15 @@ pub(crate) fn load_cached_cover(
 
 /// Web-style placeholder SVG (`data:image/svg+xml;utf8,...`) rasterized to a
 /// RenderImage. Color is derived from a hash of the title.
-/// アプリロゴ（assets/app-icon/icon_1024.png）をデコードした RenderImage。
+/// アプリロゴ（assets/app-icon/icon_256.png）をデコードした RenderImage。
 /// 説明画面のロゴ表示（64px）で使う（プロセス内で 1 回だけデコード）。
-/// 1024px のまま渡すと GPUI の縮小補間（二重線形）で文字が滲むため、
-/// 表示サイズの 2 倍（Retina 対応）へ Lanczos3 で事前縮小して返す。
+/// 1024px を起動時に Lanczos3 で縮小すると 400ms 以上かかる（実測）。
+/// 表示は 64px なので 256px の PNG をそのままデコードする。
 pub fn app_logo_image() -> Option<Arc<RenderImage>> {
     static LOGO: LazyLock<Option<Arc<RenderImage>>> = LazyLock::new(|| {
-        let data = include_bytes!("../../assets/app-icon/icon_1024.png");
+        let data = include_bytes!("../../assets/app-icon/icon_256.png");
         let decoded = image::load_from_memory(data).ok()?;
-        // 表示 64px の 2 倍で十分（16 倍縮小のエイリアシングを避ける）
-        let resized = decoded.resize(128, 128, image::imageops::FilterType::Lanczos3);
-        let mut rgba = resized.to_rgba8();
+        let mut rgba = decoded.to_rgba8();
         // GPUI は BGRA を期待する
         for pixel in rgba.chunks_exact_mut(4) {
             pixel.swap(0, 2);
@@ -11282,7 +11280,15 @@ mod tests {
         );
     }
 
-    /// タイトルバーのロゴ: 32px でラスタライズされ、紺と白が残っていること。
+    /// 説明画面のロゴは 256px の PNG をそのままデコードする（起動時の縮小を避ける）。
+    #[test]
+    fn app_logo_image_decodes_the_256px_icon() {
+        let image = app_logo_image().expect("アプリアイコンを読む");
+        let size = image.size(0);
+        assert_eq!((size.width.0, size.height.0), (256, 256));
+    }
+
+    /// タイトルバーのロゴ: 32px PNG がデコードされ、紺と白が残っていること。
     ///
     /// `Icon`（gpui の `svg()`）はアルファマスクに text_color を塗るので、色付きの
     /// ロゴが単色の四角になる（実測: グレーの四角）。`img()` 用の `RenderImage` を
