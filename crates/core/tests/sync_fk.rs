@@ -55,6 +55,7 @@ fn checklist_sync_with_unknown_event_slug_does_not_violate_fk() {
         thumbnail_url: None,
         price: Some(1000),
         is_purchased: true,
+        first_appearance_event_name: None,
         created_at: Some("2026-04-12T09:16:36.410Z".into()),
     }];
 
@@ -104,6 +105,7 @@ fn sync_attributes_rows_to_the_current_owner() {
         thumbnail_url: None,
         price: None,
         is_purchased: false,
+        first_appearance_event_name: None,
         created_at: None,
     }];
 

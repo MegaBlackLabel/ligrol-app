@@ -447,6 +447,7 @@ fn checklist_maps_circles_with_price_and_purchase_state() {
               "id": "ProductInfo:p1",
               "databaseID": "p1",
               "name": "買った本",
+              "firstAppearanceEventName": "技術書典21",
               "loginUserBookShelfItem": { "id": "shelf-1" },
               "coverImage": { "url": "/covers/p1.png" },
               "productVariants": { "edges": [
@@ -492,7 +493,7 @@ fn checklist_maps_circles_with_price_and_purchase_state() {
         assert_eq!(body["variables"]["followingOrganizationsFirst"], 1);
         // 現行スキーマに無いフィールドを要求していない
         let query = body["query"].as_str().unwrap();
-        assert!(!query.contains("firstAppearanceEventName"));
+        assert!(query.contains("firstAppearanceEventName"));
         assert!(!query.contains("event { id databaseID"));
         Ok(response(200, payload))
     }))));
@@ -516,6 +517,10 @@ fn checklist_maps_circles_with_price_and_purchase_state() {
         Some("https://techbookfest.org/covers/p1.png")
     );
     assert_eq!(e.product_id.as_deref(), Some("p1"));
+    assert_eq!(
+        e.first_appearance_event_name.as_deref(),
+        Some("技術書典21")
+    );
 }
 
 #[test]
@@ -586,7 +591,7 @@ fn graphql_errors_surface_the_server_message() {
     let mut client = TbfClient::with_transport(Box::new(Mock(Box::new(|_| {
         Ok(response(
             200,
-            r#"{"errors":[{"message":"Cannot query field \"firstAppearanceEventName\" on type \"ProductInfo\"."}]}"#,
+            r#"{"errors":[{"message":"Cannot query field \"bogusField\" on type \"ProductInfo\"."}]}"#,
         ))
     }))));
     client.restore_session(ligrol_core::tbf::TbfSession {

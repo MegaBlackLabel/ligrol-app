@@ -1059,6 +1059,7 @@ fn checklist_events_items_and_toggle() {
         thumbnail_data: None,
         price: Some(1000),
         is_purchased: 0,
+        first_appearance_event_name: Some("技術書典20".into()),
         sample_fetch_attempted_at: None,
         created_at: "2026-08-21 00:00:00".into(),
     };
@@ -1066,6 +1067,10 @@ fn checklist_events_items_and_toggle() {
     let items = checklist::list_items(&pool, "event-1").unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].space_number, "あ-01");
+    assert_eq!(
+        items[0].first_appearance_event_name.as_deref(),
+        Some("技術書典20")
+    );
     assert_eq!(items[0].is_checked, 0);
 
     checklist::set_checked(&pool, "item-1", true).unwrap();

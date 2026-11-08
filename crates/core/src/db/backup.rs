@@ -1036,6 +1036,7 @@ mod tests {
                 thumbnail_data: Some("aGVsbG8=".into()),
                 price: Some(1000),
                 is_purchased: 0,
+                first_appearance_event_name: None,
                 sample_fetch_attempted_at: None,
                 created_at: "2026-08-23 00:00:00".into(),
             },

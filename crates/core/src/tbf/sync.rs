@@ -236,6 +236,7 @@ pub fn save_checklist(
                 thumbnail_data: None,
                 price: entry.price,
                 is_purchased: entry.is_purchased as i64,
+                first_appearance_event_name: entry.first_appearance_event_name.clone(),
                 sample_fetch_attempted_at: None,
                 created_at: entry
                     .created_at
@@ -416,6 +417,7 @@ mod tests {
             thumbnail_url: None,
             price: Some(1000),
             is_purchased: true,
+            first_appearance_event_name: None,
             created_at: Some("2026-04-12T00:00:00Z".into()),
         }
     }
@@ -431,6 +433,7 @@ mod tests {
             thumbnail_url: None,
             price: Some(1000),
             is_purchased: true,
+            first_appearance_event_name: None,
             created_at: None,
         }
     }

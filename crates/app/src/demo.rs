@@ -998,6 +998,14 @@ fn seed_checklist(pool: &SqlitePool, owner: Option<&str>) -> anyhow::Result<()> 
                 thumbnail_data: None,
                 price: Some(1000 + index as i64 * 500),
                 is_purchased: i64::from(*checked),
+                first_appearance_event_name: Some(
+                    if index < 2 {
+                        "技術書典21"
+                    } else {
+                        "技術書典20"
+                    }
+                    .into(),
+                ),
                 sample_fetch_attempted_at: None,
                 created_at: PURCHASED_AT.to_string(),
             },
