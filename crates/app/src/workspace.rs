@@ -45,6 +45,17 @@ use ligrol_core::db;
 use ligrol_core::db::{books, bookshelf, progress};
 use ligrol_core::tbf;
 
+/// チェックリストのポーリング 1 回分をバックグラウンドで実行する。
+///
+/// `refresh_checklist` は同期 HTTP と SQLite 書き込みを行うため、
+/// フォアグラウンド（`cx.spawn`）で直接呼ぶとその間 UI が固まる。
+fn spawn_checklist_poll_work<T: Send + 'static>(
+    executor: &gpui_kit::BackgroundExecutor,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> gpui_kit::Task<T> {
+    executor.spawn(async move { work() })
+}
+
 /// アクティブなナビゲーション先。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavTarget {
@@ -621,6 +632,9 @@ impl Workspace {
     /// 設定・トグルの変更は次の周期から反映される。tbf クライアントの Mutex が
     /// 手動同期と直列化する。Drive 同期はデータ変化時のみ（`sync_drive_now` が
     /// 内部で md5 差分を判定するので無変化ならノーコスト）。
+    ///
+    /// 同期 HTTP / SQLite 書き込みは `spawn_checklist_poll_work` で
+    /// バックグラウンドへ逃がし、UI スレッドを止めない。
     fn start_checklist_poller(&mut self, cx: &mut Context<Self>) {
         let db = AppState::global(cx).db_pool.clone();
         let tbf_client = AppState::global(cx).tbf.clone();
@@ -632,56 +646,60 @@ impl Workspace {
             // セッション切れの OpenAuth は 1 回だけ出す（連続で出さない）
             let mut auth_dispatched = false;
             loop {
-                let interval_min = db::settings::get(&db, "checklist.poll.interval_min")
-                    .ok()
-                    .flatten()
-                    .and_then(|v| v.parse::<i64>().ok())
-                    .map(|n| n.max(1))
-                    .unwrap_or(5);
-                // 未ログインならスキップ（次の周期へ）。tbf ログイン必須。
-                if !*tbf_logged_in.lock() {
-                    cx.background_executor()
-                        .timer(std::time::Duration::from_secs(interval_min as u64 * 60))
-                        .await;
-                    continue;
-                }
-                let enabled = db::checklist::list_enabled_slugs(&db).unwrap_or_default();
-                if enabled.is_empty() {
-                    cx.background_executor()
-                        .timer(std::time::Duration::from_secs(interval_min as u64 * 60))
-                        .await;
-                    continue;
-                }
-                // tbf クライアントの Mutex ロックで手動 sync() と直列化する。
-                // スコープを限定して await の前に必ず解放する（clippy: await_holding_lock）。
-                let (any_changed, session_expired) = {
-                    // 所有者（現在の Google アカウント）は周期ごとに読み直す
-                    // （ログイン/ログアウトが次の周期から反映される）。
-                    let owner = {
-                        let profile = google_profile.lock().clone();
-                        crate::app_state::owner_token_from(profile.as_ref(), &secrets)
-                    };
-                    let mut client = tbf_client.lock();
+                // 所有者（現在の Google アカウント）は周期ごとに読み直す
+                // （ログイン/ログアウトが次の周期から反映される）。
+                let owner = {
+                    let profile = google_profile.lock().clone();
+                    crate::app_state::owner_token_from(profile.as_ref(), &secrets)
+                };
+                let db_for_poll = db.clone();
+                let tbf_client_for_poll = tbf_client.clone();
+                let tbf_logged_in_for_poll = tbf_logged_in.clone();
+                let task = spawn_checklist_poll_work(cx.background_executor(), move || {
+                    let interval_min = db::settings::get(&db_for_poll, "checklist.poll.interval_min")
+                        .ok()
+                        .flatten()
+                        .and_then(|v| v.parse::<i64>().ok())
+                        .map(|n| n.max(1))
+                        .unwrap_or(5);
+                    // 未ログインならスキップ（次の周期へ）。tbf ログイン必須。
+                    if !*tbf_logged_in_for_poll.lock() {
+                        return (interval_min, false, false);
+                    }
+                    let enabled =
+                        db::checklist::list_enabled_slugs(&db_for_poll).unwrap_or_default();
+                    if enabled.is_empty() {
+                        return (interval_min, false, false);
+                    }
                     let mut any_changed = false;
                     let mut session_expired = false;
-                    for slug in &enabled {
-                        match tbf::sync::refresh_checklist(&db, &mut client, slug, owner.as_deref())
-                        {
-                            Ok(outcome) => {
-                                if outcome.changed {
-                                    any_changed = true;
+                    // tbf クライアントの Mutex ロックで手動 sync() と直列化する。
+                    {
+                        let mut client = tbf_client_for_poll.lock();
+                        for slug in &enabled {
+                            match tbf::sync::refresh_checklist(
+                                &db_for_poll,
+                                &mut client,
+                                slug,
+                                owner.as_deref(),
+                            ) {
+                                Ok(outcome) => {
+                                    if outcome.changed {
+                                        any_changed = true;
+                                    }
                                 }
-                            }
-                            Err(message) => {
-                                log::error!("checklist poll failed for {slug}: {message}");
-                                if message.contains("session expired") {
-                                    session_expired = true;
+                                Err(message) => {
+                                    log::error!("checklist poll failed for {slug}: {message}");
+                                    if message.contains("session expired") {
+                                        session_expired = true;
+                                    }
                                 }
                             }
                         }
                     }
-                    (any_changed, session_expired)
-                };
+                    (interval_min, any_changed, session_expired)
+                });
+                let (interval_min, any_changed, session_expired) = task.await;
                 if session_expired && !auth_dispatched {
                     auth_dispatched = true;
                     cx.update(|app| {
@@ -4357,6 +4375,23 @@ mod tests {
     use crate::app_state::AppState;
     use crate::app_state::ToastKind;
     use gpui_kit::TestAppContext;
+
+    /// ポーリングの本体はバックグラウンドへ渡すだけで、呼び出し側を待たせない。
+    #[gpui_kit::test]
+    async fn checklist_poll_work_does_not_block_the_caller(cx: &mut TestAppContext) {
+        let executor = cx.background_executor.clone();
+        let started = std::time::Instant::now();
+        let task = super::spawn_checklist_poll_work(&executor, || {
+            std::thread::sleep(Duration::from_millis(200));
+            7usize
+        });
+        assert!(
+            started.elapsed() < Duration::from_millis(100),
+            "ポーリング本体の投入で待たされている: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(task.await, 7);
+    }
 
     fn setup(cx: &mut TestAppContext) -> gpui_kit::Entity<Workspace> {
         cx.update(gpui_kit::component::init);
