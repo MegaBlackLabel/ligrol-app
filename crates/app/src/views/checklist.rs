@@ -177,7 +177,9 @@ impl ChecklistView {
             let db = &state.db_pool;
             // 同期前でも canonical イベント（技術書典21 など）を一覧に出す。
             // 既存行は書き換えない（利用者のポーリング設定を保持する）。
-            let _ = tbf::sync::ensure_canonical_events(db);
+            if let Err(error) = tbf::sync::ensure_canonical_events(db) {
+                log::warn!("canonical tbf events の種まきに失敗: {error}");
+            }
             let events = db::checklist::list_events(db).unwrap_or_default();
             let selected = self.selected_slug.clone();
             let items = match &selected {
@@ -535,8 +537,9 @@ impl ChecklistView {
 
     /// サークルマップ（自作 SVG）を生成してキャッシュする。
     ///
-    /// 技術書典サイトの画像は使わない。チェックリストのスペース番号から
-    /// 会場のブロックを組み立て、本があるブロックを色付きで描く。
+    /// 技術書典サイトの画像は使わない。`tbf21` は固定レイアウト
+    /// （`assets/tbf/tbf21-layout.svg`）をそのまま使い、それ以外のイベントは
+    /// チェックリストのスペース番号から簡易マップを組み立てる。
     fn build_circle_map(&mut self, cx: &mut Context<Self>, slug: String) {
         if self.circle_map_fetching.contains(&slug) {
             return;
@@ -1391,8 +1394,6 @@ impl ChecklistView {
             .into_any_element()
     }
 
-    /// 全画面に近い地図モードのオーバーレイ（ページスクロールの外に置く）。
-
     /// イベント詳細（Web の Checklist 相当: テーブル + 並び替え + ページネーション）。
     fn render_event_detail(
         &mut self,
@@ -2076,17 +2077,6 @@ fn decode_thumbnail(bytes: &[u8]) -> Option<Arc<RenderImage>> {
     )])))
 }
 
-/// 公式ページの配置図 SVG を同梱しているイベント。
-///
-/// 技術書典21 の公式チェックリストページは配置図をインライン SVG（スペースごとの
-/// path id 付き）で描いている。PNG より輪郭・文字が綺麗なので、同梱している
-/// イベントではネットワークへ取りに行かずこちらを 2 倍で rasterize する。
-
-/// サークルマップ（会場配置図）を**原寸のまま** RenderImage にする。
-///
-/// 表紙の `decode_thumbnail` は 256px に縮小するが、配置図はスペース名を
-/// 読む必要があるので縮小しない。
-
 /// スペース名（例: `き05`, `あ-01`, `協01`）を（列, 番号）に分解する。
 fn parse_space(space: &str) -> Option<(String, u32)> {
     let text = space.trim();
@@ -2118,9 +2108,10 @@ fn xml_escape(text: &str) -> String {
 
 /// 自作サークルマップの SVG。
 ///
-/// 技術書典21 は公式ページの配置（列・通路・設備）を再現した自前レイアウトに、
-/// 10 個ずつのグループ名（`き(1-10)` など）を重ねた SVG を使う。
-/// それ以外のイベントはチェックリストのスペース番号から簡易マップを作る。
+/// 技術書典21 は会場の配置（列・通路・設備）を残した自前レイアウト
+/// （`assets/tbf/tbf21-layout.svg`）をそのまま使う。ブロック名は 1 回だけ、
+/// 配置番号はセル中央に置いてある。それ以外のイベントはチェックリストの
+/// スペース番号から簡易マップを作る。
 fn build_circle_map_svg(event_slug: &str, event_name: &str, spaces: &[(String, u32)]) -> String {
     if event_slug == "tbf21" {
         return include_str!("../../assets/tbf/tbf21-layout.svg").to_string();

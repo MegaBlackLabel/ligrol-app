@@ -1114,6 +1114,7 @@ fn hex_val(byte: u8) -> Option<u8> {
 /// Web `CANONICAL_EVENT_MASTERS` (events.ts) — verbatim data.
 /// 対象イベントの開催期間（canonical_events のハードコード値）。
 /// 期間が登録されていないイベント（tbf06 等）は None。
+#[cfg(test)]
 pub(crate) fn event_window(event_slug: &str) -> Option<(String, String)> {
     canonical_events()
         .iter()
@@ -1130,6 +1131,7 @@ pub(crate) fn event_window(event_slug: &str) -> Option<(String, String)> {
 /// と無関係に** id が `{対象イベント}:` になってしまう。そこで購入日時で
 /// 対象イベントの開催期間内かを確認し、他イベントで購入した商品を除外する。
 /// 期間・日時が不明な場合は id 一致のみの従来判定にフォールバックする。
+#[cfg(test)]
 pub(crate) fn within_event_window(
     window: &Option<(String, String)>,
     created_at: Option<&str>,
@@ -1158,16 +1160,10 @@ pub(crate) fn created_at_belongs_to_event(event_slug: &str, created_at: Option<&
         return true;
     };
     let day = created.get(..10).unwrap_or(created);
-    let own = event_window(event_slug);
-    if within_event_window(&own, Some(created)) {
-        return true;
-    }
-    // どの既知イベントの開催期間にも入っていなければ、開催前後の
-    // お気に入り（対象イベントのもの）として残す。
-    !canonical_events().iter().any(|event| {
-        if event.slug == event_slug {
-            return false;
-        }
+    // canonical_events() は 1 回だけ生成し、自分の期間と他イベントの期間の
+    // 両方の判定に使う（項目ごとに Vec を 2 回作らない）。
+    let events = canonical_events();
+    let contains = |event: &TbfEventInfo| {
         let (Some(start), Some(end)) = (
             event.event_start_date.as_deref(),
             event.event_end_date.as_deref(),
@@ -1175,7 +1171,19 @@ pub(crate) fn created_at_belongs_to_event(event_slug: &str, created_at: Option<&
             return false;
         };
         day >= start && day <= end
-    })
+    };
+    if events
+        .iter()
+        .find(|event| event.slug == event_slug)
+        .is_some_and(contains)
+    {
+        return true;
+    }
+    // どの既知イベントの開催期間にも入っていなければ、開催前後の
+    // お気に入り（対象イベントのもの）として残す。
+    !events
+        .iter()
+        .any(|event| event.slug != event_slug && contains(event))
 }
 
 pub(crate) fn canonical_events() -> Vec<TbfEventInfo> {
