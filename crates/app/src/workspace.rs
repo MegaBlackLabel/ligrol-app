@@ -11,7 +11,7 @@ use std::time::Duration;
 use gpui_kit::WindowControlArea;
 use gpui_kit::{
     Animation, AnimationExt as _, AppContext as _, InteractiveElement as _, ReadGlobal as _,
-    StatefulInteractiveElement as _, Styled as _, prelude::FluentBuilder as _,
+    StatefulInteractiveElement as _, Styled as _, StyledImage as _, prelude::FluentBuilder as _,
 };
 
 use crate::components::dialog::{dialog_button, dialog_surface, fade_dialog};
@@ -2844,6 +2844,23 @@ pub const TITLE_BAR_HEIGHT: f32 = 36.0;
 #[cfg(not(windows))]
 pub const TITLE_BAR_HEIGHT: f32 = 34.0;
 
+/// タイトルバーのロゴ（16px）。アプリ名だけだと汎用ウィンドウに見えるので添える。
+///
+/// `Icon`（gpui の `svg()`）は**アルファマスクに text_color を塗る**ため、色付きの
+/// ロゴが単色の四角になる。色を保つため、あらかじめラスタライズした画像を `img()` で描く
+/// （`views::bookshelf::title_logo_image`）。
+fn title_logo() -> gpui_kit::AnyElement {
+    match crate::views::bookshelf::title_logo_image() {
+        Some(logo) => gpui_kit::img(logo)
+            .w(px(16.0))
+            .h(px(16.0))
+            .object_fit(gpui_kit::ObjectFit::Contain)
+            .into_any_element(),
+        // 画像を作れない環境（フォントDBが空など）でもレイアウトを崩さない。
+        None => div().w(px(16.0)).h(px(16.0)).into_any_element(),
+    }
+}
+
 /// 未読数バッジの地色（件数で変わる）と文字色。
 ///
 /// 地色はテーマに依らない固定色なので、文字色も固定の濃色にする。WCAG のコントラストは
@@ -2872,6 +2889,18 @@ impl Workspace {
                     .flex()
                     .h_full()
                     .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .debug_selector(|| "app-title-bar-logo".into())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(px(16.0))
+                            .h(px(16.0))
+                            .flex_shrink_0()
+                            .child(title_logo()),
+                    )
                     .child(
                         div()
                             .debug_selector(|| "app-title-bar-title".into())
@@ -2904,13 +2933,31 @@ impl Workspace {
             .child(
                 div()
                     .flex_1()
+                    .flex()
                     .items_center()
                     .gap_2()
                     .px_3()
                     .window_control_area(WindowControlArea::Drag)
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .child("Ligrol"),
+                    .child(
+                        div()
+                            .debug_selector(|| "win-title-bar-logo".into())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(px(16.0))
+                            .h(px(16.0))
+                            .flex_shrink_0()
+                            // 空白（ウィンドウをドラッグする領域）へはみ出さないよう、
+                            // ロゴ自体も window_control_area にはしない。
+                            .child(title_logo()),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "win-title-bar-title".into())
+                            .child("Ligrol"),
+                    ),
             )
             .child(
                 div()
@@ -5595,12 +5642,64 @@ mod tests {
         let title = visual
             .debug_bounds("app-title-bar-title")
             .expect("タイトルバーにアプリ名が出ていない");
+        let logo = visual
+            .debug_bounds("app-title-bar-logo")
+            .expect("タイトルバーにロゴが出ていない");
         // 信号機は左上 (9, 9) から 3 つ並ぶ（閉じる / 最小化 / 最大化）。
         // 重なると押せなくなるので、その右から始まっていること。
         assert!(
             title.origin.x >= gpui_kit::px(80.0),
             "タイトルバーのアプリ名が信号機に重なっている（x = {:?}）",
             title.origin.x
+        );
+        // ロゴはアプリ名の左（アプリ名より手前）に置く。
+        assert!(
+            logo.origin.x + logo.size.width <= title.origin.x,
+            "ロゴがアプリ名の左にない（logo={logo:?} title={title:?}）"
+        );
+        assert!(
+            (logo.size.width.as_f32() - 16.0).abs() < 0.5,
+            "ロゴのサイズが 16px でない（{:?}）",
+            logo.size
+        );
+    }
+
+    /// Windows の自前タイトルバー: ロゴがアプリ名の左に並ぶこと。
+    ///
+    /// アプリ名だけだと汎用のウィンドウに見えるため、ロゴを添えてアプリだと分かるようにする。
+    #[cfg(windows)]
+    #[gpui_kit::test]
+    async fn windows_title_bar_shows_the_logo_before_the_app_name(cx: &mut TestAppContext) {
+        let ws = setup(cx);
+        let window = cx.open_window(
+            gpui_kit::Size {
+                width: gpui_kit::px(1200.0),
+                height: gpui_kit::px(800.0),
+            },
+            |window, cx| gpui_kit::component::Root::new(ws.clone(), window, cx),
+        );
+        let visual = gpui_kit::VisualTestContext::from_window(*window, cx).into_mut();
+        draw_frames(visual);
+        let logo = visual
+            .debug_bounds("win-title-bar-logo")
+            .expect("タイトルバーにロゴが出ていない");
+        let title = visual
+            .debug_bounds("win-title-bar-title")
+            .expect("タイトルバーにアプリ名が出ていない");
+        assert!(
+            (logo.size.width.as_f32() - 16.0).abs() < 0.5,
+            "ロゴのサイズが 16px でない（{:?}）",
+            logo.size
+        );
+        assert!(
+            logo.origin.x + logo.size.width <= title.origin.x,
+            "ロゴがアプリ名の左にない（logo={logo:?} title={title:?}）"
+        );
+        // タイトルバー（36px）の中に収まっていること。
+        assert!(
+            logo.origin.y >= gpui_kit::px(0.0)
+                && logo.origin.y + logo.size.height <= gpui_kit::px(TITLE_BAR_HEIGHT),
+            "ロゴがタイトルバーの外に出ている（logo={logo:?}）"
         );
     }
 

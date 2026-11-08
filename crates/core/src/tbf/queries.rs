@@ -5,13 +5,21 @@
 /// books.ts:462 — verbatim.
 pub(crate) const BOOKSHELF_QUERY: &str = "query BookShelfQuery($first: Int!, $after: String) { viewer { id bookShelfItems(first: $first, after: $after) { pageInfo { hasNextPage endCursor } edges { node { id causedAt product { databaseID name organization { name } coverImage { url } downloadContent { fileName downloadURL } } marketHandshake { event { id name } } } cursor } } } }";
 
-/// checklist-graphql.ts:78-192 `buildChecklistGraphQLQuery()` — verbatim.
+/// checklist の `EventOfflineCircleChecklistQuery`。
+///
+/// 2026-11-04 の Web バンドルから採取した現在の形に合わせる。旧クエリは
+/// `ProductInfo.firstAppearanceEventName` と `Event.databaseID` を要求していたが、
+/// 現行スキーマの checklist フラグメントはどちらも使わない（認証済み viewer で
+/// 実行すると GraphQL errors になり、同期が「upstream error」で失敗していた）。
+/// `followingOrganizations` は `@skip` で取得しない（チェックリスト表示には不要）。
 pub(crate) const CHECKLIST_QUERY: &str = r#"
     query EventOfflineCircleChecklistQuery(
       $checkedProductInfosFirst: Int!
       $checkedProductInfosAfter: String
+      $checkedProductInfosSkip: Boolean! = false
       $followingOrganizationsFirst: Int!
       $followingOrganizationsAfter: String
+      $followingOrganizationsSkip: Boolean! = false
       $eventID: ID!
     ) {
       viewer {
@@ -19,19 +27,18 @@ pub(crate) const CHECKLIST_QUERY: &str = r#"
         checkedProductInfos(
           first: $checkedProductInfosFirst
           after: $checkedProductInfosAfter
-        ) {
-          pageInfo { hasNextPage endCursor __typename }
+        ) @skip(if: $checkedProductInfosSkip) {
+          pageInfo { hasNextPage endCursor }
           edges {
             node {
               id
               createdAt
               productInfo {
                 id
-                name
                 databaseID
-                firstAppearanceEventName
-                loginUserBookShelfItem { id __typename }
-                coverImage { url __typename }
+                name
+                loginUserBookShelfItem { id }
+                coverImage { url }
                 productVariants(first: 10) {
                   edges {
                     node {
@@ -39,46 +46,36 @@ pub(crate) const CHECKLIST_QUERY: &str = r#"
                       kind
                       price
                       status
-                      __typename
                     }
                   }
-                  __typename
                 }
                 organization {
                   id
                   name
                   circles(first: 1, criteria: {eventID: $eventID}) {
-                    pageInfo { hasNextPage endCursor __typename }
+                    pageInfo { hasNextPage endCursor }
                     edges {
-                        node {
-                          id
-                          databaseID
-                          spaces
-                          hasOfflineCourse
-                          event { id databaseID __typename }
-                          __typename
-                        }
+                      node {
+                        id
+                        databaseID
+                        spaces
+                        hasOfflineCourse
+                        event { id }
+                      }
                       cursor
-                      __typename
                     }
-                    __typename
                   }
-                  __typename
                 }
-                __typename
               }
-              __typename
             }
             cursor
-            __typename
           }
-          __typename
         }
         followingOrganizations(
           first: $followingOrganizationsFirst
           after: $followingOrganizationsAfter
-        ) {
-          pageInfo { hasNextPage endCursor __typename }
+        ) @skip(if: $followingOrganizationsSkip) {
+          pageInfo { hasNextPage endCursor }
           edges {
             cursor
             node {
@@ -86,36 +83,28 @@ pub(crate) const CHECKLIST_QUERY: &str = r#"
               organization {
                 id
                 name
-                image { id url width height __typename }
+                image { id url width height }
                 circles(first: 1, criteria: {eventID: $eventID}) {
-                  pageInfo { hasNextPage endCursor __typename }
+                  pageInfo { hasNextPage endCursor }
                   edges {
                     node {
                       id
                       databaseID
                       spaces
                       hasOfflineCourse
-                      event { id databaseID __typename }
-                      __typename
+                      event { id }
                     }
                     cursor
-                    __typename
                   }
-                  __typename
                 }
-                __typename
               }
-              __typename
             }
-            __typename
           }
-          __typename
         }
-        __typename
       }
       event(id: $eventID) {
         id
-        __typename
+        recruitStartAt
       }
     }
 "#;

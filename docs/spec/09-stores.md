@@ -1125,7 +1125,7 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 | 定数 | 元ネタ（コメント） | アンカー |
 |---|---|---|
 | `BOOKSHELF_QUERY`（`BookShelfQuery($first, $after)`） | books.ts:462 verbatim | `crates/core/src/tbf/queries.rs:6` |
-| `CHECKLIST_QUERY`（`EventOfflineCircleChecklistQuery`） | checklist-graphql.ts:78-192 verbatim | `crates/core/src/tbf/queries.rs:9-121` |
+| `CHECKLIST_QUERY`（`EventOfflineCircleChecklistQuery`） | 2026-11-04 の Web バンドルから採取した現行形（旧 `firstAppearanceEventName` / `Event.databaseID` を削除、フォローは `@skip`） | `crates/core/src/tbf/queries.rs:8-110` |
 | `PRODUCT_IMAGES_QUERY`（`ProductImagesQuery`、`images(first: 8)`） | samples.ts:97-115 verbatim | `crates/core/src/tbf/queries.rs:124-141`, `:129` |
 | `EVENT_QUERY`（`TbfEventQuery($eventID)`） | events.ts:96 verbatim | `crates/core/src/tbf/queries.rs:145-146` |
 | `LOGIN_MUTATION`（`UserLoginMutation`） | 2026-08-21 にブラウザで実採取 | `crates/core/src/tbf/queries.rs:148-150` |
@@ -1137,24 +1137,23 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 |---|---|---|
 | `TBF_HOME` | `https://techbookfest.org/` | `crates/core/src/tbf/mod.rs:18` |
 | `TBF_GRAPHQL` | `https://techbookfest.org/api/graphql` | `crates/core/src/tbf/mod.rs:19` |
-| `TBF_GRAPHQL_V2` | `https://techbookfest.org/api/2/graphql` | `crates/core/src/tbf/mod.rs:20` |
 | `TBF_DOWNLOAD_BASE` | `https://techbookfest.org/api/product-dlc` | `crates/core/src/tbf/mod.rs:21` |
 | `SITE_ID_TECHBOOKFEST` | `"techbookfest"` | `crates/core/src/tbf/mod.rs:22` |
 | `USER_AGENT` | `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36` | `crates/core/src/tbf/mod.rs:25` |
 | 本棚クエリ URL サフィックス | `?operationName=BookShelfQuery&appVersion=20260417a-web` | `crates/core/src/tbf/mod.rs:296` |
-| チェックリスト URL サフィックス | `?operationName=EventOfflineCircleChecklistQuery&appVersion=20260424a-web` | `crates/core/src/tbf/mod.rs:417` |
+| チェックリスト URL サフィックス | `?operationName=EventOfflineCircleChecklistQuery&appVersion=20261104a-web` | `crates/core/src/tbf/mod.rs:508-514` |
 | ログイン URL | `{TBF_GRAPHQL}?operationName=UserLoginMutation` | `crates/core/src/tbf/mod.rs:215` |
 | ログアウト URL | `{TBF_GRAPHQL}?operationName=LogoutUserMutation` | `crates/core/src/tbf/mod.rs:257` |
 | 試し読み URL | `{TBF_GRAPHQL}?operationName=ProductImagesQuery` | `crates/core/src/tbf/mod.rs:478` |
-| イベント探索 URL | `{TBF_GRAPHQL_V2}?operationName=TbfEventQuery` | `crates/core/src/tbf/mod.rs:377` |
+| イベント探索 URL | `{TBF_GRAPHQL}?operationName=TbfEventQuery`（`/api/2/graphql` は 404 のため廃止） | `crates/core/src/tbf/mod.rs:454-457` |
 | 本棚ページサイズ | `first = 100` 件 | `crates/core/src/tbf/mod.rs:292` |
-| チェックリストページサイズ | `checkedProductInfosFirst = 100` 件 | `crates/core/src/tbf/mod.rs:410` |
-| `followingOrganizationsFirst` | `0`（フォロー組織は取得しない） | `crates/core/src/tbf/mod.rs:412` |
+| チェックリストページサイズ | `checkedProductInfosFirst = 100` 件 | `crates/core/src/tbf/mod.rs:499` |
+| `followingOrganizationsFirst` | `1` + `followingOrganizationsSkip: true`（フォロー組織は取得しない。`first: 0` はスキーマ検証で弾かれる） | `crates/core/src/tbf/mod.rs:501-506` |
 | サークル criteria | `circles(first: 1, criteria: {eventID: $eventID})` | `crates/core/src/tbf/queries.rs:46`, `:73` |
 | バリアント取得数 | `productVariants(first: 10)` | `crates/core/src/tbf/queries.rs:29` |
 | 試し読み取得数 | `images(first: 8)` | `crates/core/src/tbf/queries.rs:129` |
-| 将来イベント探索範囲 | `tbf21`〜`tbf30`（`.rev()` で降順） | `crates/core/src/tbf/mod.rs:333` |
-| canonical イベント数 | 21 件（`tbf20`…`tbf1` + `tbf-ouen-matsuri`） | `crates/core/src/tbf/mod.rs:968-1137` |
+| 将来イベント探索範囲 | `tbf22`〜`tbf30`（`.rev()` で降順。`tbf21` は canonical） | `crates/core/src/tbf/mod.rs:410` |
+| canonical イベント数 | 22 件（`tbf21`…`tbf1` + `tbf-ouen-matsuri`） | `crates/core/src/tbf/mod.rs:1240-1445` |
 | ログイン拡張 `clientLibrary` | `{"name":"@apollo/client","version":"4.1.9"}` | `crates/core/src/tbf/mod.rs:212`（ログイン）, `:254`（ログアウト） |
 | Accept（ダウンロード解決） | `text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8` | `crates/core/src/tbf/mod.rs:534` |
 | Accept-Language | `ja,en-US;q=0.9,en;q=0.8` | `crates/core/src/tbf/mod.rs:190`, `:536` |
@@ -1227,9 +1226,9 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 #### 4.2 `TbfClient::checklist` の処理手順（番号付き）
 
 1. `event_id = "Event:{event_slug}"` を組み立てる — `crates/core/src/tbf/mod.rs:403`
-2. `window = event_window(event_slug)`（canonical マスタの開催期間、ループ前に 1 回だけ計算） — `crates/core/src/tbf/mod.rs:405`, `crates/core/src/tbf/mod.rs:929-938`
-3. ループ: `variables = { checkedProductInfosFirst: 100, checkedProductInfosAfter: cursor, followingOrganizationsFirst: 0, eventID }` — `crates/core/src/tbf/mod.rs:409-413`
-4. GraphQL: **POST** `{TBF_GRAPHQL}?operationName=EventOfflineCircleChecklistQuery&appVersion=20260424a-web`、`Content-Type: application/json` + Cookie + XSRF、`redirects=5` — `crates/core/src/tbf/mod.rs:414-421`, `:597-612`
+2. 開催期間はループ前には固定せず、各項目を `created_at_belongs_to_event` で判定する（別イベント期間中だけ除外） — `crates/core/src/tbf/mod.rs:1206-1238`
+3. ループ: `variables = { checkedProductInfosFirst: 100, checkedProductInfosAfter: cursor, checkedProductInfosSkip: false, followingOrganizationsFirst: 1, followingOrganizationsAfter: null, followingOrganizationsSkip: true, eventID }` — `crates/core/src/tbf/mod.rs:497-507`
+4. GraphQL: **POST** `{TBF_GRAPHQL}?operationName=EventOfflineCircleChecklistQuery&appVersion=20261104a-web`、`Content-Type: application/json` + Cookie + XSRF、`redirects=5` — `crates/core/src/tbf/mod.rs:508-515`, `:597-612`
 5. `data.viewer.checkedProductInfos` 欠落 → `InvalidResponse("missing checkedProductInfos")` — `crates/core/src/tbf/mod.rs:422-424`
 6. 各 edge を `map_checked_product` で変換。`None`（オンライン限定サークル等）は捨てる — `crates/core/src/tbf/mod.rs:431`, `crates/core/src/tbf/mod.rs:757-794`
 7. **イベント絞り込み 2 段**: `entry.id.starts_with("{event_slug}:")` かつ `within_event_window(&window, created_at)` の両方を満たすものだけ採用 — `crates/core/src/tbf/mod.rs:437-441`
@@ -1254,15 +1253,26 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 | `is_purchased` | `productInfo.loginUserBookShelfItem` が null でない | `crates/core/src/tbf/mod.rs:808` |
 | `created_at` | `node.createdAt`（購入日時） | `crates/core/src/tbf/mod.rs:809` |
 
-#### 4.4 購入日時フィルタ（`within_event_window`）
+#### 4.4 お気に入り日時フィルタ（`created_at_belongs_to_event`）
 
-- 営業日判定は `created_at` の先頭 10 文字（`YYYY-MM-DD`）を開始日・終了日と**辞書順比較**（両端含む） — `crates/core/src/tbf/mod.rs:945-956`
-- `window` が `None`（canonical に無い slug / 期間未登録）または `created_at` が `None` の場合は**常に true**（絞り込みしないフォールバック） — `crates/core/src/tbf/mod.rs:951-955`
-- 目的（コメント）: `checkedProductInfos` は criteria で対象イベントのサークルに絞られるため、対象イベントに出展しているだけの商品（他イベントで購入）まで `{対象イベント}:` 形式の id になるのを防ぐ — `crates/core/src/tbf/mod.rs:940-944`
-- テスト実測: `tbf20` = 2026-04-11〜2026-04-26。期間内購入は保持、`tbf19` 期間内（2025-11-13）は除外、境界日は保持 — `crates/core/src/tbf/mod.rs:1195-1207`
-- テスト実測: `event_window("tbf06")` は `None`（canonical の slug は `tbf6` であって `tbf06` ではないため一致しない）→ フォールバックで保持 — `crates/core/src/tbf/mod.rs:1210-1221` / slug 定義 `:1090`(`tbf6`)
+- 日付判定は `created_at` の先頭 10 文字（`YYYY-MM-DD`）を開始日・終了日と**辞書順比較**（両端含む） — `crates/core/src/tbf/mod.rs:1192-1238`
+- 対象イベントの期間内、`created_at` が `None`、期間未登録のイベントは保持
+- **別イベントの開催期間中**に入れた項目だけを除外する。開催前（技術書典21 の 2026-11-07 など）に入れた項目は、どのイベントの期間にも入っていないため保持する
+- 目的: `checkedProductInfos` は criteria で対象イベントのサークルに絞られるため、対象イベントに出展しているだけの商品（他イベントでお気に入り）まで `{対象イベント}:` 形式の id になるのを防ぐ — `crates/core/src/tbf/mod.rs:1206-1238`
+- テスト実測: `tbf21` は開催前・境界日を保持、`tbf20` は `tbf19` 期間中（2025-11-20）の項目を除外 — `crates/core/src/tbf/mod.rs:1550-1590`
+- `event_window("tbf06")` は `None`（canonical の slug は `tbf6` であって `tbf06` ではないため一致しない）→ フォールバックで保持
 
-#### 4.5 お気に入り取り込み（`import_favorites`）
+#### 4.5 サークルマップ（自作 SVG）
+
+- 技術書典サイトの画像（PNG / 公式画像）は**使わない**。`tbf21` は会場の配置（列・通路・設備）を
+  残した自前 SVG（`crates/app/assets/tbf/tbf21-layout.svg`）を使い、**文字だけ**を変更する。
+  ブロック名（`き` など）は四角の中に入れず、配置番号 1 のセルの外側
+  （縦列はセルの上、横並びは右下、そ は右上）に置く。番号は各セルの中央に小さく出す。
+  赤い順番矢印は描かない — `crates/app/src/views/checklist.rs` の `build_circle_map_svg`
+- 会場データの無いイベントは、チェックリストのスペース番号を 10 個ずつにまとめた簡易マップを生成する
+- 表示は固定サイズのビューポート。初期は等倍、ボタンで「全体表示 / 等倍表示」を切り替える。ドラッグ（慣性あり）・ホイール拡大縮小・ダブルクリック拡大 — `crates/app/src/views/checklist.rs`
+
+#### 4.6 お気に入り取り込み（`import_favorites`）
 
 - `client.favorites(slug)` → `save_checklist(db, slug, &entries)`。ファイル/ネットワーク処理は `background_executor().spawn` + `Mutex` lock — `crates/app/src/views/checklist.rs:464-472`
 - 完了トースト「お気に入りを N 件取り込みました」、エラー時 `"session expired"` を含めば `OpenAuth` — `crates/app/src/views/checklist.rs:478-489`
@@ -1271,18 +1281,20 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 
 エントリポイント: `TbfClient::events(&mut self)` — `crates/core/src/tbf/mod.rs:331`
 
-1. `for n in (21..=30).rev()`: slug `tbf{n}` を組み立て、`discover_event_name(slug)` を呼ぶ。**Err は `continue`（握り潰し）** — `crates/core/src/tbf/mod.rs:333-337`
-2. `discover_event_name`: **POST** `{TBF_GRAPHQL_V2}?operationName=TbfEventQuery`、body `{operationName, query: EVENT_QUERY, variables:{eventID:"Event:{slug}"}}`、`Content-Type: application/json`、`redirects=5` — `crates/core/src/tbf/mod.rs:369-381`
+1. `for n in (22..=30).rev()`: slug `tbf{n}` を組み立て、`discover_event_name(slug)` を呼ぶ（`tbf21` は canonical へ移した）。**Err は `continue`（握り潰し）** — `crates/core/src/tbf/mod.rs:410-414`
+2. `discover_event_name`: **POST** `{TBF_GRAPHQL}?operationName=TbfEventQuery`、body `{operationName, query: EVENT_QUERY, variables:{eventID:"Event:{slug}"}}`、`Content-Type: application/json`、`redirects=5` — `crates/core/src/tbf/mod.rs:447-460`
 3. status が 2xx 以外 → `TbfError::Upstream("event query status {status}")`。JSON でない → `InvalidResponse`。`errors` あり → `Upstream("event query errors")` — `crates/core/src/tbf/mod.rs:382-392`
 4. 成功時は `data.event.name`（無ければ `None` → `event_name = slug`）で `TbfEventInfo` を作る。`event_format="offline"`, `is_cancelled=false`, `display_order=0`, `is_featured=false`, 期間は `None` — `crates/core/src/tbf/mod.rs:338-349`
 5. 探索結果を先に push し、続いて `canonical_events()` を **slug 重複チェック付き**で push（探索が先勝ち） — `crates/core/src/tbf/mod.rs:351-361`
 6. 最終ループで `display_order = index`、`is_featured = (index == 0)` を全件に再設定 — `crates/core/src/tbf/mod.rs:362-365`
-7. ネットワーク不通でも canonical だけで成功扱い（テスト: 全探索 404 でも 21 件以上返る） — `crates/core/tests/tbf.rs:487-499`
+7. ネットワーク不通でも canonical だけで成功扱い（テスト: 全探索 404 でも 22 件以上返る） — `crates/core/tests/tbf.rs:515-532`
+8. イベント一覧を開く `ChecklistView::reload` は、先に `tbf::sync::ensure_canonical_events` で**欠けている canonical 行だけ**を `tbf_events` へ追加し、注目イベントを canonical 先頭 1 件へ揃える（`poll_sync_enabled` は保持）。同期前・旧 DB でも `tbf21` が一覧に出る — `crates/core/src/tbf/sync.rs:171-196`, `crates/app/src/views/checklist.rs:151-156`
 
-`canonical_events()` の実値（`crates/core/src/tbf/mod.rs:968-1135`）:
+`canonical_events()` の実値（`crates/core/src/tbf/mod.rs:1240-1445`）:
 
 | slug | event_name | start | end | format | is_cancelled |
 |---|---|---|---|---|---|
+| tbf21 | 技術書典21 | 2026-11-21 | 2026-12-06 | hybrid | false |
 | tbf20 | 技術書典20 | 2026-04-11 | 2026-04-26 | hybrid | false |
 | tbf19 | 技術書典19 | 2025-11-15 | 2025-11-30 | hybrid | false |
 | tbf18 | 技術書典18 | 2025-05-31 | 2025-06-15 | hybrid | false |

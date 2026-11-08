@@ -168,6 +168,33 @@ pub fn save_events(pool: &SqlitePool, events: &[TbfEventInfo]) -> Result<usize, 
     Ok(events.len())
 }
 
+/// canonical イベント（技術書典21 など）を DB へ種まきする。
+///
+/// イベント一覧は `tbf_events` を読むため、同期前・ネットワーク不通でも
+/// 対応済みのイベントが一覧から欠けないようにする。既存 slug の行は触らず、
+/// 足りない行だけを追加する。最後に注目イベントを canonical の先頭だけに揃える
+/// （旧版が技術書典20 を注目にしていた行が残っても注目が 2 つにならない）。
+pub fn ensure_canonical_events(pool: &SqlitePool) -> Result<usize, sqlx::Error> {
+    let canonical = crate::tbf::canonical_events();
+    let existing: std::collections::HashSet<String> = checklist::list_events(pool)?
+        .into_iter()
+        .filter_map(|event| event.slug)
+        .collect();
+    let missing: Vec<TbfEventInfo> = canonical
+        .iter()
+        .filter(|event| !existing.contains(&event.slug))
+        .cloned()
+        .collect();
+    let added = missing.len();
+    if !missing.is_empty() {
+        save_events(pool, &missing)?;
+    }
+    if let Some(featured) = canonical.iter().find(|event| event.is_featured) {
+        checklist::demote_featured_except(pool, &featured.slug)?;
+    }
+    Ok(added)
+}
+
 /// Upsert checklist entries for one event. `is_checked` is preserved for
 /// existing rows (local user state), everything else follows the server.
 pub fn save_checklist(
@@ -492,16 +519,51 @@ mod tests {
         );
     }
 
-    /// 本棚同期は canonical マスターの先頭（= 現行の技術書典20）を注目イベントとして
+    /// canonical の種まきは足りないイベントを追加し、注目を 1 つに揃える。
+    /// 既存行のポーリング設定（利用者のトグル）は保持する。
+    #[test]
+    fn ensure_canonical_events_seeds_missing_and_keeps_one_featured() {
+        let pool = crate::db::test_pool();
+        migrate(&pool).unwrap();
+        // 旧版の状態: 技術書典20 が注目・ポーリング ON
+        save_events(&pool, &[event_info("tbf20", true)]).unwrap();
+        assert_eq!(
+            checklist::list_enabled_slugs(&pool).unwrap(),
+            vec!["tbf20".to_string()]
+        );
+
+        let added = ensure_canonical_events(&pool).unwrap();
+        assert!(added > 0, "canonical イベントを追加していない");
+        let events = checklist::list_events(&pool).unwrap();
+        let tbf21 = events
+            .iter()
+            .find(|event| event.slug.as_deref() == Some("tbf21"))
+            .expect("技術書典21 が無い");
+        assert_eq!(tbf21.event_start_date.as_deref(), Some("2026-11-21"));
+        assert_ne!(tbf21.is_featured, 0);
+        assert_eq!(
+            events.iter().filter(|event| event.is_featured != 0).count(),
+            1,
+            "注目イベントが複数ある"
+        );
+        // 技術書典20 のポーリング設定は残し、新しい注目イベントも既定で ON
+        let enabled = checklist::list_enabled_slugs(&pool).unwrap();
+        assert!(enabled.iter().any(|slug| slug == "tbf20"), "{enabled:?}");
+        assert!(enabled.iter().any(|slug| slug == "tbf21"), "{enabled:?}");
+        // 2 回目は追加なし
+        assert_eq!(ensure_canonical_events(&pool).unwrap(), 0);
+    }
+
+    /// 本棚同期は canonical マスターの先頭（= 現行の技術書典21）を注目イベントとして
     /// 作るため、その時点でポーリングのトグルが入る。
     #[test]
     fn bookshelf_sync_enables_polling_for_current_event() {
         let pool = crate::db::test_pool();
         migrate(&pool).unwrap();
-        ensure_event(&pool, "tbf20", Some("技術書典20")).unwrap();
+        ensure_event(&pool, "tbf21", Some("技術書典21")).unwrap();
         assert_eq!(
             checklist::list_enabled_slugs(&pool).unwrap(),
-            vec!["tbf20".to_string()]
+            vec!["tbf21".to_string()]
         );
     }
 
