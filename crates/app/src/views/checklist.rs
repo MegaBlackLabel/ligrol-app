@@ -1364,12 +1364,12 @@ impl ChecklistView {
                 out_handle.update(cx, |this, cx| this.end_circle_map_pan(cx));
             })
             .on_scroll_wheel(move |event, _window, cx| {
-                let delta = match event.delta {
-                    gpui_kit::ScrollDelta::Pixels(point) => f32::from(point.y),
-                    gpui_kit::ScrollDelta::Lines(point) => point.y * 20.0,
+                let lines = match event.delta {
+                    gpui_kit::ScrollDelta::Pixels(point) => f32::from(point.y) / 40.0,
+                    gpui_kit::ScrollDelta::Lines(point) => point.y,
                 };
-                let steps = (delta.abs() / 40.0).clamp(1.0, 3.0);
-                let factor = 1.15_f32.powf(if delta > 0.0 { steps } else { -steps });
+                // 1 ノッチ（3 行）で約 6%。以前は 1 ノッチで 23% 拡大していた。
+                let factor = 1.02_f32.powf(lines.clamp(-6.0, 6.0));
                 wheel_handle.update(cx, |this, cx| {
                     this.zoom_circle_map(factor, cx);
                 });
@@ -2844,6 +2844,108 @@ mod tests {
         assert_eq!(image.size(0).height.0, 758);
     }
 
+    /// tbf21 の配置図から記号（黒丸・黒四角・扉）を消し、指定された壁の段差を直線にしている。
+    #[test]
+    fn tbf21_map_removes_markers_doors_and_wall_jogs() {
+        let svg = build_circle_map_svg("tbf21", "技術書典21", &[]);
+        assert!(!svg.contains("<circle"), "黒丸が残っている");
+        assert!(
+            !svg.contains("M27 341h14v14H27z"),
+            "塗りつぶしの黒四角が残っている"
+        );
+        // 扉の羽（s 曲線）だけを消し、壁の直線は残す。
+        assert!(!svg.contains("s0-9.474"), "扉（左壁）が残っている");
+        assert!(!svg.contains("s14.684"), "扉（上壁）が残っている");
+        // 扉を消したあとに残った太い棒・黒い残骸は、周りの壁と同じ1pxの線にする。
+        assert!(
+            !svg.contains("M757.5 182h5v-6.5h-5z"),
+            "上壁の黒い残骸が残っている"
+        );
+        assert!(
+            !svg.contains("M757.5 183.5v5h-8"),
+            "上壁の太い線が残っている"
+        );
+        assert!(
+            !svg.contains("m-650 3.5h-45v3.5h29V189h16z"),
+            "左壁の太い線が残っている"
+        );
+        assert!(svg.contains("M757.5 188h38"), "上壁の細い線が無い");
+        // 壁とブロックの接着部は、セルの辺を壁の線に重ねて1本にする。
+        assert!(
+            svg.contains("M114.5 50h17v14h-17z\" transform=\"rotate(180 114.5 50)"),
+            "上壁のセルが壁の線に揃っていない"
+        );
+        assert!(
+            svg.contains("v152h347.5v-109.5"),
+            "上壁の横線が細い線になっていない"
+        );
+        assert!(svg.contains("M66 188h41.5"), "左壁の細い線が無い");
+        // 「た」のブロックは他の壁サークルと同じく壁（y=188）に接する。
+        assert!(
+            svg.contains("M441.5 202h17v14h-17z"),
+            "「た」のブロックが壁に接していない"
+        );
+        assert!(
+            !svg.contains("M441.5 203.5h17v14h-17z"),
+            "「た」のブロックが壁から離れている"
+        );
+        assert!(
+            !svg.contains("M62.5 188.5h45"),
+            "左壁からはみ出した線が残っている"
+        );
+        assert!(
+            !svg.contains("M762.5 175.5v6.5H807"),
+            "上壁の余分な横線が残っている"
+        );
+        // 指定された壁の段差・刻みを直線に省略している。
+        for tick in [
+            "M1269.5 75.5v4",
+            "M1196.5 75.5v4",
+            "M1105.5 75.5v4",
+            "M976.5 75.5v4",
+        ] {
+            assert!(!svg.contains(tick), "上壁の刻みが残っている: {tick}");
+        }
+        assert!(
+            !svg.contains("h229v-3h120"),
+            "左上の壁の段差が残っている"
+        );
+        assert!(
+            svg.contains("M66 188V36h349v152"),
+            "左上の壁が直線になっていない"
+        );
+        assert!(
+            !svg.contains("V172h2v47.5h30.5"),
+            "右壁の段差が残っている"
+        );
+        assert!(
+            !svg.contains("h-19.5v11h-37v-11H1282v7"),
+            "右下の壁の段差が残っている"
+        );
+        assert!(
+            !svg.contains("V342h-27v2.5H295V342h-27"),
+            "左下の壁の段差が残っている"
+        );
+        // 左壁の小さな段差をなくして、x=66 の縦線を y=188 まで通す。
+        assert!(
+            !svg.contains("V219h28v-31"),
+            "左壁の段差が残っている"
+        );
+        assert!(
+            svg.contains("H34.5V219H66V188"),
+            "左壁の小さな段差が直線になっていない"
+        );
+        // 締切側の横線を「た」の壁へ段差なしで接続する。
+        assert!(
+            !svg.contains("h342.5v-13h5v-97"),
+            "締切側の逆L字が残っている"
+        );
+        assert!(
+            svg.contains("h347.5v-109.5"),
+            "締切側の線が「た」の壁へ直線でつながっていない"
+        );
+    }
+
     /// 会場データの無いイベントは、チェックリストのスペースから 10 個ずつ作る。
     #[test]
     fn self_made_map_derives_groups_for_other_events() {
@@ -2981,6 +3083,10 @@ mod tests {
         assert!(
             after > before,
             "ホイールで拡大していない: {before} -> {after}"
+        );
+        assert!(
+            after <= before * 1.10,
+            "1 ホイールの拡大が粗すぎる: {before} -> {after}"
         );
     }
 
