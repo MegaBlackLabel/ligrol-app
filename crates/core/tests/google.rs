@@ -57,7 +57,7 @@ fn authorize_url_contains_required_params() {
 }
 
 #[test]
-fn token_exchange_sends_pkce_without_client_secret() {
+fn token_exchange_sends_pkce_and_client_secret() {
     let captured = Arc::new(Mutex::new(Vec::<RequestSpec>::new()));
     let log = captured.clone();
     let mut client = GoogleClient::with_transport(
@@ -77,7 +77,7 @@ fn token_exchange_sends_pkce_without_client_secret() {
             })
         }))),
         "client-1",
-        None,
+        Some("client-secret".to_string()),
     );
 
     let tokens = client
@@ -96,7 +96,7 @@ fn token_exchange_sends_pkce_without_client_secret() {
     assert!(body.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A38387"));
     assert!(body.contains("client_id=client-1"));
     assert!(body.contains("code_verifier=verifier-1"));
-    assert!(!body.contains("client_secret"));
+    assert!(body.contains("client_secret=client-secret"));
     assert!(
         req.headers
             .iter()
@@ -111,6 +111,7 @@ fn refresh_tokens_updates_access_token() {
             let body = String::from_utf8(spec.body.clone().unwrap()).unwrap();
             assert!(body.contains("grant_type=refresh_token"));
             assert!(body.contains("refresh_token=ref-1"));
+            assert!(body.contains("client_secret=client-secret"));
             Ok(ResponseSpec {
                 status: 200,
                 headers: vec![],
@@ -119,7 +120,7 @@ fn refresh_tokens_updates_access_token() {
             })
         }))),
         "client-1",
-        None,
+        Some("client-secret".to_string()),
     );
     client.restore_tokens(OAuthTokens {
         access_token: "acc-1".into(),
@@ -266,7 +267,7 @@ fn begin_finish_authorize_roundtrip() {
             }
         }))),
         "client-1",
-        None,
+        Some("client-secret".to_string()),
     );
     let pending = client.begin_authorize().unwrap();
     assert!(pending.url.contains("accounts.google.com/o/oauth2/v2/auth"));
@@ -297,7 +298,7 @@ fn pending_cancel_returns_cancelled() {
     let mut client = GoogleClient::with_transport(
         Box::new(Mock(Box::new(|_| panic!("no http")))),
         "client-1",
-        None,
+        Some("client-secret".to_string()),
     );
     let pending = client.begin_authorize().unwrap();
     let cancel = pending.cancel_handle();
