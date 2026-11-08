@@ -221,7 +221,8 @@ pub struct Workspace {
     pub bookshelf: Entity<BookshelfView>,
     pub history: Entity<HistoryView>,
     pub notes: Entity<NotesView>,
-    checklist: Entity<ChecklistView>,
+    /// チェックリストは初めて開いたときに作る（起動時に DB を読まない）。
+    checklist: Option<Entity<ChecklistView>>,
     about: Entity<AboutView>,
     /// レポート画面（GitHub Issue をブラウザーで作る）。
     report: Entity<ReportView>,
@@ -408,7 +409,6 @@ impl Workspace {
         let bookshelf = cx.new(BookshelfView::new);
         let history = cx.new(HistoryView::new);
         let notes = cx.new(NotesView::new);
-        let checklist = cx.new(ChecklistView::new);
         let about = cx.new(AboutView::new);
         let report = cx.new(ReportView::new);
         let exit_progress = cx.new(ExitUploadProgress::new);
@@ -455,7 +455,7 @@ impl Workspace {
             bookshelf,
             history,
             notes,
-            checklist,
+            checklist: None,
             about,
             report,
             auth_panel_open: false,
@@ -700,15 +700,25 @@ impl Workspace {
         .detach();
     }
 
+    /// チェックリストのビュー。初めて開いたときだけ作る。
+    fn checklist_entity(&mut self, cx: &mut Context<Self>) -> Entity<ChecklistView> {
+        if let Some(entity) = &self.checklist {
+            return entity.clone();
+        }
+        let entity = cx.new(ChecklistView::new);
+        self.checklist = Some(entity.clone());
+        entity
+    }
+
     /// 現在のアクティブビューを返す（エンティティの参照）。
-    fn active_view(&self, _cx: &Context<Self>) -> AnyView {
+    fn active_view(&mut self, cx: &mut Context<Self>) -> AnyView {
         match self.active {
             NavTarget::Bookshelf => AnyView::from(self.bookshelf.clone()),
             // お気に入りは本棚と同じビュー（表示中フラグでお気に入り固定にする）
             NavTarget::Favorites => AnyView::from(self.bookshelf.clone()),
             NavTarget::History => AnyView::from(self.history.clone()),
             NavTarget::Notes => AnyView::from(self.notes.clone()),
-            NavTarget::Checklist => AnyView::from(self.checklist.clone()),
+            NavTarget::Checklist => AnyView::from(self.checklist_entity(cx)),
             NavTarget::Report => AnyView::from(self.report.clone()),
             NavTarget::Settings => AnyView::from(self.settings.clone()),
             NavTarget::About => AnyView::from(self.about.clone()),
