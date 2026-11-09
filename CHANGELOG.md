@@ -40,6 +40,9 @@
   （Windows の自前タイトルバー / macOS・Linux の gpui-kit `TitleBar` の両方）。
   `Icon`（`svg()`）はアルファマスクに文字色を塗るため色付きロゴが単色の四角になる。
   32px でラスタライズした `RenderImage` を `img()` で描き、色を保っている。
+- **プライバシーポリシー**: `docs/privacy-policy.md` を追加し、README の「データの保存場所」から
+  参照する。アプリの「このアプリについて」にも要約と全文へのリンク（`about-privacy-link`）を
+  置いた。Google の同意画面に登録する内容と同じものを指す（`crates/app/src/views/about.rs`）。
 
 ### Fixed
 
