@@ -48,6 +48,13 @@
   （`あ`・`ち` など、色付きセルが無い所も含む）を中央に置けるよう、平行移動の範囲は
   画像の中心がビューポートの端まで来る所まで広げた
   （`center_selected_circle_map_cell` / `clamp_circle_map_pan`）。
+- **OAuth のコールバック待ちが固定ポート 38387 を奪い合っていた**: `bind_loopback` は
+  `SO_REUSEADDR` を付けて固定ポート 38387 を優先していた。Windows では `SO_REUSEADDR` を
+  付けた 2 つのソケットが同じポートを bind できてしまうため、起動中のアプリ（再起動前の
+  残骸を含む）とコールバックを取り合ってログインが固まり得た。Google のデスクトップ
+  アプリ向け手順は「空いている任意のポートで待ち受ける」で、loopback のポートは登録不要
+  （実測: `:38387` / `:49213` / `:65000` のいずれも受理される）。**常に `127.0.0.1:0` で
+  空きポートを取る**ようにし、`DEFAULT_REDIRECT_PORT` と `socket2` 依存を削除した。
 - **技術書典21 のチェックリスト同期が `upstream error: GraphQL response contained errors` で失敗する**:
   チェックリストのクエリが旧スキーマの `ProductInfo.firstAppearanceEventName` と
   `Event.databaseID` を要求し、フォロー一覧を `first: 0` で実行していた。現行の

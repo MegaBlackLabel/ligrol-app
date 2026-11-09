@@ -77,7 +77,7 @@
 | 認可エンドポイント | `https://accounts.google.com/o/oauth2/v2/auth` | `crates/core/src/google.rs:14` |
 | トークンエンドポイント | `https://oauth2.googleapis.com/token` | `crates/core/src/google.rs:15` |
 | userinfo | `https://www.googleapis.com/oauth2/v3/userinfo` | `crates/core/src/google.rs:16` |
-| ループバック固定ポート | `DEFAULT_REDIRECT_PORT = 38387` | `crates/core/src/google.rs:17` |
+| ループバックのポート | **固定しない**（`127.0.0.1:0` で空きポートを取る。デスクトップ クライアントは loopback のポートを問わず受理する） | `crates/core/src/google.rs` の `bind_loopback` |
 | スコープ | `openid email https://www.googleapis.com/auth/drive.file`（**`drive.readonly` は要求しない**。appdata も使わない） | `crates/core/src/google.rs:18-25` |
 | リフレッシュ余裕 | `REFRESH_SKEW_SECONDS = 60` 秒 | `crates/core/src/google.rs:21` |
 | コールバック待ちタイムアウト | 300 秒（5 分） | `crates/core/src/google.rs:151` |

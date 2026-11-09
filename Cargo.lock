@@ -5045,7 +5045,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.1",
- "socket2",
  "sqlx",
  "thiserror 2.0.21",
  "tokio",
