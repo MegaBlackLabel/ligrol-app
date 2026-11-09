@@ -65,7 +65,7 @@ mod icon_assets_tests {
                 .unwrap_or_else(|e| panic!("{path} failed to render: {e}"));
             let bytes = image.as_bytes(0).expect("at least one frame");
             assert!(
-                bytes.chunks_exact(4).any(|px| px[3] != 0),
+                bytes.as_chunks::<4>().0.iter().any(|px| px[3] != 0),
                 "{path} produced no visible pixels"
             );
         }

@@ -2354,7 +2354,7 @@ fn decode_thumbnail(bytes: &[u8]) -> Option<Arc<RenderImage>> {
     let (width, height) = rgba.dimensions();
     let mut flat = rgba.into_raw();
     // BGRA に変換（gpui の RenderImage は BGRA 前提）
-    for pixel in flat.chunks_exact_mut(4) {
+    for pixel in flat.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     Some(Arc::new(RenderImage::new([image::Frame::new(

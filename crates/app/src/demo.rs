@@ -1158,7 +1158,7 @@ fn cover_png(book: &DemoBook) -> Option<Vec<u8>> {
     let (width, height) = (size.width.0 as u32, size.height.0 as u32);
     let mut data = image.as_bytes(0)?.to_vec();
     // RenderImage は BGRA（`rasterize_svg` が R/B を入れ替えている）。PNG は RGBA なので戻す。
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in data.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     let rgba = image::RgbaImage::from_raw(width, height, data)?;
@@ -2740,7 +2740,9 @@ mod tests {
         let bytes = image.as_bytes(0).expect("フレームが無い");
         assert!(
             bytes
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|pixel| pixel[..3].iter().all(|channel| *channel < 100)),
             "ページに文字が 1 ピクセルも描かれていない"
         );
@@ -2750,7 +2752,9 @@ mod tests {
             PAGE_WIDTH,
             PAGE_HEIGHT,
             bytes
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
                 .collect(),
         )

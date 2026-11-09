@@ -92,7 +92,7 @@
 
 | 依存 | 用途 | コメントに残っている意図 |
 |---|---|---|
-| `gpui-kit`（crates.io 0.8.0 固定） | UI コンポーネント（Button/Dialog/Popover/Notification/Radio/Icon/Carousel 等） | Carousel は 0.6.2 でリリース済みのため git rev 固定をやめた。0.8.1 は `gpui-pre-macos 0.3.10` が stable Rust 1.97 で未安定 API を使うため macOS をビルドできず、上流修正まで 0.8.0 固定（`crates/app/Cargo.toml`） |
+| `gpui-kit`（crates.io 0.8.0 固定） | UI コンポーネント（Button/Dialog/Popover/Notification/Radio/Icon/Carousel 等） | Carousel は 0.6.2 でリリース済みのため git rev 固定をやめた。0.8.1 は `gpui-pre-macos 0.3.10` が当時の stable（Rust 1.97）で未安定 API を使うため macOS をビルドできなかった。ツールチェーンは自動アップデート（`gpui-updater-pre`）の MSRV に合わせて 1.98.1 へ上げたので、0.8.1 / 0.9.x への更新は macOS での検証待ち（`docs/macos-update-handoff.md`）。それまでは 0.8.0 固定（`crates/app/Cargo.toml`） |
 | `gpui-webview` / `lb-wry` | ログイン用 WebView | |
 | `sqlx`（sqlite, runtime-tokio, migrate） | DB | |
 | `image` / `webp` / `libwebp-sys`（sse41） | WebP エンコード/デコード | `sse41` は xwin クロスビルド対策 |

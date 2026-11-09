@@ -1052,7 +1052,7 @@ impl SettingsView {
         let decoded = image::load_from_memory(&bytes).ok()?;
         let mut rgba = decoded.to_rgba8();
         // GPUI は BGRA を期待する
-        for pixel in rgba.chunks_exact_mut(4) {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         Some(std::sync::Arc::new(gpui_kit::RenderImage::new([
@@ -4026,7 +4026,6 @@ impl Render for SettingsView {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::AppContext as _;
     use gpui_kit::TestAppContext;
     use ligrol_core::drive::sync::{SyncPhase, SyncProgress};
 

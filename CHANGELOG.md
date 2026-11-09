@@ -44,6 +44,13 @@
   参照する。アプリの「このアプリについて」にも要約と全文へのリンク（`about-privacy-link`）を
   置いた。Google の同意画面に登録する内容と同じものを指す（`crates/app/src/views/about.rs`）。
 
+### Changed
+
+- **Rust ツールチェーンを 1.98.1 へ更新**: 自動アップデート
+  （`gpui-updater-pre`、MSRV 1.98）を入れるための前提。1.98 の新しい clippy lint
+  （`chunks_exact` → `as_chunks`）へ追従し、依存のライセンス一覧を再生成した。
+  macOS 側のビルド検証は `docs/macos-update-handoff.md` に引き継いである。
+
 ### Fixed
 
 - **サークルマップで選んだサークルが中央に来ない**: 一覧の行や色付きセルを選んだときに

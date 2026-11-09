@@ -10356,7 +10356,7 @@ pub fn app_logo_image() -> Option<Arc<RenderImage>> {
         let decoded = image::load_from_memory(data).ok()?;
         let mut rgba = decoded.to_rgba8();
         // GPUI は BGRA を期待する
-        for pixel in rgba.chunks_exact_mut(4) {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         Some(Arc::new(gpui_kit::RenderImage::new([image::Frame::new(
@@ -10378,7 +10378,7 @@ pub fn title_logo_image() -> Option<Arc<RenderImage>> {
         let decoded = image::load_from_memory(data).ok()?;
         let mut rgba = decoded.to_rgba8();
         // GPUI は BGRA を期待する。
-        for pixel in rgba.chunks_exact_mut(4) {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         Some(Arc::new(RenderImage::new([image::Frame::new(rgba)])))
@@ -10468,7 +10468,7 @@ pub(crate) fn rasterize_svg_scaled(svg: &str, scale: f32) -> Option<Arc<RenderIm
         &mut pixmap.as_mut(),
     );
     let mut data = pixmap.data().to_vec();
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in data.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     let rgba = image::RgbaImage::from_raw(width, height, data)?;
@@ -10525,7 +10525,7 @@ pub(crate) fn progress_ring_image(fraction: f32) -> Arc<RenderImage> {
     resvg::render(&tree, tiny_skia::Transform::default(), &mut pixmap.as_mut());
     let mut data = pixmap.data().to_vec();
     // GPUI は BGRA を期待（R/B を入れ替えないと色が入れ替わる）
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in data.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     let frame =
@@ -10722,7 +10722,6 @@ mod tests {
         ImportChoice, ImportFailure, ImportOutcome, PendingImport, cover_url_candidates,
         download_messages, import_choices, import_needs_confirmation,
     };
-    use gpui_kit::AppContext as _;
     use gpui_kit::TestAppContext;
     use ligrol_core::import::{ImportPlan, MediaKind, PlannedContent, PlannedRendition};
 
@@ -11272,7 +11271,9 @@ mod tests {
         let image = rasterize_svg(svg).expect("SVG がラスタライズされない");
         let bytes = image.as_bytes(0).expect("フレームが無い");
         let has_glyph_pixel = bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|pixel| pixel[..3].iter().all(|channel| *channel < 100));
         assert!(
             has_glyph_pixel,
@@ -11305,7 +11306,7 @@ mod tests {
         let bytes = image.as_bytes(0).expect("フレームが無い");
         let mut navy = 0;
         let mut white = 0;
-        for pixel in bytes.chunks_exact(4) {
+        for pixel in bytes.as_chunks::<4>().0 {
             // BGRA
             let (b, g, r) = (pixel[0], pixel[1], pixel[2]);
             if (60..120).contains(&b) && r < 40 && g < 60 {

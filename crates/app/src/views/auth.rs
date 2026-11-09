@@ -793,7 +793,6 @@ mod tests {
 
 #[cfg(test)]
 mod dialog_render_tests {
-    use gpui_kit::AppContext as _;
     use gpui_kit::TestAppContext;
 
     use crate::app_state::AppState;

@@ -38,7 +38,7 @@ jobs:
       # 版数はこの SHA 自体が持っている（`dtolnay/rust-toolchain` はバージョンごとの
       # コミットに toolchain を埋め込む）。`with: toolchain:` を渡すと
       # "Unexpected input(s) 'toolchain'" の警告になるので渡さない。
-      - uses: dtolnay/rust-toolchain@4716b85f2fac3e324e64fa2810f6b5c3905760a5 # 1.97.1
+      - uses: dtolnay/rust-toolchain@18f0487477426dce244608110aa2660c2893deb7 # 1.98.1
         with:
           components: clippy, rustfmt
 
@@ -87,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: dtolnay/rust-toolchain@4716b85f2fac3e324e64fa2810f6b5c3905760a5 # 1.97.1
+      - uses: dtolnay/rust-toolchain@18f0487477426dce244608110aa2660c2893deb7 # 1.98.1
 
       # 監査ツール自体もバージョン固定で入れる（`--locked` で依存も固定）。
       - name: Install cargo-audit

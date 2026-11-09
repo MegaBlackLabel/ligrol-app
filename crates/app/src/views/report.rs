@@ -841,8 +841,6 @@ impl Render for ReportView {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::AppContext as _;
-    use gpui_kit::ReadGlobal as _;
     use gpui_kit::TestAppContext;
 
     use super::*;

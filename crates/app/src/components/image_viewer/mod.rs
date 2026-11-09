@@ -415,7 +415,7 @@ fn pan_max_for(scale: f32, viewport: gpui_kit::Point<f32>, aspect: f32) -> gpui_
 /// `RenderImage::new` に渡す）。image crate は RGBA を返すため、
 /// R/B を入れ替えてから渡さないと表示で赤と青が入れ替わる。
 fn rgba_to_render_image(mut rgba: image::RgbaImage) -> Arc<RenderImage> {
-    for pixel in rgba.chunks_exact_mut(4) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     Arc::new(RenderImage::new([image::Frame::new(rgba)]))
@@ -3637,7 +3637,6 @@ impl Render for ImageViewer {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::AppContext as _;
     use gpui_kit::TestAppContext;
     use gpui_kit::component::slider::SliderValue;
 
