@@ -43,6 +43,11 @@
 
 ### Fixed
 
+- **サークルマップで選んだサークルが中央に来ない**: 一覧の行や色付きセルを選んだときに
+  地図を平行移動して、そのセルをビューポート中央へ寄せるようにした。端のブロック
+  （`あ`・`ち` など、色付きセルが無い所も含む）を中央に置けるよう、平行移動の範囲は
+  画像の中心がビューポートの端まで来る所まで広げた
+  （`center_selected_circle_map_cell` / `clamp_circle_map_pan`）。
 - **技術書典21 のチェックリスト同期が `upstream error: GraphQL response contained errors` で失敗する**:
   チェックリストのクエリが旧スキーマの `ProductInfo.firstAppearanceEventName` と
   `Event.databaseID` を要求し、フォロー一覧を `first: 0` で実行していた。現行の

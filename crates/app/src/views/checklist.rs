@@ -704,14 +704,18 @@ impl ChecklistView {
         Some((size.width.0 as f32, size.height.0 as f32))
     }
 
-    /// 地図モードの平行移動を画像の端までに clamp する。
+    /// 地図モードの平行移動を clamp する。
+    ///
+    /// 画像の端で止めると端のブロック（あ・ち など）が中央に来ないので、
+    /// 地図のどの位置でもビューポート中央へ寄せられる範囲まで許す
+    /// （画像の外側に余白が出る）。
     fn clamp_circle_map_pan(&mut self) {
         let Some((width, height)) = self.circle_map_image_size() else {
             self.circle_map_pan = gpui_kit::Point::new(0.0, 0.0);
             return;
         };
-        let max_x = ((width * self.circle_map_zoom - CIRCLE_MAP_VIEWPORT_WIDTH) / 2.0).max(0.0);
-        let max_y = ((height * self.circle_map_zoom - CIRCLE_MAP_VIEWPORT_HEIGHT) / 2.0).max(0.0);
+        let max_x = width * self.circle_map_zoom / 2.0;
+        let max_y = height * self.circle_map_zoom / 2.0;
         self.circle_map_pan.x = self.circle_map_pan.x.clamp(-max_x, max_x);
         self.circle_map_pan.y = self.circle_map_pan.y.clamp(-max_y, max_y);
     }
@@ -720,6 +724,53 @@ impl ChecklistView {
     fn select_checklist_item(&mut self, item_id: &str, cx: &mut Context<Self>) {
         // 地図画像は作り直さず、選択オーバーレイだけを更新する（チラつき防止）。
         self.selected_item_id = Some(item_id.to_string());
+        self.center_selected_circle_map_cell(cx);
+        cx.notify();
+    }
+
+    /// 選択中の項目のサークルセルが地図の中央に来るよう平行移動する。
+    fn center_selected_circle_map_cell(&mut self, cx: &mut Context<Self>) {
+        if !self.show_circle_map {
+            return;
+        }
+        let Some(slug) = self.selected_slug.clone() else {
+            return;
+        };
+        let Some(item_id) = self.selected_item_id.clone() else {
+            return;
+        };
+        let Some((width, height)) = self.circle_map_image_size() else {
+            return;
+        };
+        let Some(space) = self
+            .items
+            .iter()
+            .find(|item| item.id == item_id)
+            .and_then(|item| parse_space(&item.space_number))
+        else {
+            return;
+        };
+        let Some(rect) = self
+            .circle_map_cells
+            .get(&slug)
+            .and_then(|cells| cells.get(&space))
+            .copied()
+        else {
+            return;
+        };
+        let zoom = self.circle_map_zoom;
+        let center_x = (rect.x0 + rect.x1) / 2.0 * zoom;
+        let center_y = (rect.y0 + rect.y1) / 2.0 * zoom;
+        // 画面座標 = (viewport - display)/2 + pan + rect*zoom なので、
+        // セル中心をビューポート中央へ持ってくる pan を逆算する。
+        self.circle_map_pan = gpui_kit::Point::new(
+            width * zoom / 2.0 - center_x,
+            height * zoom / 2.0 - center_y,
+        );
+        self.circle_map_fit = false;
+        self.circle_map_pan_velocity = gpui_kit::Point::new(0.0, 0.0);
+        self.circle_map_inertia_generation = self.circle_map_inertia_generation.wrapping_add(1);
+        self.clamp_circle_map_pan();
         cx.notify();
     }
 
@@ -3507,6 +3558,135 @@ mod tests {
         );
     }
 
+    /// 地図付きのテストビュー（2000×1000 の仮画像 + 指定セル）。
+    fn view_with_circle_map(
+        items: Vec<CheckedItem>,
+        cells: HashMap<(String, u32), CellRect>,
+    ) -> ChecklistView {
+        let mut view = view_with_items(items);
+        view.show_circle_map = true;
+        view.circle_map_fit = false;
+        view.circle_map_zoom = 1.0;
+        view.circle_map_images.insert(
+            "tbf20".into(),
+            Arc::new(RenderImage::new([image::Frame::new(
+                image::RgbaImage::from_pixel(2000, 1000, image::Rgba([0, 0, 0, 255])),
+            )])),
+        );
+        view.circle_map_cells.insert("tbf20".into(), cells);
+        view.circle_map_bounds.set(Some(gpui_kit::Bounds {
+            origin: gpui_kit::point(gpui_kit::px(0.0), gpui_kit::px(0.0)),
+            size: gpui_kit::Size {
+                width: gpui_kit::px(CIRCLE_MAP_VIEWPORT_WIDTH),
+                height: gpui_kit::px(CIRCLE_MAP_VIEWPORT_HEIGHT),
+            },
+        }));
+        view
+    }
+
+    /// 地図の端のセルをクリックしても、そのセルがビューポート中央に来る。
+    #[gpui_kit::test]
+    async fn clicking_map_cell_centers_it_in_the_viewport(cx: &mut TestAppContext) {
+        let mut items = vec![test_item("item-a", 0), test_item("item-b", 1)];
+        items[0].space_number = "こ05".into();
+        items[1].space_number = "う03".into();
+        let view = view_with_circle_map(
+            items,
+            HashMap::from([(
+                ("こ".to_string(), 5),
+                CellRect {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 20.0,
+                    y1: 20.0,
+                },
+            )]),
+        );
+        let view = cx.new(|_| view);
+        cx.update(|cx| {
+            view.update(cx, |this, cx| {
+                this.select_circle_map_cell(
+                    gpui_kit::point(gpui_kit::px(5.0), gpui_kit::px(5.0)),
+                    cx,
+                );
+            })
+        });
+        let pan = view.read_with(cx, |view, _| view.circle_map_pan);
+        // 画像 (2000×1000) の左上セル中心 (10, 10) がビューポート中央に来る。
+        // 画像の端で clamp すると (2000-936)/2 = 532 で止まってしまう。
+        assert!(
+            (pan.x - (1000.0 - 10.0)).abs() < 0.5,
+            "横が中央に来ていない: {pan:?}"
+        );
+        assert!(
+            (pan.y - (500.0 - 10.0)).abs() < 0.5,
+            "縦が中央に来ていない: {pan:?}"
+        );
+    }
+
+    /// 一覧の行を選択すると、対応するサークルが地図の中央に来る。
+    #[gpui_kit::test]
+    async fn selecting_a_row_centers_its_circle_in_the_map(cx: &mut TestAppContext) {
+        let mut items = vec![test_item("item-a", 0), test_item("item-b", 1)];
+        items[0].space_number = "こ05".into();
+        items[1].space_number = "う03".into();
+        let view = view_with_circle_map(
+            items,
+            HashMap::from([(
+                ("う".to_string(), 3),
+                CellRect {
+                    x0: 1900.0,
+                    y0: 900.0,
+                    x1: 1920.0,
+                    y1: 920.0,
+                },
+            )]),
+        );
+        let view = cx.new(|_| view);
+        cx.update(|cx| {
+            view.update(cx, |this, cx| {
+                this.select_checklist_item("item-b", cx);
+            })
+        });
+        let pan = view.read_with(cx, |view, _| view.circle_map_pan);
+        assert!(
+            (pan.x - (1000.0 - 1910.0)).abs() < 0.5,
+            "横が中央に来ていない: {pan:?}"
+        );
+        assert!(
+            (pan.y - (500.0 - 910.0)).abs() < 0.5,
+            "縦が中央に来ていない: {pan:?}"
+        );
+    }
+
+    /// 色付きセルの無い端のブロック（あ・ち など）も、地図を動かして中央へ寄せられる。
+    #[test]
+    fn circle_map_pan_can_center_the_map_edges() {
+        let mut view = view_with_items(Vec::new());
+        view.circle_map_images.insert(
+            "tbf20".into(),
+            Arc::new(RenderImage::new([image::Frame::new(
+                image::RgbaImage::from_pixel(2000, 1000, image::Rgba([0, 0, 0, 255])),
+            )])),
+        );
+        view.circle_map_zoom = 1.0;
+        view.circle_map_fit = false;
+        // 地図の右下端 (2000, 1000) をビューポート中央へ寄せる pan は
+        // 表示サイズ / 2 - 地図座標 = -1000, -500。
+        view.circle_map_pan = gpui_kit::Point::new(2000.0 / 2.0 - 2000.0, 1000.0 / 2.0 - 1000.0);
+        view.clamp_circle_map_pan();
+        assert!(
+            (view.circle_map_pan.x - (2000.0 / 2.0 - 2000.0)).abs() < 0.5,
+            "右端のブロックが中央に来られない: {:?}",
+            view.circle_map_pan
+        );
+        assert!(
+            (view.circle_map_pan.y - (1000.0 / 2.0 - 1000.0)).abs() < 0.5,
+            "下端のブロックが中央に来られない: {:?}",
+            view.circle_map_pan
+        );
+    }
+
     /// 会場データの無いイベントは、チェックリストのスペースから 10 個ずつ作る。
     #[test]
     fn self_made_map_derives_groups_for_other_events() {
@@ -3606,13 +3786,14 @@ mod tests {
             "ドラッグ終了後もドラッグ中扱いになっている"
         );
 
-        // 端まで移動できる（中央寄せの margin 方式だと移動量が半分になり、
-        // 端のブロックまで届かなかった）。2 回ドラッグして clamp に当てる。
+        // 端のブロック（あ・ち など）も中央へ寄せられるよう、画像の端ではなく
+        // 画像の中心がビューポートの端まで来る範囲まで動かせる。3 回ドラッグして
+        // clamp に当てる。
         let edge = gpui_kit::point(
             bounds.origin.x + gpui_kit::px(12.0),
             bounds.origin.y + gpui_kit::px(12.0),
         );
-        for _ in 0..2 {
+        for _ in 0..3 {
             visual.simulate_event(gpui_kit::MouseDownEvent {
                 position: start,
                 modifiers: Default::default(),
@@ -3638,8 +3819,8 @@ mod tests {
             .read_with(cx, |v, _| v.circle_map_image_size())
             .expect("地図画像のサイズが取れない");
         let zoom = view.read_with(cx, |v, _| v.circle_map_zoom);
-        let expected_x = ((image_width * zoom - CIRCLE_MAP_VIEWPORT_WIDTH) / 2.0).max(0.0);
-        let expected_y = ((image_height * zoom - CIRCLE_MAP_VIEWPORT_HEIGHT) / 2.0).max(0.0);
+        let expected_x = image_width * zoom / 2.0;
+        let expected_y = image_height * zoom / 2.0;
         assert!(
             (pan.x + expected_x).abs() < 1.5,
             "横の端まで移動できていない: {pan:?} (expected_x={expected_x})"
