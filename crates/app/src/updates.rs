@@ -218,19 +218,38 @@ pub fn ownership_note(ownership: &Ownership) -> String {
     }
 }
 
+/// 現在プラットフォームのアセット選択パターン（OS + 拡張子）。
+///
+/// macOS は aarch64 / x86_64 の両方を配るため、さらにアーキテクチャで絞る。
+/// `GitHubSource` は最初にマッチしたアセットを返し、GitHub のアセット順は
+/// 不定なので、絞らないと Intel Mac が arm64 の dmg を選び得る。
+pub fn asset_patterns() -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            "macos".to_string(),
+            ".dmg".to_string(),
+            std::env::consts::ARCH.to_string(),
+        ]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        vec!["windows".to_string(), ".msi".to_string()]
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        vec!["linux".to_string(), ".tar.gz".to_string()]
+    }
+}
+
 /// 更新フィード（GitHub Releases）。
 ///
-/// アセット名の条件でプラットフォームの配布物を選ぶ。Windows は MSI、
-/// macOS は dmg（配布物の追加は `docs/macos-update-handoff.md` を参照）。
+/// 配布物の追加は `docs/macos-update-handoff.md` を参照。
 pub fn source() -> GitHubSource {
-    let source = GitHubSource::new(REPO_OWNER, REPO_REPO);
-    #[cfg(target_os = "macos")]
-    let source = source.asset_contains("macos").asset_contains(".dmg");
-    #[cfg(target_os = "windows")]
-    let source = source.asset_contains("windows").asset_contains(".msi");
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let source = source.asset_contains("linux").asset_contains(".tar.gz");
-    source.with_checksums(CHECKSUM_ASSET).with_minisig()
+    GitHubSource::new(REPO_OWNER, REPO_REPO)
+        .asset_patterns(asset_patterns())
+        .with_checksums(CHECKSUM_ASSET)
+        .with_minisig()
 }
 
 /// 検証設定。
@@ -543,5 +562,24 @@ mod tests {
         );
         assert_eq!(UpdateAction::Cancel.label(), "中止");
         assert_eq!(UpdateAction::Restart.label(), "再起動して更新");
+    }
+
+    #[test]
+    fn asset_patterns_target_the_current_platform() {
+        let patterns = asset_patterns();
+        assert!(
+            patterns.iter().any(|p| p == std::env::consts::OS),
+            "OS パターンが無い: {patterns:?}"
+        );
+
+        // macOS は aarch64 / x86_64 の両方を配るため、アーキテクチャで絞る。
+        #[cfg(target_os = "macos")]
+        {
+            assert!(patterns.iter().any(|p| p == ".dmg"), "{patterns:?}");
+            assert!(
+                patterns.iter().any(|p| p == std::env::consts::ARCH),
+                "macOS のアセット選択はアーキテクチャで絞るべき: {patterns:?}"
+            );
+        }
     }
 }
