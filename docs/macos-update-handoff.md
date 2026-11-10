@@ -17,13 +17,18 @@ Windows 側の土台はこのリポジトリで検証済み。**macOS は未検�
   - MSRV が 1.98 のため、ツールチェーン更新とセットで固定している
 - 1.98 の新 clippy lint を解消（`chunks_exact*` → `as_chunks*`、未使用 import の削除）
 - `cargo clippy --workspace --all-targets -- -D warnings` が Windows で green
+- **設定画面の「アップデート」節**（状態表示・手動チェック・DL/中止・再起動・リリースノート）
+- **自動チェック**（起動 30 秒後、以降 24 時間おき。最終確認は `app_settings` に保存）
+- **所有権ゲート**（Homebrew / WindowsApps / winget などを検出したら自己更新せず案内）
+- GitHub Releases フィード（`SHA256SUMS` + `.minisig`）。公開鍵が無い開発ビルドはチェックサム必須
 
 ### 未検証・未対応
 
 - macOS でのビルド・テスト（このリポジトリの CI は macos-14 を 2 アーキで回す）
-- macOS の配布物（`.dmg`）と、gpui-updater の macOS インストール経路
-- Homebrew cask との共存（アプリ側ゲート）の実装
-- 自動アップデートの本体（チェック・UI・再起動）。配布物の dmg/MSI 化も未着手
+- macOS の配布物（`.dmg`）と、dmg 経由のインストール検証
+- Windows の MSI 化と Store（MSI/EXE）提出
+- リリース CI の `SHA256SUMS` / minisign 署名 / タグと Cargo version の一致チェック
+- Homebrew cask の実機確認（`brew upgrade ligrol` の案内が正しいこと）
 
 ## 2. 決定済みの方針（変更するなら要相談）
 
@@ -32,7 +37,7 @@ Windows 側の土台はこのリポジトリで検証済み。**macOS は未検�
 | 使うクレート | `gpui-updater-pre`（gpui-kit の `gpui-pre 0.3.9` と同一パッケージで型が一致することを Windows で確認済み） |
 | Windows 配布 | MSI/インストーラ化は OK。Store へは **MSI/EXE 提出**（Store は既存ユーザーに更新を配らないため、アプリ内更新が前提） |
 | Windows 署名 | 後で決める（gpui-updater の Authenticode 検証は「インストール済み exe が署名済みのときだけ」走る） |
-| Homebrew | **アプリ側ゲート**。`Caskroom` を検出したら自己更新せず `brew upgrade --cask ligrol` を案内。cask に `auto_updates` は付けない |
+| Homebrew | **アプリ側ゲート**。`Caskroom` を検出したら自己更新せず `brew upgrade ligrol` を案内。cask に `auto_updates` は付けない |
 | macOS 配布物 | gpui-updater の macOS インストーラは `.dmg` のみ。zip は残しつつ dmg を追加する |
 
 ## 3. Mac で最初にやる検証
@@ -124,7 +129,7 @@ macOS では「インストール済み `.app` が署名済みのとき、更新
 ### 5.4 Homebrew
 
 - `ownership()` が `Ownership::Packager`（Caskroom の symlink）を返したら、自己更新 UI を出さない
-- 代わりに `brew upgrade --cask ligrol` を案内する
+- 代わりに `brew upgrade ligrol` を案内する
 - cask 側は `auto_updates` を付けない（アプリが brew 管理下で黙る前提）
 
 ## 6. リリースパスの検証（Mac 実機 / VM）
@@ -163,3 +168,8 @@ gpui-kit の Auto Update ガイドにある表をそのまま使う:
   「追加される 10 クレート」をまとめて確認すること
 - CI のツールチェーンは `dtolnay/rust-toolchain` の **1.98.1 の ref の SHA** に固定済み
   （`ci.yml` 2 箇所 / `release.yml` 1 箇所）
+- リリースビルドで埋め込む環境変数:
+  - `LIGROL_UPDATE_MINISIGN_KEY`: 更新フィードの minisign 公開鍵。設定すると
+    `Verification::Strict`（署名 + SHA-256）になる
+  - `LIGROL_UPDATE_EXPLANATION`（任意）: パッケージ管理者が「このビルドはこう更新する」と
+    示す文言。設定すると `Ownership::Packager` として自己更新を止める

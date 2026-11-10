@@ -6,6 +6,11 @@
 
 ### Added
 
+- **自動アップデート（設定画面）**: 現在のバージョンと更新の状態を設定画面に出し、
+  起動 30 秒後と以降 24 時間おきに GitHub Releases を確認する（手動確認も可）。
+  検証は SHA-256 + minisign（公開鍵を埋め込んだビルドは fail-closed）。Homebrew などの
+  パッケージ管理下では自己更新せず、更新コマンドを案内する。配布物（dmg / MSI）と
+  署名は未整備で、macOS の検証は `docs/macos-update-handoff.md` に引き継いである。
 - **チェックリストの「初出イベント」抽出**: 技術書典の `ProductInfo.firstAppearanceEventName` を
   チェックリスト同期で取得し、`checked_items.first_appearance_event_name` に保存する。
   イベント詳細は**選択中イベントが初出の本だけ**を表示する（トグルなし）。

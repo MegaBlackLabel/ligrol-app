@@ -9,6 +9,7 @@ pub mod icons;
 pub mod logging;
 pub mod pack_keys;
 pub mod theme;
+pub mod updates;
 pub mod views;
 pub mod workspace;
 
