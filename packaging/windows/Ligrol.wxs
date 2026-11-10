@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  直販 Windows 用の per-user MSI（署名なし）。
+
+  更新はアプリ内の gpui-updater（.msi 経路）が行う。インストール先は
+  `%LOCALAPPDATA%\Ligrol`（管理者権限不要）。サイレントインストール
+  （`msiexec /i ligrol.msi /qn`）に対応する。
+
+  ビルド:
+    wix build -d Version=0.3.0 -d SourceDir=<配布ファイルのディレクトリ> \
+      packaging/windows/Ligrol.wxs -o ligrol.msi
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="Ligrol"
+    Manufacturer="MegaBlackLabel"
+    Version="$(var.Version)"
+    Language="1033"
+    UpgradeCode="0A5E3D7B-6C2F-4E51-9B7A-3D8C5A1F0E42"
+    Scope="perUser"
+    Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="より新しい Ligrol が既にインストールされています。" />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="INSTALLFOLDER" Name="Ligrol" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="LigrolMenuFolder" Name="Ligrol" />
+    </StandardDirectory>
+
+    <Feature Id="Main">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.SourceDir)\**" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <Component
+      Id="StartMenuShortcut"
+      Directory="LigrolMenuFolder"
+      Guid="5C1B2A44-9E7D-4F30-A6C8-1B2D3E4F5A60">
+      <Shortcut
+        Id="LigrolShortcut"
+        Name="Ligrol"
+        Target="[INSTALLFOLDER]ligrol.exe"
+        WorkingDirectory="INSTALLFOLDER" />
+      <RemoveFolder Id="RemoveLigrolMenuFolder" On="uninstall" />
+      <RegistryValue
+        Root="HKCU"
+        Key="Software\MegaBlackLabel\Ligrol"
+        Name="installed"
+        Type="integer"
+        Value="1"
+        KeyPath="yes" />
+    </Component>
+  </Fragment>
+</Wix>

@@ -17,9 +17,11 @@ use gpui_kit::{
     App, AppContext as _, Context, Entity, FontWeight, IntoElement, ParentElement as _,
     ReadGlobal as _, Render, Styled as _, Subscription, Window, div,
 };
+#[cfg(target_os = "macos")]
+use gpui_updater_pre::{BundleVersion, CodeSigning};
 use gpui_updater_pre::{
-    EngineConfig, ErrorKind, GitHubSource, Ownership, OwnershipHints, UpdateStatus, Updater,
-    Verification, Version, current_install_root, install,
+    EngineConfig, ErrorKind, GitHubSource, Ownership, OwnershipHints, PackageManager, UpdateStatus,
+    Updater, Verification, Version, VersionBinding, current_install_root, install,
 };
 use ligrol_core::db;
 
@@ -38,6 +40,9 @@ const REPO_REPO: &str = "ligrol-app";
 /// リリースに同梱する集約チェックサム。
 const CHECKSUM_ASSET: &str = "SHA256SUMS";
 
+/// Microsoft Store の「ダウンロードと更新」ページ。
+const STORE_UPDATES_URL: &str = "ms-windows-store://downloadsandupdates";
+
 /// 起動後、最初の自動チェックまでの待ち時間（起動直後の重さを避ける）。
 #[cfg(not(test))]
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(30);
@@ -49,6 +54,8 @@ pub enum UpdateAction {
     Download,
     Cancel,
     Restart,
+    /// Microsoft Store の更新ページを開く（MSIX / Store 版）。
+    OpenStore,
 }
 
 impl UpdateAction {
@@ -59,6 +66,7 @@ impl UpdateAction {
             Self::Download => "ダウンロードしてインストール",
             Self::Cancel => "中止",
             Self::Restart => "再起動して更新",
+            Self::OpenStore => "Microsoft Store で更新",
         }
     }
 }
@@ -203,6 +211,17 @@ pub fn self_update_allowed(ownership: &Ownership) -> bool {
     ownership.is_self_update()
 }
 
+/// Microsoft Store が管理しているインストールか。
+pub fn is_store_managed(ownership: &Ownership) -> bool {
+    matches!(
+        ownership,
+        Ownership::Managed {
+            manager: PackageManager::MicrosoftStore,
+            ..
+        }
+    )
+}
+
 /// 自己更新できないときの案内（`SelfUpdate` では空）。
 pub fn ownership_note(ownership: &Ownership) -> String {
     match ownership {
@@ -258,9 +277,15 @@ pub fn source() -> GitHubSource {
 /// 鍵が無いビルド（開発版）はチェックサムだけを必須にする。
 pub fn engine_config() -> EngineConfig {
     let config = EngineConfig::new(current_version());
-    match option_env!("LIGROL_UPDATE_MINISIGN_KEY") {
+    // macOS は公証済み .app の版と署名 Team を検証する（差し替え後に壊れていないか）。
+    #[cfg(target_os = "macos")]
+    let config = config
+        .bundle_version(BundleVersion::MustMatch)
+        .code_signing(CodeSigning::MatchInstalled);
+    match option_env!("LIGROL_UPDATE_MINISIGN_KEY").filter(|key| !key.trim().is_empty()) {
         Some(key) => config
             .verification(Verification::Strict)
+            .version_binding(VersionBinding::Required)
             .minisign_public_key(key),
         None => config.verification(Verification::Checksum),
     }
@@ -308,7 +333,7 @@ impl Updates {
             _observe: observe,
         };
         #[cfg(not(test))]
-        if !demo {
+        if !demo && this.can_self_update() {
             this.schedule_auto_check(cx);
         }
         this
@@ -387,6 +412,16 @@ impl Render for Updates {
         let muted_fg = cx.theme().muted_foreground;
         let status = self.updater.read(cx).status().clone();
         let line = describe(&status);
+        let store_managed = is_store_managed(&self.ownership);
+        // Store 版は GitHub フィードを確認しないので、状態ではなく Store の案内を出す。
+        let (headline, detail) = if store_managed {
+            (
+                "Microsoft Store 版です".to_string(),
+                Some("更新は Microsoft Store の「ダウンロードと更新」から行います".to_string()),
+            )
+        } else {
+            (line.headline.clone(), line.detail.clone())
+        };
         let handle = cx.entity();
         let mut content = div().flex().flex_col().gap_3().child(
             div()
@@ -398,7 +433,7 @@ impl Render for Updates {
                     div()
                         .text_sm()
                         .font_weight(FontWeight::MEDIUM)
-                        .child(line.headline),
+                        .child(headline),
                 )
                 .child(
                     div()
@@ -407,7 +442,7 @@ impl Render for Updates {
                         .child(format!("現在 v{}", current_version())),
                 ),
         );
-        if let Some(detail) = line.detail {
+        if let Some(detail) = detail {
             content = content.child(div().text_xs().text_color(muted_fg).child(detail));
         }
 
@@ -417,6 +452,15 @@ impl Render for Updates {
                     .text_xs()
                     .text_color(muted_fg)
                     .child("サンプルモードでは更新しません"),
+            );
+        } else if store_managed {
+            content = content.child(
+                div().flex().flex_row().items_center().gap_2().child(
+                    Button::new("update-open-store")
+                        .cursor_pointer()
+                        .label(UpdateAction::OpenStore.label())
+                        .on_click(|_, _window, cx: &mut App| cx.open_url(STORE_UPDATES_URL)),
+                ),
             );
         } else if !self.can_self_update() {
             content = content.child(
@@ -438,7 +482,7 @@ impl Render for Updates {
             );
         }
 
-        if let Some(url) = self.release_url(cx) {
+        if !store_managed && let Some(url) = self.release_url(cx) {
             content = content.child(
                 div().flex().flex_row().child(
                     Button::new("update-release-notes")
@@ -452,13 +496,18 @@ impl Render for Updates {
         }
 
         if !self.demo {
-            content = content.child(div().text_xs().text_color(muted_fg).child(
-                if self.can_self_update() {
-                    "GitHub Releases から更新します"
-                } else {
-                    "このインストールはアプリ外で管理されています"
-                },
-            ));
+            content = content.child(
+                div()
+                    .text_xs()
+                    .text_color(muted_fg)
+                    .child(if store_managed {
+                        "Microsoft Store が更新を管理しています"
+                    } else if self.can_self_update() {
+                        "GitHub Releases から更新します"
+                    } else {
+                        "このインストールはアプリ外で管理されています"
+                    }),
+            );
         }
 
         content
@@ -468,7 +517,6 @@ impl Render for Updates {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui_updater_pre::PackageManager;
 
     #[test]
     fn check_is_due_after_one_day() {
@@ -551,6 +599,20 @@ mod tests {
             ownership_note(&Ownership::Packager("ストアから更新してください".into())),
             "ストアから更新してください"
         );
+    }
+
+    #[test]
+    fn store_installs_use_the_store_and_skip_self_update() {
+        assert_eq!(UpdateAction::OpenStore.label(), "Microsoft Store で更新");
+
+        let store = Ownership::managed(PackageManager::MicrosoftStore, None);
+        assert!(is_store_managed(&store));
+        assert!(!self_update_allowed(&store));
+
+        let brew = Ownership::managed(PackageManager::Homebrew, Some("ligrol".into()));
+        assert!(!is_store_managed(&brew));
+        assert!(!self_update_allowed(&brew));
+        assert!(!is_store_managed(&Ownership::SelfUpdate));
     }
 
     #[test]

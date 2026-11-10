@@ -65,6 +65,13 @@ jobs:
             VERSION="$(sed -n 's/^version *= *"\(.*\)".*/\1/p' Cargo.toml | head -1)"
           fi
           test -n "$VERSION"
+          # タグと Cargo.toml の version がズレたまま配布するのを防ぐ
+          # （アプリ内の現在バージョンと更新フィードの比較が壊れる）。
+          CARGO_VERSION="$(sed -n 's/^version *= *"\(.*\)".*/\1/p' Cargo.toml | head -1)"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "$VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::タグ(${VERSION}) と Cargo.toml(${CARGO_VERSION}) の version が一致しません"
+            exit 1
+          fi
           echo "v=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}"
 
@@ -85,6 +92,8 @@ jobs:
         env:
           LIGROL_GOOGLE_CLIENT_ID: ${{ vars.LIGROL_GOOGLE_CLIENT_ID }}
           LIGROL_GOOGLE_CLIENT_SECRET: ${{ secrets.LIGROL_GOOGLE_CLIENT_SECRET }}
+          # 更新フィードの minisign 公開鍵。設定するとアプリは Strict（署名必須）になる。
+          LIGROL_UPDATE_MINISIGN_KEY: ${{ vars.LIGROL_UPDATE_MINISIGN_KEY }}
         run: cargo build --release --locked --target ${{ matrix.target }} -p ligrol
 
       # PDFium (BSD-3-Clause / Apache-2.0) は mupdf (AGPL-3.0) の代替として
@@ -328,6 +337,13 @@ jobs:
           # ditto でバンドル構造（権限・リソース）を保ったまま zip 化する
           # --keepParent は付けない = zip 直下に .app と txt が並ぶ
           ditto -c -k "$STAGE" "ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip"
+          # 自動アップデート用の dmg（gpui-updater の macOS インストーラは dmg のみ）。
+          # 署名済み .app をそのまま入れる。dmg 自体にも署名する。
+          DMG="ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-macos.dmg"
+          hdiutil create -volname "Ligrol" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+          codesign --force --timestamp --keychain "$KC" --sign "$IDENTITY" "$DMG"
+          codesign --verify --verbose=2 "$DMG"
+          spctl -a -vv -t open --context context:primary-signature "$DMG" || true
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -359,6 +375,31 @@ jobs:
             "crates/app/assets/third-party/pdfium-LICENSE.txt"
           ) -DestinationPath "ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip"
 
+          # ライセンス全文を配布ディレクトリにも置く（MSI / MSIX が同梱する）。
+          $releaseDir = "target/${{ matrix.target }}/release"
+          Copy-Item LICENSE, "crates/app/assets/third-party/lucide-LICENSE.txt", "crates/app/assets/third-party/pdfium-LICENSE.txt" $releaseDir
+
+          # 直販用: 署名なしの per-user MSI。更新はアプリ内の gpui-updater が行う。
+          $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
+          if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
+            dotnet tool install --global wix --version 5.0.2 | Out-Null
+            $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
+          }
+          $msi = "ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-windows.msi"
+          wix build -arch x64 -d Version="${{ steps.ver.outputs.v }}" -d SourceDir="$releaseDir" packaging/windows/Ligrol.wxs -o $msi
+          if ($LASTEXITCODE -ne 0) { throw "MSI の作成に失敗しました" }
+
+          # Store 用: 署名なしの MSIX（Store が再署名する）。
+          $msix = "ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-windows.msix"
+          $publisher = "${{ vars.MSIX_PUBLISHER }}"
+          if ([string]::IsNullOrWhiteSpace($publisher)) { $publisher = "CN=MegaBlackLabel" }
+          $identity = "${{ vars.MSIX_IDENTITY_NAME }}"
+          if ([string]::IsNullOrWhiteSpace($identity)) { $identity = "MegaBlackLabel.Ligrol" }
+          & pwsh -NoProfile -File packaging/windows/make-msix.ps1 `
+            -Version "${{ steps.ver.outputs.v }}" -SourceDir $releaseDir -Output $msix `
+            -Publisher $publisher -IdentityName $identity
+          if ($LASTEXITCODE -ne 0) { throw "MSIX の作成に失敗しました" }
+
       # 配布物の部品表（CycloneDX JSON）を作る。`Cargo.lock` と `cargo metadata` の両方から
       # 作るので、対象 triple と有効 feature に合った依存が入る（Rust の依存だけ。同梱する
       # `pdfium.dll` 等のネイティブ部品は別途 SHA256 で固定している）。
@@ -380,17 +421,21 @@ jobs:
           echo "$sbom を作成した（$(wc -c < "$sbom") bytes）"
 
       # 配布物のハッシュを併せて発行する（利用者が取得物を検証できるようにする）。
-      - name: Write artifact checksum
+      - name: Write artifact checksums
         shell: bash
         run: |
           set -euo pipefail
-          zip="ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip"
-          if command -v sha256sum > /dev/null 2>&1; then
-            sha256sum "$zip" > "$zip.sha256"
-          else
-            shasum -a 256 "$zip" > "$zip.sha256"
-          fi
-          cat "$zip.sha256"
+          shopt -s nullglob
+          files=(ligrol-*.zip ligrol-*.msi ligrol-*.dmg ligrol-*.msix)
+          test "${#files[@]}" -gt 0
+          for file in "${files[@]}"; do
+            if command -v sha256sum > /dev/null 2>&1; then
+              sha256sum "$file" > "$file.sha256"
+            else
+              shasum -a 256 "$file" > "$file.sha256"
+            fi
+            cat "$file.sha256"
+          done
 
       # 「どのワークフローが・どのコミットで・この zip を作ったか」を署名つきで証明する。
       # 署名は Sigstore の鍵レス（OIDC の短期証明書）。利用者は次のように検証できる:
@@ -420,6 +465,12 @@ jobs:
             ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip
             ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip.sha256
             ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.cdx.json
+            ligrol-*.msi
+            ligrol-*.msi.sha256
+            ligrol-*.msix
+            ligrol-*.msix.sha256
+            ligrol-*.dmg
+            ligrol-*.dmg.sha256
           if-no-files-found: error
 
       # 署名済み .app を退避する。公証の判定が遅れて時間切れになった場合でも、あとから
@@ -487,17 +538,49 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
-          # 配布する zip だけを落とす。退避用の signed-app-* はリリースに添付しない
-          # （files: artifacts/**/*.zip が両方にマッチしてしまうため）
+          # 配布する zip / msi / msix / dmg を落とす。退避用の signed-app-* は
+          # リリースに添付しない（pattern: ligrol-* で除外される）。
           pattern: ligrol-*
 
-      # 全プラットフォーム分を 1 ファイルにまとめる（リリース本文から参照しやすくする）。
-      - name: Combine checksums
+      # 更新フィードが読む集約チェックサム。アセット名はリリース上のファイル名と一致させる。
+      - name: Generate SHA256SUMS
         shell: bash
         run: |
           set -euo pipefail
-          find artifacts -name '*.zip.sha256' -exec cat {} + | sort -k2 > SHA256SUMS.txt
-          cat SHA256SUMS.txt
+          : > SHA256SUMS
+          while IFS= read -r -d '' file; do
+            hash="$(sha256sum "$file" | cut -d' ' -f1)"
+            printf '%s  %s\n' "$hash" "$(basename "$file")" >> SHA256SUMS
+          done < <(find artifacts -type f \( -name '*.zip' -o -name '*.msi' -o -name '*.dmg' -o -name '*.msix' \) -print0)
+          sort -k2 SHA256SUMS -o SHA256SUMS
+          cat SHA256SUMS
+
+      # 直販の更新物（MSI / dmg）に minisign 署名を付ける。
+      # アプリは公開鍵を埋め込んだビルドで Strict（署名 + SHA256）になる。
+      - name: Sign update artifacts (minisign)
+        shell: bash
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_SECRET_KEY:-}" ]; then
+            echo "::error::MINISIGN_SECRET_KEY（base64 の minisign 秘密鍵）が未設定です"
+            exit 1
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq minisign
+          printf '%s' "$MINISIGN_SECRET_KEY" | base64 --decode > "$RUNNER_TEMP/minisign.key"
+          chmod 600 "$RUNNER_TEMP/minisign.key"
+          VERSION="${GITHUB_REF_NAME#v}"
+          count=0
+          while IFS= read -r -d '' file; do
+            minisign -S -s "$RUNNER_TEMP/minisign.key" -m "$file" -t "version:${VERSION}"
+            test -f "$file.minisig"
+            count=$((count + 1))
+          done < <(find artifacts -type f \( -name '*.msi' -o -name '*.dmg' \) -print0)
+          rm -f "$RUNNER_TEMP/minisign.key"
+          test "$count" -gt 0
+          echo "署名した更新物: ${count} 件"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -506,6 +589,14 @@ jobs:
           files: |
             artifacts/**/*.zip
             artifacts/**/*.zip.sha256
+            artifacts/**/*.msi
+            artifacts/**/*.msi.sha256
+            artifacts/**/*.msi.minisig
+            artifacts/**/*.msix
+            artifacts/**/*.msix.sha256
+            artifacts/**/*.dmg
+            artifacts/**/*.dmg.sha256
+            artifacts/**/*.dmg.minisig
             artifacts/**/*.cdx.json
-            SHA256SUMS.txt
+            SHA256SUMS
           generate_release_notes: true

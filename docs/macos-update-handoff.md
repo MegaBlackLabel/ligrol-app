@@ -35,8 +35,10 @@ Windows 側の土台はこのリポジトリで検証済み。**macOS は未検�
 | 項目 | 決定 |
 |---|---|
 | 使うクレート | `gpui-updater-pre`（gpui-kit の `gpui-pre 0.3.9` と同一パッケージで型が一致することを Windows で確認済み） |
-| Windows 配布 | MSI/インストーラ化は OK。Store へは **MSI/EXE 提出**（Store は既存ユーザーに更新を配らないため、アプリ内更新が前提） |
-| Windows 署名 | 後で決める（gpui-updater の Authenticode 検証は「インストール済み exe が署名済みのときだけ」走る） |
+| Windows 配布 | **Store は MSIX（メイン。Store が再署名するので証明書不要）**。Store を使わない人向けに **署名なし MSI**（per-user、`%LOCALAPPDATA%\Ligrol`）を直販 |
+| Windows 署名 | **いまは署名しない**（MSIX は Store 再署名 / 直販 MSI は SmartScreen 警告を README で案内）。将来 SmartScreen を消したくなったら IV 証明書（約 $129/年）or Certum OSS クラウド（€49） |
+| Store 版の更新 | 自己更新は不可。起動時に Store の更新を確認し、`ms-windows-store://downloadsandupdates`（将来は `StoreContext`）で促す。**GitHub フィードの自動チェックは Store 版では止める** |
+| 直販 Windows の更新 | `gpui-updater` の **`.msi`** 経路。`updates.rs` の Windows フィルタは `.msi` のまま |
 | Homebrew | **アプリ側ゲート**。`Caskroom` を検出したら自己更新せず `brew upgrade ligrol` を案内。cask に `auto_updates` は付けない |
 | macOS 配布物 | gpui-updater の macOS インストーラは `.dmg` のみ。zip は残しつつ dmg を追加する |
 
@@ -155,7 +157,8 @@ gpui-kit の Auto Update ガイドにある表をそのまま使う:
 
 ## 7. 注意
 
-- リリースタグ `vX.Y.Z` と `Cargo.toml` の version が一致していること（現状 v0.2.13 と 0.3.0 がズレている）。リリース CI に一致チェックを入れる（未実装）
+- リリースタグ `vX.Y.Z` と `Cargo.toml` の version が一致していること。リリース CI の
+  `Compute version` が一致を検証して落とす（実装済み）
 - `release.yml` の macOS 署名・公証の手順は触らない（証明書・公証の順序が繊細）
 - 依存を足したら `mise run licenses` で `crates/app/assets/third-party/licenses.json` を再生成し、
   `licenses_json_matches_cargo_lock` を通す
@@ -173,3 +176,78 @@ gpui-kit の Auto Update ガイドにある表をそのまま使う:
     `Verification::Strict`（署名 + SHA-256）になる
   - `LIGROL_UPDATE_EXPLANATION`（任意）: パッケージ管理者が「このビルドはこう更新する」と
     示す文言。設定すると `Ownership::Packager` として自己更新を止める
+- リリース CI の secret / variable:
+  - `MINISIGN_SECRET_KEY`（secret）: minisign 秘密鍵ファイルを **base64** にしたもの。
+    `minisign -G -W -p update.pub -s update.key` で作る（`-W` = パスワードなし。CI で
+    プロンプトが出ないようにする）。`base64 -w0 update.key` を登録する。
+    公開鍵は `LIGROL_UPDATE_MINISIGN_KEY`（variable）に、公開鍵ファイルの中身
+    （`minisign -G` が表示する文字列）を入れる
+  - `MSIX_PUBLISHER`（variable）: Partner Center の Publisher（例 `CN=...`）。
+    未設定だと `CN=MegaBlackLabel` で MSIX を作る（Store 提出時は必ず設定する）
+  - `MSIX_IDENTITY_NAME`（variable）: Partner Center で予約したパッケージ名
+    （例 `MegaBlackLabel.Ligrol`）。未設定だとその既定値になる
+- 直販 Windows は **署名なし MSI**。SmartScreen の警告が出るので README / 配布ページに
+  「詳細情報 → 実行」の手順を書く。更新の検証は minisign + SHA256SUMS で行う
+
+## 8. 次の作業（優先順）
+
+優先度の高い順。各項目は独立して PR にできる。
+
+1. **リリース CI に配布物を足す**（`.github/workflows/release.yml`）— **実装済み（要 CI 実行確認）**
+   - macOS: 公証・staple 後に `.dmg` を生成（§5.1）。ファイル名は `ligrol-<ver>-<arch>-macos.dmg`
+   - Windows Store: **MSIX**（`packaging/windows/AppxManifest.xml.in` + `make-msix.ps1`）。
+     Store が再署名するので証明書は不要。**ローカルにサイドロードするときだけ**
+     LocalMachine\TrustedPeople への証明書登録が要る
+   - Windows 直販: **MSI**（`packaging/windows/Ligrol.wxs`、per-user で `%LOCALAPPDATA%\Ligrol`）。署名なし
+   - 配布物の名前は `crates/app/src/updates.rs` の `asset_patterns()` に合わせる
+     （Windows 直販 = `windows` + `.msi` / macOS = `macos` + `.dmg` + アーキテクチャ）
+2. **更新フィードの署名と版一致** — **実装済み（鍵の登録が必要）**
+   - release に `SHA256SUMS` と、MSI / dmg の `.minisig` を追加（`version:<semver>` 付き）
+   - minisign 秘密鍵は CI secret（`MINISIGN_SECRET_KEY`）、公開鍵は
+     `LIGROL_UPDATE_MINISIGN_KEY` としてビルドに埋め込む
+   - タグ `vX.Y.Z` と `Cargo.toml` の version の一致チェックを `release.yml` の
+     `Compute version` に追加済み
+3. **Windows の実機テスト**
+   - MSI をインストール → アプリ内更新 → 再起動後 `ligrol.exe` が新しい版になっていること
+   - Store 版（MSIX）: 起動時に Store の更新誘導が出て、`ms-windows-store://downloadsandupdates` が開くこと。
+     Store 版では GitHub フィードの自動チェックをしないこと
+   - `remove_leftovers()` は **素の `.exe` 更新のときだけ**必要。MSI 運用なら不要
+   - Homebrew / winget / Scoop 相当のパスに置いたときに自己更新ボタンが出ないこと
+4. **macOS の実機テスト**（§6 の表）
+   - dmg 経由の更新、`/Applications` の権限、標準ユーザー、brew cask のゲート
+   - `Ligrol.app` を Homebrew cask で入れた状態で `brew upgrade ligrol` の案内が出ること
+5. **ストア / cask への登録**
+   - Microsoft Store: **MSIX 提出**（Store 再署名なので証明書不要。`pdfium.dll` も個別署名不要）。
+     自己更新は不可なので、Store の更新誘導を入れる
+   - Homebrew: cask を追加（dmg の URL と sha256、`auto_updates` は付けない）
+6. **任意（後回し）**
+   - メニューに「アップデートを確認」を足す（今は設定画面のみ）
+   - Sparkle ドライバ（標準ユーザーも `/Applications` を更新できる）
+   - delta 更新（`gpui-updater-pre` の `delta` feature）
+
+## 9. Windows 署名の選択肢（2026-11 時点）
+
+決定: **いまは署名しない**。Windows は **Store = MSIX（Store 再署名）**、
+直販は **署名なし MSI**。将来 SmartScreen 警告を消したくなったら IV 証明書（約 $129/年）
+or Certum OSS クラウド（€49）を検討する。発行元に個人の実名が出ることは許容。
+
+| 選択肢 | 費用 | 日本の個人 | Store MSI/EXE | メモ |
+|---|---|---|---|---|
+| Store MSIX（Store 再署名） | 無料 | ○ | MSIX のみ | MSIX は自己更新不可（アプリはゲート済み） |
+| Azure Artifact Signing（旧 Trusted Signing） | 約 $9.99/月 | **✗** | ✗ | 個人は米・加のみ、法人も米/加/EU/英のみ |
+| OV 証明書 | $150〜300/年 | 法人向け | △ | 法人名が出る |
+| **IV 証明書**（SSL.com 等） | **$129/年** | **○** | △ | 実名が出る。eSigner（クラウド署名）か YubiKey（$379） |
+| EV 証明書 | $400+/年 | 法人のみ | △ | 2024 年以降 SmartScreen の即時回避なし |
+| SignPath Foundation（OSS 無料） | 無料 | ○（審査） | △ | 発行元は SignPath Foundation。手動承認・ポリシー・役割・MFA が条件 |
+| 署名なし | 無料 | ○ | ✗ | SmartScreen の強い警告 |
+
+注意:
+
+- Store の MSI/EXE 要件は「インストーラと**含まれるすべての PE ファイル**の署名」。
+  うちは `ligrol.exe` + `pdfium.dll` の 2 つなので、**pdfium の静的リンク**（exe 1 本）か
+  DLL も署名するかの判断が要る。SignPath 規約では上流バイナリを自分の証明書で署名できないため、
+  静的リンクが前提になる
+- IV 証明書は政府 ID + 自撮り + 電話確認。eSigner は別途サブスクで CI から署名できる
+  （YubiKey をランナーに挿さない）
+- 証明書を切り替えると Authenticode の検証（`CodeSigning::MatchInstalled`）が効くため、
+  署名を始めたら**同じ CN で継続**するか、`CodeSigning::Publisher` を固定する

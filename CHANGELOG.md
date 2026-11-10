@@ -6,6 +6,10 @@
 
 ### Added
 
+- **配布物と更新フィード**: Windows は Store 用 **MSIX** と直販用 **MSI**、macOS は **dmg** を
+  リリース CI で生成する。直販の更新物（MSI / dmg）には `SHA256SUMS` と minisign 署名を付け、
+  タグと `Cargo.toml` の version 一致も CI で検証する。Store 版は GitHub フィードを使わず、
+  設定画面の「Microsoft Store で更新」から Store の更新ページを開く。
 - **自動アップデート（設定画面）**: 現在のバージョンと更新の状態を設定画面に出し、
   起動 30 秒後と以降 24 時間おきに GitHub Releases を確認する（手動確認も可）。
   検証は SHA-256 + minisign（公開鍵を埋め込んだビルドは fail-closed）。Homebrew などの
