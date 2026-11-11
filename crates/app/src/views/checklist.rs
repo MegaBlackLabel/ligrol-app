@@ -7,12 +7,12 @@ use std::sync::Arc;
 
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::scroll::ScrollableElement as _;
+use gpui_kit::component::scroll::{ScrollableElement as _, Scrollbar};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName};
 use gpui_kit::{
-    Context, FontWeight, IntoElement, ParentElement, Render, RenderImage, SharedString,
-    StyledImage, Window, div, img, px,
+    Context, FontWeight, IntoElement, ParentElement, Render, RenderImage, ScrollHandle,
+    SharedString, StyledImage, Window, div, img, px,
 };
 use gpui_kit::{
     InteractiveElement as _, ReadGlobal as _, StatefulInteractiveElement as _, Styled as _,
@@ -138,6 +138,8 @@ pub struct ChecklistView {
     circle_map_cells: HashMap<String, HashMap<(String, u32), CellRect>>,
     /// 地図クリックで選択中のチェックリスト項目
     selected_item_id: Option<String>,
+    /// チェックリストのスクロール位置（地図クリック時の自動スクロールに使う）
+    checklist_scroll_handle: ScrollHandle,
 }
 
 /// 地図セルの矩形（画像ピクセル座標）。
@@ -200,6 +202,7 @@ impl ChecklistView {
             circle_map_zoom_animation_generation: 0,
             circle_map_cells: HashMap::new(),
             selected_item_id: None,
+            checklist_scroll_handle: ScrollHandle::new(),
         };
         view.reload(cx);
         view
@@ -849,6 +852,9 @@ impl ChecklistView {
             return;
         };
         self.page = index / 50;
+        // 子 0 はテーブルのヘッダー。選択行が表示範囲外なら最小限スクロールする。
+        self.checklist_scroll_handle
+            .scroll_to_item(index % 50 + 1);
         self.select_checklist_item(&item.id, cx);
     }
 
@@ -1892,6 +1898,7 @@ impl ChecklistView {
         // （押しても何も起きないより、押せないほうが分かりやすい）。
         let demo = AppState::global(cx).demo;
         let handle = cx.entity();
+        let checklist_scroll_handle = self.checklist_scroll_handle.clone();
         let events = self.events.clone();
         let sort_field = self.sort_field;
         let sort_ascending = self.sort_ascending;
@@ -2467,24 +2474,37 @@ impl ChecklistView {
                         div()
                             .flex_1()
                             .min_h_0()
-                            .overflow_y_scrollbar()
-                            .rounded_lg()
-                            .border_1()
-                            .border_color(border)
+                            .relative()
                             .child(
                                 div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap_3()
-                                    .p_3()
-                                    .bg(muted.opacity(0.5))
-                                    .child(div().w(px(80.0)).text_sm().font_weight(FontWeight::MEDIUM).child("表紙"))
-                                    .child(div().w(px(140.0)).text_sm().font_weight(FontWeight::MEDIUM).child("スペース名/サークル名"))
-                                    .child(div().flex_1().text_sm().font_weight(FontWeight::MEDIUM).child("書籍名/価格"))
-                                    .child(div().w(px(80.0))),
+                                    .id("checklist-list")
+                                    .size_full()
+                                    .track_scroll(&checklist_scroll_handle)
+                                    .overflow_y_scroll()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(border)
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_row()
+                                            .items_center()
+                                            .gap_3()
+                                            .p_3()
+                                            .bg(muted.opacity(0.5))
+                                            .child(div().w(px(80.0)).text_sm().font_weight(FontWeight::MEDIUM).child("表紙"))
+                                            .child(div().w(px(140.0)).text_sm().font_weight(FontWeight::MEDIUM).child("スペース名/サークル名"))
+                                            .child(div().flex_1().text_sm().font_weight(FontWeight::MEDIUM).child("書籍名/価格"))
+                                            .child(div().w(px(80.0))),
+                                    )
+                                    .children(paginated.iter().map(|item| item_row(item).into_any_element())),
                             )
-                            .children(paginated.iter().map(|item| item_row(item).into_any_element()))
+                            .child(
+                                div()
+                                    .absolute()
+                                    .inset_0()
+                                    .child(Scrollbar::vertical(&checklist_scroll_handle)),
+                            )
                             .into_any_element()
                     })
                     // ページネーション
@@ -3241,6 +3261,7 @@ mod tests {
             circle_map_zoom_animation_generation: 0,
             circle_map_cells: HashMap::new(),
             selected_item_id: None,
+            checklist_scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -3878,6 +3899,109 @@ mod tests {
         assert!(
             (pan.y - (500.0 - 910.0)).abs() < 0.5,
             "縦が中央に来ていない: {pan:?}"
+        );
+    }
+
+    /// テスト用: チェックリストをウィンドウ内の固定領域に閉じ込める。
+    /// 直接 Root に置くと高さが内容に合わせて伸び、リストがスクロールしない。
+    struct BoundedChecklist(gpui_kit::Entity<ChecklistView>);
+
+    impl Render for BoundedChecklist {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut Context<Self>,
+        ) -> impl IntoElement {
+            div()
+                .w(px(1200.0))
+                .h(px(1000.0))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_hidden()
+                        .child(self.0.clone()),
+                )
+        }
+    }
+
+    /// 地図で色付きセルを選ぶと、チェックリストの該当行が見える位置までスクロールする。
+    #[gpui_kit::test]
+    async fn selecting_map_cell_scrolls_the_checklist_to_the_row(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::component::init);
+        cx.update(AppState::init_test);
+        let mut items: Vec<CheckedItem> = (0..150)
+            .map(|index| test_item(&format!("item-{index:03}"), index as i64))
+            .collect();
+        items[99].space_number = "あ99".into();
+        let view = view_with_circle_map(
+            items,
+            HashMap::from([(
+                ("あ".to_string(), 99),
+                CellRect {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 2000.0,
+                    y1: 1000.0,
+                },
+            )]),
+        );
+        let view = cx.new(|_| view);
+        let wrapper = cx.new(|_| BoundedChecklist(view.clone()));
+        let window = cx.open_window(
+            gpui_kit::Size {
+                width: gpui_kit::px(1200.0),
+                height: gpui_kit::px(1000.0),
+            },
+            |window, cx| gpui_kit::component::Root::new(wrapper, window, cx),
+        );
+        let visual = gpui_kit::VisualTestContext::from_window(*window, cx).into_mut();
+        let draw = |visual: &mut gpui_kit::VisualTestContext| {
+            visual.update(|window, cx| {
+                let arena_clear = window.draw(cx);
+                arena_clear.clear(cx);
+            });
+        };
+        draw(visual);
+        let before = view.read_with(cx, |v, _| {
+            v.checklist_scroll_handle.offset().y.as_f32()
+        });
+        assert!(before < 1.0, "初期スクロール位置が 0 でない: {before}");
+
+        cx.update(|cx| {
+            view.update(cx, |this, cx| {
+                this.select_circle_map_cell(
+                    gpui_kit::point(gpui_kit::px(10.0), gpui_kit::px(10.0)),
+                    cx,
+                );
+            })
+        });
+        // scroll_to_item は prepaint で適用される。数フレーム描画して反映を待つ。
+        for _ in 0..3 {
+            draw(visual);
+        }
+        let (selected, page, offset, top, bottom) = view.read_with(cx, |v, _| {
+            (
+                v.selected_item_id.clone(),
+                v.page,
+                v.checklist_scroll_handle.offset().y.as_f32(),
+                v.checklist_scroll_handle.top_item(),
+                v.checklist_scroll_handle.bottom_item(),
+            )
+        });
+        assert_eq!(
+            selected.as_deref(),
+            Some("item-099"),
+            "地図クリックで行が選択されていない"
+        );
+        assert_eq!(page, 1, "選択行のページへ移動していない");
+        assert!(offset < -1.0, "選択行までスクロールしていない: {offset}");
+        // 子 0 はヘッダー。ページ 1 の行 49 は子 50。
+        assert!(
+            top <= 50 && bottom >= 50,
+            "選択行が表示範囲に入っていない: top={top} bottom={bottom}"
         );
     }
 
