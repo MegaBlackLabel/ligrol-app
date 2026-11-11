@@ -123,6 +123,17 @@ pub struct ChecklistView {
     circle_map_click_moved: bool,
     /// 表示中の地図画像の画面上の bounds（クリック位置→セル判定に使う）
     circle_map_bounds: std::rc::Rc<std::cell::Cell<Option<gpui_kit::Bounds<gpui_kit::Pixels>>>>,
+    /// 表示中の地図ビューポートの画面上の bounds（ホイール位置→拡大中心に使う）
+    circle_map_viewport_bounds:
+        std::rc::Rc<std::cell::Cell<Option<gpui_kit::Bounds<gpui_kit::Pixels>>>>,
+    /// ホイール 1 ジェスチャー中に中央へ寄せる画像座標と、そのときの画面位置
+    circle_map_wheel_anchor: Option<(gpui_kit::Point<f32>, gpui_kit::Point<f32>)>,
+    /// ホイールズームの目標倍率（アニメーション中のみ）
+    circle_map_zoom_target: Option<f32>,
+    /// ホイールズームの目標 pan（アニメーション中のみ）
+    circle_map_pan_target: Option<gpui_kit::Point<f32>>,
+    /// ズームアニメーションの世代（新しい操作で古いループを止める）
+    circle_map_zoom_animation_generation: u64,
     /// イベント slug → 色付きセルの矩形（画像ピクセル座標）
     circle_map_cells: HashMap<String, HashMap<(String, u32), CellRect>>,
     /// 地図クリックで選択中のチェックリスト項目
@@ -182,6 +193,11 @@ impl ChecklistView {
             circle_map_last_click: None,
             circle_map_click_moved: false,
             circle_map_bounds: std::rc::Rc::new(std::cell::Cell::new(None)),
+            circle_map_viewport_bounds: std::rc::Rc::new(std::cell::Cell::new(None)),
+            circle_map_wheel_anchor: None,
+            circle_map_zoom_target: None,
+            circle_map_pan_target: None,
+            circle_map_zoom_animation_generation: 0,
             circle_map_cells: HashMap::new(),
             selected_item_id: None,
         };
@@ -694,6 +710,8 @@ impl ChecklistView {
         self.circle_map_pan_velocity = gpui_kit::Point::new(0.0, 0.0);
         self.circle_map_inertia_generation = self.circle_map_inertia_generation.wrapping_add(1);
         self.circle_map_last_click = None;
+        self.circle_map_wheel_anchor = None;
+        self.stop_circle_map_zoom_animation();
     }
 
     /// 選択中イベントの配置図の原寸（px）。
@@ -836,12 +854,166 @@ impl ChecklistView {
 
     /// 地図モードの倍率を掛け算で変更する（ホイール・ボタン共用）。
     fn zoom_circle_map(&mut self, factor: f32, cx: &mut Context<Self>) {
-        self.circle_map_zoom =
-            (self.circle_map_zoom * factor).clamp(CIRCLE_MAP_MIN_ZOOM, CIRCLE_MAP_MAX_ZOOM);
+        self.zoom_circle_map_at(
+            factor,
+            gpui_kit::Point::new(
+                CIRCLE_MAP_VIEWPORT_WIDTH / 2.0,
+                CIRCLE_MAP_VIEWPORT_HEIGHT / 2.0,
+            ),
+            cx,
+        );
+    }
+
+    /// ビューポート内の `anchor` を固定したまま倍率を変更する。
+    ///
+    /// 画面座標 = (viewport - display)/2 + pan + 画像座標*zoom なので、
+    /// anchor 直下の画像座標が変わらない pan を逆算する。
+    fn zoom_circle_map_at(
+        &mut self,
+        factor: f32,
+        anchor: gpui_kit::Point<f32>,
+        cx: &mut Context<Self>,
+    ) {
+        self.circle_map_wheel_anchor = None;
+        self.stop_circle_map_zoom_animation();
+        let old_zoom = self.circle_map_zoom;
+        let new_zoom = (old_zoom * factor).clamp(CIRCLE_MAP_MIN_ZOOM, CIRCLE_MAP_MAX_ZOOM);
+        if (new_zoom - old_zoom).abs() < f32::EPSILON {
+            return;
+        }
+        let ratio = new_zoom / old_zoom;
+        let offset_x = anchor.x - CIRCLE_MAP_VIEWPORT_WIDTH / 2.0;
+        let offset_y = anchor.y - CIRCLE_MAP_VIEWPORT_HEIGHT / 2.0;
+        self.circle_map_pan.x = self.circle_map_pan.x * ratio + offset_x * (1.0 - ratio);
+        self.circle_map_pan.y = self.circle_map_pan.y * ratio + offset_y * (1.0 - ratio);
+        self.circle_map_zoom = new_zoom;
         self.circle_map_fit = false;
         self.circle_map_pan_velocity = gpui_kit::Point::new(0.0, 0.0);
         self.circle_map_inertia_generation = self.circle_map_inertia_generation.wrapping_add(1);
         self.clamp_circle_map_pan();
+        cx.notify();
+    }
+
+    /// 実行中のホイールズームアニメーションを止める。
+    fn stop_circle_map_zoom_animation(&mut self) {
+        self.circle_map_zoom_target = None;
+        self.circle_map_pan_target = None;
+        self.circle_map_zoom_animation_generation = self
+            .circle_map_zoom_animation_generation
+            .wrapping_add(1);
+    }
+
+    /// ホイール 1 ジェスチャー中に固定する画像座標を返す。
+    ///
+    /// 同じ画面位置なら、最初に掴んだ地点を再利用する。毎回その時のカーソル下を
+    /// 拾うと、中央へ寄せた次のイベントで別の地点を掴んでしまい、ズームのたびに
+    /// 地図が流れる。マウスを動かした時点で新しい地点を掴み直す。
+    fn wheel_zoom_anchor(
+        &mut self,
+        local_mouse: gpui_kit::Point<f32>,
+        width: f32,
+        height: f32,
+    ) -> gpui_kit::Point<f32> {
+        let reuse = self.circle_map_wheel_anchor.filter(|(screen, _)| {
+            (screen.x - local_mouse.x).abs() <= 4.0
+                && (screen.y - local_mouse.y).abs() <= 4.0
+        });
+        if let Some((_, anchor)) = reuse {
+            return anchor;
+        }
+        let zoom = self.circle_map_zoom;
+        let anchor = gpui_kit::Point::new(
+            (local_mouse.x
+                - (CIRCLE_MAP_VIEWPORT_WIDTH - width * zoom) / 2.0
+                - self.circle_map_pan.x)
+                / zoom,
+            (local_mouse.y
+                - (CIRCLE_MAP_VIEWPORT_HEIGHT - height * zoom) / 2.0
+                - self.circle_map_pan.y)
+                / zoom,
+        );
+        self.circle_map_wheel_anchor = Some((local_mouse, anchor));
+        anchor
+    }
+
+    /// ホイールの拡大縮小。マウス直下の地点をビューポート中央へ寄せる。
+    ///
+    /// 目標値だけを更新し、16ms ごとに現在値を目標へ寄せる。1 ノッチで
+    /// 大きく pan が飛ぶとカクつくため、pan と倍率を同時に補間する。
+    fn zoom_circle_map_to_wheel_anchor(
+        &mut self,
+        local_mouse: gpui_kit::Point<f32>,
+        viewport_center: gpui_kit::Point<f32>,
+        factor: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((width, height)) = self.circle_map_image_size() else {
+            return;
+        };
+        let base_zoom = self.circle_map_zoom_target.unwrap_or(self.circle_map_zoom);
+        let target_zoom = (base_zoom * factor).clamp(CIRCLE_MAP_MIN_ZOOM, CIRCLE_MAP_MAX_ZOOM);
+        if (target_zoom - base_zoom).abs() < f32::EPSILON {
+            return;
+        }
+        let anchor = self.wheel_zoom_anchor(local_mouse, width, height);
+        let max_x = width * target_zoom / 2.0;
+        let max_y = height * target_zoom / 2.0;
+        let target_pan = gpui_kit::Point::new(
+            (viewport_center.x
+                - (CIRCLE_MAP_VIEWPORT_WIDTH - width * target_zoom) / 2.0
+                - anchor.x * target_zoom)
+                .clamp(-max_x, max_x),
+            (viewport_center.y
+                - (CIRCLE_MAP_VIEWPORT_HEIGHT - height * target_zoom) / 2.0
+                - anchor.y * target_zoom)
+                .clamp(-max_y, max_y),
+        );
+        self.circle_map_zoom_target = Some(target_zoom);
+        self.circle_map_pan_target = Some(target_pan);
+        self.circle_map_fit = false;
+        self.circle_map_pan_velocity = gpui_kit::Point::new(0.0, 0.0);
+        self.circle_map_inertia_generation = self.circle_map_inertia_generation.wrapping_add(1);
+        let generation = self
+            .circle_map_zoom_animation_generation
+            .wrapping_add(1);
+        self.circle_map_zoom_animation_generation = generation;
+        let handle = cx.entity();
+        cx.spawn(async move |_window, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(16))
+                    .await;
+                let done = handle.update(cx, |this, cx| {
+                    if this.circle_map_zoom_animation_generation != generation {
+                        return true;
+                    }
+                    let (Some(target_zoom), Some(target_pan)) =
+                        (this.circle_map_zoom_target, this.circle_map_pan_target)
+                    else {
+                        return true;
+                    };
+                    const SMOOTHING: f32 = 0.35;
+                    this.circle_map_zoom += (target_zoom - this.circle_map_zoom) * SMOOTHING;
+                    this.circle_map_pan.x += (target_pan.x - this.circle_map_pan.x) * SMOOTHING;
+                    this.circle_map_pan.y += (target_pan.y - this.circle_map_pan.y) * SMOOTHING;
+                    let close = (target_zoom - this.circle_map_zoom).abs() < 0.0005
+                        && (target_pan.x - this.circle_map_pan.x).abs() < 0.3
+                        && (target_pan.y - this.circle_map_pan.y).abs() < 0.3;
+                    if close {
+                        this.circle_map_zoom = target_zoom;
+                        this.circle_map_pan = target_pan;
+                        this.circle_map_zoom_target = None;
+                        this.circle_map_pan_target = None;
+                    }
+                    cx.notify();
+                    close
+                });
+                if done {
+                    break;
+                }
+            }
+        })
+        .detach();
         cx.notify();
     }
 
@@ -901,6 +1073,8 @@ impl ChecklistView {
         self.circle_map_pan = gpui_kit::Point::new(0.0, 0.0);
         self.circle_map_pan_velocity = gpui_kit::Point::new(0.0, 0.0);
         self.circle_map_inertia_generation = self.circle_map_inertia_generation.wrapping_add(1);
+        self.circle_map_wheel_anchor = None;
+        self.stop_circle_map_zoom_animation();
         cx.notify();
     }
 
@@ -1538,7 +1712,16 @@ impl ChecklistView {
                 .rounded(px(2.0))
                 .into_any_element()
         });
+        let viewport_bounds = self.circle_map_viewport_bounds.clone();
         div()
+            .w_full()
+            .on_children_prepainted(move |children, _window, _cx| {
+                if let Some(child) = children.first() {
+                    viewport_bounds.set(Some(*child));
+                }
+            })
+            .child(
+                div()
             .on_children_prepainted({
                 let bounds = self.circle_map_bounds.clone();
                 move |children, _window, _cx| {
@@ -1575,6 +1758,8 @@ impl ChecklistView {
                         this.zoom_circle_map(2.0, cx);
                     } else {
                         this.circle_map_drag_start = Some(position);
+                        this.circle_map_wheel_anchor = None;
+                        this.stop_circle_map_zoom_animation();
                         this.circle_map_click_moved = false;
                         this.circle_map_pan_velocity = gpui_kit::Point::new(0.0, 0.0);
                         this.circle_map_inertia_generation =
@@ -1627,8 +1812,39 @@ impl ChecklistView {
                 };
                 // 1 ノッチ（3 行）で約 6%。以前は 1 ノッチで 23% 拡大していた。
                 let factor = 1.02_f32.powf(lines.clamp(-6.0, 6.0));
+                let mouse = gpui_kit::Point::new(
+                    event.position.x.as_f32(),
+                    event.position.y.as_f32(),
+                );
                 wheel_handle.update(cx, |this, cx| {
-                    this.zoom_circle_map(factor, cx);
+                    let (local_mouse, viewport_center) = this
+                        .circle_map_viewport_bounds
+                        .get()
+                        .map(|bounds| {
+                            (
+                                gpui_kit::Point::new(
+                                    mouse.x - bounds.origin.x.as_f32(),
+                                    mouse.y - bounds.origin.y.as_f32(),
+                                ),
+                                gpui_kit::Point::new(
+                                    bounds.size.width.as_f32() / 2.0,
+                                    bounds.size.height.as_f32() / 2.0,
+                                ),
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            let center = gpui_kit::Point::new(
+                                CIRCLE_MAP_VIEWPORT_WIDTH / 2.0,
+                                CIRCLE_MAP_VIEWPORT_HEIGHT / 2.0,
+                            );
+                            (center, center)
+                        });
+                    this.zoom_circle_map_to_wheel_anchor(
+                        local_mouse,
+                        viewport_center,
+                        factor,
+                        cx,
+                    );
                 });
                 cx.stop_propagation();
             })
@@ -1657,6 +1873,7 @@ impl ChecklistView {
             } else {
                 div().into_any_element()
             })
+            )
             .into_any_element()
     }
 
@@ -3017,6 +3234,11 @@ mod tests {
             circle_map_last_click: None,
             circle_map_click_moved: false,
             circle_map_bounds: std::rc::Rc::new(std::cell::Cell::new(None)),
+            circle_map_viewport_bounds: std::rc::Rc::new(std::cell::Cell::new(None)),
+            circle_map_wheel_anchor: None,
+            circle_map_zoom_target: None,
+            circle_map_pan_target: None,
+            circle_map_zoom_animation_generation: 0,
             circle_map_cells: HashMap::new(),
             selected_item_id: None,
         }
@@ -3836,6 +4058,14 @@ mod tests {
             delta: gpui_kit::ScrollDelta::Lines(gpui_kit::point(0.0, 3.0)),
             ..Default::default()
         });
+        // ホイールズームは 16ms ごとに目標値へ寄せるアニメーション。
+        for _ in 0..40 {
+            visual
+                .cx
+                .background_executor
+                .advance_clock(std::time::Duration::from_millis(16));
+            visual.run_until_parked();
+        }
         draw(visual);
         let after = view.read_with(cx, |v, _| v.circle_map_zoom);
         assert!(
@@ -3846,6 +4076,162 @@ mod tests {
             after <= before * 1.10,
             "1 ホイールの拡大が粗すぎる: {before} -> {after}"
         );
+    }
+
+    /// ホイールの拡大縮小は、マウス直下の地点をビューポート中央へ寄せる。
+    /// 同じジェスチャー中は最初の地点を固定する（中央へ寄せた後にカーソル下の
+    /// 別の地点を拾って、ズームのたびに地図が流れるのを防ぐ）。
+    #[gpui_kit::test]
+    async fn circle_map_wheel_zoom_centers_the_point_under_the_mouse(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::component::init);
+        cx.update(AppState::init_test);
+        seed_event(cx, "tbf20", "技術書典20");
+        seed_item(cx, "item-1", "tbf20", "サークルA");
+        let image = Arc::new(RenderImage::new([image::Frame::new(
+            image::RgbaImage::from_pixel(2000, 1000, image::Rgba([240, 240, 240, 255])),
+        )]));
+        let view = cx.new(ChecklistView::new);
+        let window = cx.open_window(
+            gpui_kit::Size {
+                width: gpui_kit::px(1200.0),
+                height: gpui_kit::px(1000.0),
+            },
+            |window, cx| gpui_kit::component::Root::new(view.clone(), window, cx),
+        );
+        let visual = gpui_kit::VisualTestContext::from_window(*window, cx).into_mut();
+        let draw = |visual: &mut gpui_kit::VisualTestContext| {
+            visual.update(|window, cx| {
+                let arena_clear = window.draw(cx);
+                arena_clear.clear(cx);
+            });
+        };
+        cx.update(|cx| {
+            view.update(cx, |this, cx| {
+                this.select_event(cx, "tbf20");
+                this.apply_circle_map("tbf20", image);
+                this.show_circle_map = true;
+                this.circle_map_fit = false;
+                this.circle_map_zoom = 1.0;
+                this.circle_map_pan = gpui_kit::Point::new(0.0, 0.0);
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        draw(visual);
+
+        let bounds = visual
+            .debug_bounds("circle-map-image")
+            .expect("地図の表示領域が無い");
+        let center = bounds.center();
+        let offset_x = 150.0;
+        let offset_y = -100.0;
+        let mouse = gpui_kit::point(
+            center.x + gpui_kit::px(offset_x),
+            center.y + gpui_kit::px(offset_y),
+        );
+        let local_mouse = gpui_kit::Point::new(
+            (mouse.x - bounds.origin.x).as_f32(),
+            (mouse.y - bounds.origin.y).as_f32(),
+        );
+        let viewport_center = gpui_kit::Point::new(
+            bounds.size.width.as_f32() / 2.0,
+            bounds.size.height.as_f32() / 2.0,
+        );
+        // 描画式（viewport - 表示サイズ)/2 + pan + 画像座標*zoom の逆算。
+        let image_point = |position: gpui_kit::Point<f32>,
+                           zoom: f32,
+                           pan: gpui_kit::Point<f32>| {
+            gpui_kit::Point::new(
+                (position.x - (CIRCLE_MAP_VIEWPORT_WIDTH - 2000.0 * zoom) / 2.0 - pan.x) / zoom,
+                (position.y - (CIRCLE_MAP_VIEWPORT_HEIGHT - 1000.0 * zoom) / 2.0 - pan.y) / zoom,
+            )
+        };
+        let point_under_mouse =
+            |zoom: f32, pan: gpui_kit::Point<f32>| image_point(local_mouse, zoom, pan);
+        let point_at_center =
+            |zoom: f32, pan: gpui_kit::Point<f32>| image_point(viewport_center, zoom, pan);
+        let advance = |visual: &mut gpui_kit::VisualTestContext, steps: usize| {
+            for _ in 0..steps {
+                visual.cx.background_executor.advance_clock(std::time::Duration::from_millis(16));
+                visual.run_until_parked();
+            }
+            draw(visual);
+        };
+        let target_zoom = |base: f32, lines: f32| {
+            (base * 1.02_f32.powf(lines))
+                .clamp(CIRCLE_MAP_MIN_ZOOM, CIRCLE_MAP_MAX_ZOOM)
+        };
+        let before_zoom = view.read_with(cx, |v, _| v.circle_map_zoom);
+        let before_pan = view.read_with(cx, |v, _| v.circle_map_pan);
+        let anchor = point_under_mouse(before_zoom, before_pan);
+        let assert_centered = |zoom: f32, pan: gpui_kit::Point<f32>, message: &str| {
+            let centered = point_at_center(zoom, pan);
+            assert!(
+                (centered.x - anchor.x).abs() < 0.6 && (centered.y - anchor.y).abs() < 0.6,
+                "{message}: anchor={anchor:?} centered={centered:?} zoom={zoom} pan={pan:?}"
+            );
+        };
+
+        let first_target = target_zoom(before_zoom, 3.0);
+        visual.simulate_event(gpui_kit::ScrollWheelEvent {
+            position: mouse,
+            delta: gpui_kit::ScrollDelta::Lines(gpui_kit::point(0.0, 3.0)),
+            ..Default::default()
+        });
+        let (_zoom, pan) = view.read_with(cx, |v, _| (v.circle_map_zoom, v.circle_map_pan));
+        assert!(
+            (pan.x - before_pan.x).abs() < 1.0 && (pan.y - before_pan.y).abs() < 1.0,
+            "ホイール直後に pan が飛んでいる: before={before_pan:?} after={pan:?}"
+        );
+        advance(visual, 1);
+        let (zoom_tick, _) = view.read_with(cx, |v, _| (v.circle_map_zoom, v.circle_map_pan));
+        assert!(
+            zoom_tick > before_zoom + 0.0001 && zoom_tick < first_target - 0.0001,
+            "1 フレームで目標倍率まで飛んでいる: {before_zoom} -> tick={zoom_tick} target={first_target}"
+        );
+        advance(visual, 40);
+        let (zoom_done, pan_done) = view.read_with(cx, |v, _| (v.circle_map_zoom, v.circle_map_pan));
+        assert!(
+            (zoom_done - first_target).abs() < 0.001,
+            "拡大が目標倍率に届いていない: {zoom_done} != {first_target}"
+        );
+        assert_centered(zoom_done, pan_done, "マウス直下の地点が中央に来ていない");
+
+        let second_target = target_zoom(zoom_done, 3.0);
+        visual.simulate_event(gpui_kit::ScrollWheelEvent {
+            position: mouse,
+            delta: gpui_kit::ScrollDelta::Lines(gpui_kit::point(0.0, 3.0)),
+            ..Default::default()
+        });
+        advance(visual, 1);
+        let (zoom_tick, _) = view.read_with(cx, |v, _| (v.circle_map_zoom, v.circle_map_pan));
+        assert!(
+            zoom_tick > zoom_done + 0.0001 && zoom_tick < second_target - 0.0001,
+            "2 回目の拡大も 1 フレームで飛んでいる: {zoom_done} -> tick={zoom_tick} target={second_target}"
+        );
+        advance(visual, 40);
+        let (zoom_done, pan_done) = view.read_with(cx, |v, _| (v.circle_map_zoom, v.circle_map_pan));
+        assert_centered(zoom_done, pan_done, "2 回目の拡大で中央の地点がずれた");
+
+        let third_target = target_zoom(zoom_done, -6.0);
+        visual.simulate_event(gpui_kit::ScrollWheelEvent {
+            position: mouse,
+            delta: gpui_kit::ScrollDelta::Lines(gpui_kit::point(0.0, -6.0)),
+            ..Default::default()
+        });
+        advance(visual, 1);
+        let (zoom_tick, _) = view.read_with(cx, |v, _| (v.circle_map_zoom, v.circle_map_pan));
+        assert!(
+            zoom_tick < zoom_done - 0.0001 && zoom_tick > third_target + 0.0001,
+            "縮小も 1 フレームで飛んでいる: {zoom_done} -> tick={zoom_tick} target={third_target}"
+        );
+        advance(visual, 40);
+        let (zoom_done, pan_done) = view.read_with(cx, |v, _| (v.circle_map_zoom, v.circle_map_pan));
+        assert!(
+            (zoom_done - third_target).abs() < 0.001,
+            "縮小が目標倍率に届いていない: {zoom_done} != {third_target}"
+        );
+        assert_centered(zoom_done, pan_done, "縮小で中央の地点がずれた");
     }
 
     /// 取得中はその行の表紙に進捗リングを出し、終わったら消す。
