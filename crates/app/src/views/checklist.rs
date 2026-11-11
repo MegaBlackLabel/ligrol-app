@@ -75,6 +75,8 @@ pub struct ChecklistView {
     sort_field: SortField,
     /// true = 昇順（Web の sort.direction === "asc"）
     sort_ascending: bool,
+    /// 初出が選択中イベント以外の項目も表示するか（既定 OFF）
+    show_other_first_appearance: bool,
     /// ページネーション（Web の PAGE_SIZE = 50）
     page: usize,
     /// 一覧の「これより以前のイベントを表示」で表示済みの件数
@@ -172,8 +174,9 @@ impl ChecklistView {
             error: None,
             toast: None,
             last_sync: None,
-            sort_field: SortField::SortOrder,
+            sort_field: SortField::SpaceNumber,
             sort_ascending: true,
+            show_other_first_appearance: false,
             page: 0,
             visible_older_count: 0,
             thumbnail_images: HashMap::new(),
@@ -281,13 +284,22 @@ impl ChecklistView {
         sorted.into_iter().skip(start).take(PAGE_SIZE).collect()
     }
 
-    /// 選択中イベントが初出の項目を、現在の並び順で返す。
+    /// 選択中イベントが初出の項目（「初出以外も表示」が ON なら全項目）。
+    fn visible_items(&self, event_name: &str) -> Vec<CheckedItem> {
+        if self.show_other_first_appearance {
+            self.items.clone()
+        } else {
+            filter_first_appearance(&self.items, event_name)
+        }
+    }
+
+    /// 選択中イベントの項目を、現在の並び順で返す。
     fn sorted_display_items(&self, event_name: &str) -> Vec<CheckedItem> {
-        let mut items = filter_first_appearance(&self.items, event_name);
+        let mut items = self.visible_items(event_name);
         items.sort_by(|a, b| {
             let ordering = match self.sort_field {
                 SortField::CircleName => a.circle_name.cmp(&b.circle_name),
-                SortField::SpaceNumber => a.space_number.cmp(&b.space_number),
+                SortField::SpaceNumber => compare_space_numbers(&a.space_number, &b.space_number),
                 SortField::SortOrder => a.sort_order.cmp(&b.sort_order),
             };
             if self.sort_ascending {
@@ -590,6 +602,14 @@ impl ChecklistView {
         cx.notify();
     }
 
+    /// 「初出以外も表示」の ON/OFF。
+    fn set_show_other_first_appearance(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.show_other_first_appearance = enabled;
+        self.page = 0;
+        // 表示中ならマップの色付けも新しい表示集合で作り直す。
+        self.reload(cx);
+    }
+
     /// サークルマップの表示を切り替える。未取得なら取得を開始する。
     fn toggle_circle_map(&mut self, cx: &mut Context<Self>) {
         if self.show_circle_map {
@@ -629,7 +649,7 @@ impl ChecklistView {
             .map(|event| event.event_name.clone())
             .unwrap_or_else(|| slug.clone());
         // 一覧に出しているチェックリスト項目だけをマップへ反映する。
-        let displayed_items = filter_first_appearance(&self.items, &event_name);
+        let displayed_items = self.visible_items(&event_name);
         let spaces: Vec<(String, u32)> = displayed_items
             .iter()
             .filter_map(|item| parse_space(&item.space_number))
@@ -1902,6 +1922,7 @@ impl ChecklistView {
         let events = self.events.clone();
         let sort_field = self.sort_field;
         let sort_ascending = self.sort_ascending;
+        let show_other_first_appearance = self.show_other_first_appearance;
         let page = self.page;
         let border = cx.theme().border;
         let muted = cx.theme().muted;
@@ -2341,7 +2362,44 @@ impl ChecklistView {
                                         });
                                     })
                                 }),
-                            ),
+                            )
+                            .child({
+                                let toggle_handle = handle.clone();
+                                let label = if selected_event_name.is_empty() {
+                                    "初出以外も表示".to_string()
+                                } else {
+                                    format!("初出が{selected_event_name}以外でも表示")
+                                };
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .debug_selector(|| {
+                                                "checklist-show-other-first-appearance".into()
+                                            })
+                                            .child(
+                                                Switch::new("checklist-show-other-first-appearance")
+                                                    .checked(show_other_first_appearance)
+                                                    .cursor_pointer()
+                                                    .on_click(move |checked, _window, cx| {
+                                                        toggle_handle.update(cx, |this, cx| {
+                                                            this.set_show_other_first_appearance(
+                                                                *checked, cx,
+                                                            );
+                                                        });
+                                                    }),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(muted_fg)
+                                            .child(label),
+                                    )
+                            }),
                     )
                     // サークルマップ（会場配置図）。取得はボタンを押したときだけ。
                     .child(if show_circle_map {
@@ -2597,6 +2655,16 @@ fn decode_thumbnail(bytes: &[u8]) -> Option<Arc<RenderImage>> {
     Some(Arc::new(RenderImage::new([image::Frame::new(
         image::RgbaImage::from_raw(width, height, flat)?,
     )])))
+}
+
+/// スペース番号をブロック→番号の順で比較する（`あ10` は `あ2` より後）。
+fn compare_space_numbers(a: &str, b: &str) -> std::cmp::Ordering {
+    match (parse_space(a), parse_space(b)) {
+        (Some((a_block, a_number)), Some((b_block, b_number))) => {
+            a_block.cmp(&b_block).then(a_number.cmp(&b_number))
+        }
+        _ => a.cmp(b),
+    }
 }
 
 /// スペース名（例: `き05`, `あ-01`, `協01`）を（列, 番号）に分解する。
@@ -3111,7 +3179,7 @@ mod tests {
         let view = cx.new(ChecklistView::new);
         assert_eq!(
             view.read_with(cx, |v, _| v.sort_field),
-            SortField::SortOrder
+            SortField::SpaceNumber
         );
         assert!(view.read_with(cx, |v, _| v.sort_ascending));
         // 別フィールド → 昇順で切り替え
@@ -3124,6 +3192,115 @@ mod tests {
         // 同じフィールド → 降順に反転
         cx.update(|cx| view.update(cx, |this, cx| this.toggle_sort(cx, SortField::CircleName)));
         assert!(!view.read_with(cx, |v, _| v.sort_ascending));
+    }
+
+    /// 既定の並びはスペース番号で、ブロック「あ」から始まる。
+    #[test]
+    fn default_sort_starts_from_block_a_in_space_order() {
+        let mut items = vec![
+            test_item("item-i", 0),
+            test_item("item-a10", 1),
+            test_item("item-a2", 2),
+        ];
+        items[0].space_number = "い01".into();
+        items[1].space_number = "あ10".into();
+        items[2].space_number = "あ2".into();
+        let view = view_with_items(items);
+        assert_eq!(view.sort_field, SortField::SpaceNumber);
+        let sorted = view.sorted_display_items("");
+        let ids: Vec<&str> = sorted.iter().map(|item| item.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["item-a2", "item-a10", "item-i"],
+            "ブロックあの番号順→い の順になっていない"
+        );
+    }
+
+    /// 「初出以外も表示」が ON なら、選択中イベントが初出でない項目も一覧に入る。
+    #[test]
+    fn show_other_first_appearance_toggles_the_event_filter() {
+        let mut items = vec![test_item("item-21", 0), test_item("item-20", 1)];
+        items[0].first_appearance_event_name = Some("技術書典21".into());
+        items[1].first_appearance_event_name = Some("技術書典20".into());
+        let mut view = view_with_items(items);
+        assert!(!view.show_other_first_appearance, "既定が ON になっている");
+        assert_eq!(
+            view.sorted_display_items("技術書典21").len(),
+            1,
+            "OFF なのに初出以外の項目が出ている"
+        );
+        view.show_other_first_appearance = true;
+        assert_eq!(
+            view.sorted_display_items("技術書典21").len(),
+            2,
+            "ON なのに初出以外の項目が出ていない"
+        );
+    }
+
+    /// 並び替えの隣の「初出以外も表示」スイッチが描かれ、クリックで切り替わる。
+    #[gpui_kit::test]
+    async fn show_other_first_appearance_switch_toggles_on_click(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::component::init);
+        cx.update(AppState::init_test);
+        seed_event(cx, "tbf21", "技術書典21");
+        cx.update(|cx| {
+            let state = AppState::global(cx);
+            let db = &state.db_pool;
+            let mut same_event = test_item("item-21", 0);
+            same_event.event_id = "tbf21".into();
+            same_event.first_appearance_event_name = Some("技術書典21".into());
+            let mut other_event = test_item("item-20", 1);
+            other_event.event_id = "tbf21".into();
+            other_event.first_appearance_event_name = Some("技術書典20".into());
+            checklist_db::upsert_item(db, &same_event).unwrap();
+            checklist_db::upsert_item(db, &other_event).unwrap();
+        });
+        let view = cx.new(ChecklistView::new);
+        cx.update(|cx| view.update(cx, |this, cx| this.select_event(cx, "tbf21")));
+        let window = cx.open_window(
+            gpui_kit::Size {
+                width: gpui_kit::px(1200.0),
+                height: gpui_kit::px(1000.0),
+            },
+            |window, cx| gpui_kit::component::Root::new(view.clone(), window, cx),
+        );
+        let visual = gpui_kit::VisualTestContext::from_window(*window, cx).into_mut();
+        for _ in 0..3 {
+            visual.update(|window, cx| {
+                let arena_clear = window.draw(cx);
+                arena_clear.clear(cx);
+            });
+        }
+        let toggle = visual
+            .debug_bounds("checklist-show-other-first-appearance")
+            .expect("「初出以外も表示」スイッチが描かれていない");
+        assert!(
+            !view.read_with(cx, |v, _| v.show_other_first_appearance),
+            "既定が ON になっている"
+        );
+        assert_eq!(
+            view.read_with(cx, |v, _| v.sorted_display_items("技術書典21").len()),
+            1,
+            "既定で初出以外の項目が出ている"
+        );
+        visual.simulate_click(toggle.center(), gpui_kit::Modifiers::default());
+        assert!(
+            view.read_with(cx, |v, _| v.show_other_first_appearance),
+            "スイッチのクリックが状態に反映されない"
+        );
+        assert_eq!(
+            view.read_with(cx, |v, _| v.sorted_display_items("技術書典21").len()),
+            2,
+            "ON にしても初出以外の項目が出ない"
+        );
+        let toggle = visual
+            .debug_bounds("checklist-show-other-first-appearance")
+            .expect("「初出以外も表示」スイッチが描かれていない");
+        visual.simulate_click(toggle.center(), gpui_kit::Modifiers::default());
+        assert!(
+            !view.read_with(cx, |v, _| v.show_other_first_appearance),
+            "もう一度クリックしても OFF に戻らない"
+        );
     }
 
     #[gpui_kit::test]
@@ -3231,8 +3408,9 @@ mod tests {
             error: None,
             toast: None,
             last_sync: None,
-            sort_field: SortField::SortOrder,
+            sort_field: SortField::SpaceNumber,
             sort_ascending: true,
+            show_other_first_appearance: false,
             page: 0,
             visible_older_count: 0,
             thumbnail_images: HashMap::new(),
@@ -3932,14 +4110,17 @@ mod tests {
     async fn selecting_map_cell_scrolls_the_checklist_to_the_row(cx: &mut TestAppContext) {
         cx.update(gpui_kit::component::init);
         cx.update(AppState::init_test);
-        let mut items: Vec<CheckedItem> = (0..150)
-            .map(|index| test_item(&format!("item-{index:03}"), index as i64))
+        let items: Vec<CheckedItem> = (0..150)
+            .map(|index| {
+                let mut item = test_item(&format!("item-{index:03}"), index as i64);
+                item.space_number = format!("あ{:03}", index + 1);
+                item
+            })
             .collect();
-        items[99].space_number = "あ99".into();
         let view = view_with_circle_map(
             items,
             HashMap::from([(
-                ("あ".to_string(), 99),
+                ("あ".to_string(), 100),
                 CellRect {
                     x0: 0.0,
                     y0: 0.0,
