@@ -53,6 +53,9 @@ usvg = { version = "0.49", default-features = false, features = [
     "memmap-fonts",
 ] }
  tiny-skia = "0.12"
+# 自動アップデートのエンジン + GPUI 連携。MSRV が 1.98 なので、ツールチェーンと
+# セットで固定する（`rust-toolchain.toml`）。使うのは更新 UI の実装時。
+gpui-updater-pre = "=0.4.4"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }

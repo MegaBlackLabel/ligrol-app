@@ -14,7 +14,6 @@ use crate::tbf::{RequestSpec, ResponseSpec, TbfError, Transport, UreqTransport};
 pub const GOOGLE_OAUTH_AUTH: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 pub const GOOGLE_OAUTH_TOKEN: &str = "https://oauth2.googleapis.com/token";
 pub const GOOGLE_USERINFO: &str = "https://www.googleapis.com/oauth2/v3/userinfo";
-pub const DEFAULT_REDIRECT_PORT: u16 = 38387;
 /// `drive.file` のみ（アプリが作成・利用者が選択したファイルだけ）。
 ///
 /// 以前は `drive.readonly`（Drive 全体の閲覧・ダウンロード）も要求していたが、
@@ -385,21 +384,18 @@ fn respond(stream: &mut TcpStream, message: &str) {
     let _ = stream.write_all(response.as_bytes());
 }
 
+/// loopback の空きポートで待ち受ける。
+///
+/// Google のデスクトップ アプリ向け手順は「空いている任意のポートで待ち受け、その
+/// ポートを `redirect_uri` に入れる」（`https://developers.google.com/identity/protocols/oauth2/native-app`）。
+/// デスクトップ クライアントの loopback `redirect_uri` はポートを問わず受理される
+/// （実測 2026-11-09: `http://127.0.0.1:38387` / `:49213` / `:65000` のいずれも
+/// Google の同一のサインイン画面へ遷移した）。
+///
+/// 固定ポートを優先してはいけない: Windows では `SO_REUSEADDR` を付けた 2 つの
+/// ソケットが同じポートを bind できてしまい、起動中のアプリ（再起動前の残骸を含む）
+/// とコールバックを取り合ってログインが固まる。
 fn bind_loopback() -> Result<TcpListener, GoogleError> {
-    use socket2::{Domain, Protocol, Socket, Type};
-    use std::net::{Ipv4Addr, SocketAddr};
-
-    // Google Cloud Console に登録した redirect_uri（http://127.0.0.1:38387）と
-    // 必ず一致させるため、SO_REUSEADDR を設定して固定ポートに確実にバインドする。
-    // （動的ポートにフォールバックすると redirect_uri が一致せず invalid_request になる）
-    let preferred: SocketAddr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), DEFAULT_REDIRECT_PORT);
-    if let Ok(socket) = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP)) {
-        let _ = socket.set_reuse_address(true);
-        if socket.bind(&preferred.into()).is_ok() {
-            let _ = socket.listen(128);
-            return Ok(socket.into());
-        }
-    }
     TcpListener::bind("127.0.0.1:0").map_err(|e| GoogleError::Io(e.to_string()))
 }
 fn percent_encode(value: &str) -> String {
@@ -932,7 +928,6 @@ mod tests {
     /// UI 側の `google.lock()` が止まり、モーダルの ✕ が効かなくなる。
     #[test]
     fn wait_for_code_receives_the_callback_without_a_client() {
-        // 固定ポート（`bind_loopback`）は使わない: 起動中のアプリと二重 bind し得る。
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let pending = PendingGoogleAuth {
             redirect_uri: "http://127.0.0.1:0".to_string(),
@@ -952,6 +947,26 @@ mod tests {
         let code = wait_for_code(&pending).unwrap();
         sender.join().unwrap();
         assert_eq!(code, "xyz");
+    }
+
+    /// 使用中のポートを奪って待ち受けない。
+    ///
+    /// 以前は `SO_REUSEADDR` を付けて固定ポート 38387 を優先していた。Windows では
+    /// `SO_REUSEADDR` を付けた 2 つのソケットが同じポートを bind できてしまうため、
+    /// 起動中のアプリ（再起動前の残骸を含む）とコールバックを取り合ってログインが
+    /// 固まり得た。Google のデスクトップアプリ向け手順は「空いている任意のポートで
+    /// 待ち受ける」（`https://developers.google.com/identity/protocols/oauth2/native-app`）
+    /// なので、固定ポートは使わない。
+    #[test]
+    fn bind_loopback_does_not_take_a_port_that_is_in_use() {
+        let first = bind_loopback().expect("1 本目を bind できる");
+        let second = bind_loopback().expect("2 本目を bind できる");
+        let first_port = first.local_addr().unwrap().port();
+        let second_port = second.local_addr().unwrap().port();
+        assert_ne!(
+            first_port, second_port,
+            "2 つの待ち受けが同じポートを奪い合っている（コールバックを取り合う）"
+        );
     }
 
     #[test]

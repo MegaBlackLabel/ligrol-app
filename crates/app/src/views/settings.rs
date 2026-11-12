@@ -1052,7 +1052,7 @@ impl SettingsView {
         let decoded = image::load_from_memory(&bytes).ok()?;
         let mut rgba = decoded.to_rgba8();
         // GPUI は BGRA を期待する
-        for pixel in rgba.chunks_exact_mut(4) {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         Some(std::sync::Arc::new(gpui_kit::RenderImage::new([
@@ -2709,6 +2709,7 @@ impl Render for SettingsView {
         let sync_progress = self.sync_progress.clone();
         // サンプルモードではログアウト・同期・全削除のボタンを無効にする
         let demo = AppState::global(cx).demo;
+        let updates = AppState::global(cx).updates.clone();
         let tbf_logged_in = *AppState::global(cx).tbf_logged_in.lock();
         let google_profile = AppState::global(cx).google_profile.lock().clone();
         let google_logged_in = *AppState::global(cx).google_logged_in.lock();
@@ -3557,6 +3558,16 @@ impl Render for SettingsView {
                     ),
             );
 
+        let update_settings = self.settings_card(
+            cx,
+            "アップデート",
+            Some("新しいバージョンがあるか確認します"),
+            Icon::new(AppIcon::Download)
+                .size(px(16.0))
+                .text_color(muted_fg),
+            div().p_5().child(updates),
+        );
+
         let account_settings = self.account_settings_card(
             cx,
             google_profile,
@@ -3634,6 +3645,11 @@ impl Render for SettingsView {
                     .child(drive_settings)
                     .child(checklist_poll_settings)
                     .child(db_settings)
+                    .child(
+                        div()
+                            .debug_selector(|| "settings-updates".into())
+                            .child(update_settings),
+                    )
                     // 外観
                     .child(
                         self.settings_card(
@@ -4026,7 +4042,6 @@ impl Render for SettingsView {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::AppContext as _;
     use gpui_kit::TestAppContext;
     use ligrol_core::drive::sync::{SyncPhase, SyncProgress};
 
@@ -4648,6 +4663,16 @@ mod tests {
         assert!(
             title.top() < key.top(),
             "本の鍵カードがヘッダーより上に出ている"
+        );
+    }
+
+    /// 設定画面にアップデートの節が出る。
+    #[gpui_kit::test]
+    async fn update_card_is_rendered(cx: &mut TestAppContext) {
+        let (visual, _view) = open_settings(cx);
+        assert!(
+            visual.debug_bounds("settings-updates").is_some(),
+            "アップデートカードが描画されていない"
         );
     }
 

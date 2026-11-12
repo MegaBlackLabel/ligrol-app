@@ -112,6 +112,8 @@ pub struct TbfChecklistEntry {
     pub thumbnail_url: Option<String>,
     pub price: Option<i64>,
     pub is_purchased: bool,
+    /// この商品が初めて出展されたイベント名（`ProductInfo.firstAppearanceEventName`）。
+    pub first_appearance_event_name: Option<String>,
     pub created_at: Option<String>,
 }
 
@@ -969,6 +971,8 @@ fn map_checked_product(node: &Value) -> Option<TbfChecklistEntry> {
         thumbnail_url: str_of(&product_info["coverImage"]["url"]).map(absolutize),
         price: extract_price(product_info.get("productVariants")),
         is_purchased: !product_info["loginUserBookShelfItem"].is_null(),
+        first_appearance_event_name: str_of(&product_info["firstAppearanceEventName"])
+            .map(String::from),
         created_at: str_of(&node["createdAt"]).map(String::from),
     })
 }

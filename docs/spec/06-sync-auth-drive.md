@@ -77,7 +77,7 @@
 | 認可エンドポイント | `https://accounts.google.com/o/oauth2/v2/auth` | `crates/core/src/google.rs:14` |
 | トークンエンドポイント | `https://oauth2.googleapis.com/token` | `crates/core/src/google.rs:15` |
 | userinfo | `https://www.googleapis.com/oauth2/v3/userinfo` | `crates/core/src/google.rs:16` |
-| ループバック固定ポート | `DEFAULT_REDIRECT_PORT = 38387` | `crates/core/src/google.rs:17` |
+| ループバックのポート | **固定しない**（`127.0.0.1:0` で空きポートを取る。デスクトップ クライアントは loopback のポートを問わず受理する） | `crates/core/src/google.rs` の `bind_loopback` |
 | スコープ | `openid email https://www.googleapis.com/auth/drive.file`（**`drive.readonly` は要求しない**。appdata も使わない） | `crates/core/src/google.rs:18-25` |
 | リフレッシュ余裕 | `REFRESH_SKEW_SECONDS = 60` 秒 | `crates/core/src/google.rs:21` |
 | コールバック待ちタイムアウト | 300 秒（5 分） | `crates/core/src/google.rs:151` |
@@ -167,9 +167,13 @@
 |---|---|---|
 | クライアント種別 | **デスクトップ アプリ**（インストール型）として登録されている | Web アプリ等の機密クライアントを共用しているなら、デスクトップ用を別途作成して分離する |
 | Web 版との共用 | Web 版（ligrol-web）と `client_id` / `client_secret` を共用していない | 共用しているなら Web 側の `client_secret` を失効・再発行し、公開履歴を確認する |
-| リダイレクト URI | ループバック（`http://127.0.0.1`）が許可されている | 未登録だとフォールバック（動的ポート）で認可できない |
+| リダイレクト URI | ループバックの**任意ポート**が受理される（デスクトップ クライアントは登録不要。実測 2026-11-09: `:38387` / `:49213` / `:65000` のいずれも Google の同一のサインイン画面へ遷移する） | 受理されない場合はクライアント種別を「デスクトップ アプリ」に直す（Web アプリとして登録すると登録済み URI と完全一致が要求され、動的ポートが使えない） |
 | 要求スコープ | `openid email` + `drive.file` のみ | `drive.readonly` を要求していたら最小権限に戻す（§2.1） |
-| 同意画面 | アプリ名・サポート連絡先・プライバシーポリシーが設定されている | 未設定だと利用者に警告が出る |
+| 同意画面 | アプリ名・サポート連絡先・開発者連絡先が設定され、データアクセスに `openid` / `email` / `drive.file` が登録されている | スコープ未登録だと `invalid_scope`。非機密スコープのみなら**審査は不要**（`unverified` 警告も出ない）。名前・ロゴを同意画面に出すブランド検証は任意で、ホームページ・プライバシーポリシー・ドメイン所有確認が要る |
+| 公開状態 | In production（`Audience` → `Publish app`） | **Testing のまま**だと認可が 7 日で失効し、リフレッシュトークンも失効する（`https://support.google.com/cloud/answer/15549945`）。利用者の Drive バックアップが週次で止まる |
+
+プライバシーポリシーは `docs/privacy-policy.md` に置いた（同意画面に登録する場合はこの内容を
+ホームページと同一ドメインで公開する）。
 
 注: `client_secret` を環境変数化・難読化しても**配布バイナリ内の秘密にはならない**
 （ビルド時に埋め込まれる）。保護になるのは「クライアント種別とスコープを正しく設定すること」

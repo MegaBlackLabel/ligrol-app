@@ -296,6 +296,16 @@ pub fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                 .await?;
             }
         }
+        // チェックリスト項目の初出イベント名（プログラム的マイグレーション）。
+        // `checkedProductInfos` は対象イベントに出展しているサークルの商品を返すため、
+        // 同じサークルが過去に出した本も混ざる。初出イベントで抽出できるように保存する。
+        ensure_column(
+            &mut conn,
+            "checked_items",
+            "first_appearance_event_name",
+            "first_appearance_event_name TEXT",
+        )
+        .await?;
         // 本ごとの綴じ方向（プログラム的マイグレーション。NULL = サイト別設定
         // `viewer.page_turn.{site}` に従う。既存の migration ファイルは checksum
         // 管理されるため変更せず、PRAGMA で存在確認してから ALTER TABLE する）

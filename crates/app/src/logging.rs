@@ -135,8 +135,6 @@ fn set_panic_hook(path: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write as _;
-
     use super::*;
 
     /// テスト用のログファイル（プロセスとテスト名で分ける）。

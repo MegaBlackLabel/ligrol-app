@@ -40,6 +40,8 @@ pub struct CheckedItem {
     pub thumbnail_data: Option<String>,
     pub price: Option<i64>,
     pub is_purchased: i64,
+    /// 初出イベント名（技術書典の ProductInfo.firstAppearanceEventName）。
+    pub first_appearance_event_name: Option<String>,
     pub sample_fetch_attempted_at: Option<String>,
     #[sqlx(rename = "createdAt")]
     pub created_at: String,
@@ -158,8 +160,8 @@ pub fn upsert_item(pool: &SqlitePool, item: &CheckedItem) -> Result<(), sqlx::Er
         sqlx::query(
             "INSERT INTO checked_items (id, event_id, circle_name, space_number, memo, is_checked, \
              sort_order, tbf_circle_id, product_id, product_title, thumbnail_url, thumbnail_data, \
-             price, is_purchased, sample_fetch_attempted_at, createdAt)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+             price, is_purchased, first_appearance_event_name, sample_fetch_attempted_at, createdAt)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
              ON CONFLICT(id) DO UPDATE SET
                event_id = excluded.event_id,
                circle_name = excluded.circle_name,
@@ -174,6 +176,7 @@ pub fn upsert_item(pool: &SqlitePool, item: &CheckedItem) -> Result<(), sqlx::Er
                thumbnail_data = excluded.thumbnail_data,
                price = excluded.price,
                is_purchased = excluded.is_purchased,
+               first_appearance_event_name = excluded.first_appearance_event_name,
                sample_fetch_attempted_at = excluded.sample_fetch_attempted_at",
         )
         .bind(&item.id)
@@ -190,6 +193,7 @@ pub fn upsert_item(pool: &SqlitePool, item: &CheckedItem) -> Result<(), sqlx::Er
         .bind(&item.thumbnail_data)
         .bind(item.price)
         .bind(item.is_purchased)
+        .bind(&item.first_appearance_event_name)
         .bind(&item.sample_fetch_attempted_at)
         .bind(&item.created_at)
         .execute(pool)
@@ -228,8 +232,8 @@ pub fn list_items(pool: &SqlitePool, event_id: &str) -> Result<Vec<CheckedItem>,
         sqlx::query_as::<_, CheckedItem>(
             "SELECT id, event_id, circle_name, space_number, memo, is_checked, sort_order, \
              tbf_circle_id, product_id, product_title, thumbnail_url, thumbnail_data, price, \
-             is_purchased, sample_fetch_attempted_at, createdAt FROM checked_items \
-             WHERE event_id = ?1 ORDER BY sort_order, circle_name",
+             is_purchased, first_appearance_event_name, sample_fetch_attempted_at, createdAt \
+             FROM checked_items WHERE event_id = ?1 ORDER BY sort_order, circle_name",
         )
         .bind(event_id)
         .fetch_all(pool)
@@ -305,7 +309,8 @@ pub fn get_item(pool: &SqlitePool, item_id: &str) -> Result<Option<CheckedItem>,
         sqlx::query_as::<_, CheckedItem>(
             "SELECT id, event_id, circle_name, space_number, memo, is_checked, sort_order, \
              tbf_circle_id, product_id, product_title, thumbnail_url, thumbnail_data, price, \
-             is_purchased, sample_fetch_attempted_at, createdAt FROM checked_items WHERE id = ?1",
+             is_purchased, first_appearance_event_name, sample_fetch_attempted_at, createdAt \
+             FROM checked_items WHERE id = ?1",
         )
         .bind(item_id)
         .fetch_optional(pool)

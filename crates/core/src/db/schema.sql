@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS checked_items (
   thumbnail_data TEXT,
   price INTEGER,
   is_purchased INTEGER NOT NULL DEFAULT 0,
+  first_appearance_event_name TEXT,
   sample_fetch_attempted_at TEXT,
   owner_sub TEXT,
   createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP

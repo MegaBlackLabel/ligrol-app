@@ -86,6 +86,8 @@ pub struct AppState {
     pub downloads_dir: PathBuf,
     /// sqlx の接続プール（migrations 適用済み）
     pub db_pool: ligrol_core::db::SqlitePool,
+    /// 自動アップデートの状態（[`crate::updates::Updates`]）。
+    pub updates: gpui_kit::Entity<crate::updates::Updates>,
     pub tbf: Arc<Mutex<TbfClient>>,
     pub google: Arc<Mutex<Option<GoogleClient>>>,
     pub secrets: SecretStore,
@@ -592,6 +594,9 @@ impl AppState {
             .as_ref()
             .and_then(|profile| crate::pack_keys::keyring_root_key(&secrets, &profile.sub));
 
+        // 自動アップデートの状態（起動直後は Idle。リリース版は 30 秒後に確認する）。
+        let updates = cx.new(|cx| crate::updates::Updates::new(cx, false));
+
         cx.set_global(Self {
             data_dir,
             // 本物の起動はサンプルモードではない（`main.rs` が `--demo` / env を見て
@@ -600,6 +605,7 @@ impl AppState {
             packs_dir,
             downloads_dir,
             db_pool,
+            updates,
             tbf: Arc::new(Mutex::new(tbf)),
             google: Arc::new(Mutex::new(google)),
             secrets,
@@ -711,12 +717,15 @@ impl AppState {
                 log::error!("サンプルデータを投入できない: {error}");
             }
         }
+        // 自動アップデートの状態（サンプルではネットワークへ出さない）。
+        let updates = cx.new(|cx| crate::updates::Updates::new(cx, demo));
         cx.set_global(Self {
             data_dir,
             demo,
             packs_dir,
             downloads_dir,
             db_pool,
+            updates,
             tbf: Arc::new(Mutex::new(tbf)),
             google: Arc::new(Mutex::new(if client_id.is_empty() {
                 None

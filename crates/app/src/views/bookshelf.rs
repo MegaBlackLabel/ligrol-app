@@ -10346,19 +10346,17 @@ pub(crate) fn load_cached_cover(
 
 /// Web-style placeholder SVG (`data:image/svg+xml;utf8,...`) rasterized to a
 /// RenderImage. Color is derived from a hash of the title.
-/// アプリロゴ（assets/app-icon/icon_1024.png）をデコードした RenderImage。
+/// アプリロゴ（assets/app-icon/icon_256.png）をデコードした RenderImage。
 /// 説明画面のロゴ表示（64px）で使う（プロセス内で 1 回だけデコード）。
-/// 1024px のまま渡すと GPUI の縮小補間（二重線形）で文字が滲むため、
-/// 表示サイズの 2 倍（Retina 対応）へ Lanczos3 で事前縮小して返す。
+/// 1024px を起動時に Lanczos3 で縮小すると 400ms 以上かかる（実測）。
+/// 表示は 64px なので 256px の PNG をそのままデコードする。
 pub fn app_logo_image() -> Option<Arc<RenderImage>> {
     static LOGO: LazyLock<Option<Arc<RenderImage>>> = LazyLock::new(|| {
-        let data = include_bytes!("../../assets/app-icon/icon_1024.png");
+        let data = include_bytes!("../../assets/app-icon/icon_256.png");
         let decoded = image::load_from_memory(data).ok()?;
-        // 表示 64px の 2 倍で十分（16 倍縮小のエイリアシングを避ける）
-        let resized = decoded.resize(128, 128, image::imageops::FilterType::Lanczos3);
-        let mut rgba = resized.to_rgba8();
+        let mut rgba = decoded.to_rgba8();
         // GPUI は BGRA を期待する
-        for pixel in rgba.chunks_exact_mut(4) {
+        for pixel in rgba.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         Some(Arc::new(gpui_kit::RenderImage::new([image::Frame::new(
@@ -10368,21 +10366,22 @@ pub fn app_logo_image() -> Option<Arc<RenderImage>> {
     LOGO.clone()
 }
 
-/// タイトルバー用のロゴ（`assets/icons/ligrol-mark.svg` を 2 倍の 32px でラスタライズ）。
+/// タイトルバー用のロゴ（`assets/icons/ligrol-mark-32.png`）。
 ///
 /// `Icon`（gpui の `svg()`）は**アルファマスクを text_color で塗る**ため、色付きの
 /// ロゴは単色の四角になる（実測: グレーの四角）。色を保つには `img()` へ
-/// `RenderImage` を渡す。SVG の intrinsic サイズは 1254px なので、そのまま
-/// `rasterize_svg` すると巨大な pixmap を作る — width/height を差し替えてから描く。
+/// `RenderImage` を渡す。SVG のラスタライズはフォントDBの読み込みで起動が
+/// 数十 ms 遅くなるため、32px の PNG を埋め込んでデコードだけにする。
 pub fn title_logo_image() -> Option<Arc<RenderImage>> {
     static LOGO: LazyLock<Option<Arc<RenderImage>>> = LazyLock::new(|| {
-        let svg = std::str::from_utf8(include_bytes!("../../assets/icons/ligrol-mark.svg")).ok()?;
-        let svg = svg.replacen(
-            "width=\"1254\" height=\"1254\"",
-            "width=\"32\" height=\"32\"",
-            1,
-        );
-        rasterize_svg(&svg)
+        let data = include_bytes!("../../assets/icons/ligrol-mark-32.png");
+        let decoded = image::load_from_memory(data).ok()?;
+        let mut rgba = decoded.to_rgba8();
+        // GPUI は BGRA を期待する。
+        for pixel in rgba.as_chunks_mut::<4>().0 {
+            pixel.swap(0, 2);
+        }
+        Some(Arc::new(RenderImage::new([image::Frame::new(rgba)])))
     });
     LOGO.clone()
 }
@@ -10469,7 +10468,7 @@ pub(crate) fn rasterize_svg_scaled(svg: &str, scale: f32) -> Option<Arc<RenderIm
         &mut pixmap.as_mut(),
     );
     let mut data = pixmap.data().to_vec();
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in data.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     let rgba = image::RgbaImage::from_raw(width, height, data)?;
@@ -10526,7 +10525,7 @@ pub(crate) fn progress_ring_image(fraction: f32) -> Arc<RenderImage> {
     resvg::render(&tree, tiny_skia::Transform::default(), &mut pixmap.as_mut());
     let mut data = pixmap.data().to_vec();
     // GPUI は BGRA を期待（R/B を入れ替えないと色が入れ替わる）
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in data.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     let frame =
@@ -10723,7 +10722,6 @@ mod tests {
         ImportChoice, ImportFailure, ImportOutcome, PendingImport, cover_url_candidates,
         download_messages, import_choices, import_needs_confirmation,
     };
-    use gpui_kit::AppContext as _;
     use gpui_kit::TestAppContext;
     use ligrol_core::import::{ImportPlan, MediaKind, PlannedContent, PlannedRendition};
 
@@ -11273,7 +11271,9 @@ mod tests {
         let image = rasterize_svg(svg).expect("SVG がラスタライズされない");
         let bytes = image.as_bytes(0).expect("フレームが無い");
         let has_glyph_pixel = bytes
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|pixel| pixel[..3].iter().all(|channel| *channel < 100));
         assert!(
             has_glyph_pixel,
@@ -11281,7 +11281,15 @@ mod tests {
         );
     }
 
-    /// タイトルバーのロゴ: 32px でラスタライズされ、紺と白が残っていること。
+    /// 説明画面のロゴは 256px の PNG をそのままデコードする（起動時の縮小を避ける）。
+    #[test]
+    fn app_logo_image_decodes_the_256px_icon() {
+        let image = app_logo_image().expect("アプリアイコンを読む");
+        let size = image.size(0);
+        assert_eq!((size.width.0, size.height.0), (256, 256));
+    }
+
+    /// タイトルバーのロゴ: 32px PNG がデコードされ、紺と白が残っていること。
     ///
     /// `Icon`（gpui の `svg()`）はアルファマスクに text_color を塗るので、色付きの
     /// ロゴが単色の四角になる（実測: グレーの四角）。`img()` 用の `RenderImage` を
@@ -11298,7 +11306,7 @@ mod tests {
         let bytes = image.as_bytes(0).expect("フレームが無い");
         let mut navy = 0;
         let mut white = 0;
-        for pixel in bytes.chunks_exact(4) {
+        for pixel in bytes.as_chunks::<4>().0 {
             // BGRA
             let (b, g, r) = (pixel[0], pixel[1], pixel[2]);
             if (60..120).contains(&b) && r < 40 && g < 60 {

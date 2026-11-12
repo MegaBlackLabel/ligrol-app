@@ -381,6 +381,19 @@ const LICENSES_LEAD: &str = "このアプリが利用しているオープンソ
 const NO_LICENSE_TEXT: &str =
     "ライセンス全文はクレートに同梱されていません（配布元を確認してください）";
 
+/// プライバシーポリシーの見出しと本文（説明画面の下部）。
+///
+/// 本文は `docs/privacy-policy.md` の要約。**Google の同意画面に登録するプライバシー
+/// ポリシーと同じ内容**を指すため、片方だけ変えない。
+const PRIVACY_SECTION_TITLE: &str = "プライバシー";
+const PRIVACY_POLICY_URL: &str =
+    "https://github.com/MegaBlackLabel/ligrol-app/blob/main/docs/privacy-policy.md";
+const PRIVACY_NOTICE: &str = "データはお使いの PC のローカルフォルダに保存され、アクセス解析・\
+                              広告・利用状況の送信はありません。Google から取得するのは\
+                              アカウントの識別子（sub）・メールアドレス・表示名・プロフィール画像で、\
+                              Google Drive へのバックアップは任意です。取得したデータを第三者へ\
+                              提供したり、広告や AI モデルの学習に使うことはありません。";
+
 /// 説明画面のロゴの角丸（px）。
 ///
 /// ロゴ画像（アプリアイコン）は濃紺の地に白い枠線が描かれている。角丸を**白枠の
@@ -741,6 +754,32 @@ impl AboutView {
                     .line_height(relative(1.7))
                     .child(KEY_NOTICE_LOSS),
             )
+    }
+
+    /// プライバシーポリシーの要約と、全文への導線（説明画面の一番下）。
+    fn privacy_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let muted_fg = cx.theme().muted_foreground;
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(muted_fg)
+                    .line_height(relative(1.7))
+                    .child(PRIVACY_NOTICE),
+            )
+            .child(
+                Button::new("privacy-policy-link")
+                    .debug_selector(|| "about-privacy-link".into())
+                    .label("プライバシーポリシー")
+                    .ghost()
+                    .small()
+                    .cursor_pointer()
+                    .on_click(|_, _, cx: &mut App| cx.open_url(PRIVACY_POLICY_URL)),
+            );
+        self.about_section("about-privacy", PRIVACY_SECTION_TITLE, body, cx)
     }
 
     /// 案内（説明）ページ。
@@ -1228,6 +1267,8 @@ impl AboutView {
                     .child(self.drive_notice_section(cx))
                     // 本の鍵の説明（Drive の注意と対にして、鍵の扱いを伝える）
                     .child(self.key_notice_section(cx))
+                    // プライバシーの要約と全文への導線
+                    .child(self.privacy_section(cx))
                     // フッター（保存場所の注意 + ライセンス表示への導線）
                     .child(
                         div()
@@ -1547,6 +1588,28 @@ mod tests {
             .find(|(name, _, _)| *name == title)
             .map(|(_, _, desc)| *desc)
             .unwrap_or_else(|| panic!("「{title}」が説明画面に無い"))
+    }
+
+    /// 説明画面からプライバシーポリシーに辿れること。
+    ///
+    /// Google の同意画面に登録するプライバシーポリシーと同じ内容を指すので、
+    /// URL と要約が消えたら気づけるようにしておく。
+    #[test]
+    fn about_links_the_privacy_policy() {
+        assert!(
+            PRIVACY_POLICY_URL.starts_with("https://github.com/MegaBlackLabel/ligrol-app/"),
+            "プライバシーポリシーの URL がこのリポジトリを指していない: {PRIVACY_POLICY_URL}"
+        );
+        assert!(
+            PRIVACY_POLICY_URL.ends_with("docs/privacy-policy.md"),
+            "プライバシーポリシーの URL が docs の実体を指していない: {PRIVACY_POLICY_URL}"
+        );
+        for keyword in ["ローカル", "アクセス解析", "第三者", "AI"] {
+            assert!(
+                PRIVACY_NOTICE.contains(keyword),
+                "プライバシーの要約に「{keyword}」が無い: {PRIVACY_NOTICE}"
+            );
+        }
     }
 
     /// 説明画面が「本の鍵」の仕組みと注意を書いていること

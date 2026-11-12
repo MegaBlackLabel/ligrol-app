@@ -31,7 +31,6 @@ md5 = "0.8"
 rand = "0.10"
 sha2.workspace = true
 aes-gcm = "0.11"
-socket2 = "0.6"
 nartik = { path = "../nartik" }
 image = { version = "0.25", default-features = false, features = ["webp", "png", "jpeg", "bmp", "tiff"] }
 webp = "0.3"

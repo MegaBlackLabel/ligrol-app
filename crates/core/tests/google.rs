@@ -6,8 +6,7 @@ use std::net::TcpListener;
 use std::sync::Arc;
 
 use ligrol_core::google::{
-    DEFAULT_REDIRECT_PORT, GoogleClient, OAuthTokens, build_authorize_url, build_challenge,
-    receive_callback,
+    GoogleClient, OAuthTokens, build_authorize_url, build_challenge, receive_callback,
 };
 use ligrol_core::tbf::{RequestSpec, ResponseSpec, Transport};
 
@@ -192,14 +191,8 @@ fn logout_clears_tokens() {
     assert!(!client.is_authenticated());
 }
 
-/// 実ループバック（固定ポート 38387）を使うテストは、並列実行すると同じポートを
-/// 奪い合って flaky になる（片方が bind に失敗する）。この mutex で直列化する。
-static LOOPBACK_PORT: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn lock_loopback_port() -> std::sync::MutexGuard<'static, ()> {
-    LOOPBACK_PORT.lock().unwrap_or_else(|e| e.into_inner())
-}
-
+/// 実ループバックを使うテストは、`bind_loopback()` が空きポートを取るので
+/// 並列実行しても奪い合わない。
 #[test]
 fn loopback_receives_code_and_rejects_state_mismatch() {
     // real ephemeral loopback: bind, receive in a thread, connect from test
@@ -238,14 +231,8 @@ fn loopback_receives_code_and_rejects_state_mismatch() {
 }
 
 #[test]
-fn default_redirect_port_is_38387() {
-    assert_eq!(DEFAULT_REDIRECT_PORT, 38387);
-}
-
-#[test]
 fn begin_finish_authorize_roundtrip() {
     use std::io::Write as _;
-    let _guard = lock_loopback_port();
 
     let mut client = GoogleClient::with_transport(
         Box::new(Mock(Box::new(|spec| {
@@ -294,7 +281,6 @@ fn begin_finish_authorize_roundtrip() {
 
 #[test]
 fn pending_cancel_returns_cancelled() {
-    let _guard = lock_loopback_port();
     let mut client = GoogleClient::with_transport(
         Box::new(Mock(Box::new(|_| panic!("no http")))),
         "client-1",

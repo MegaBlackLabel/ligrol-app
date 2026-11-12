@@ -1125,7 +1125,7 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
 | 定数 | 元ネタ（コメント） | アンカー |
 |---|---|---|
 | `BOOKSHELF_QUERY`（`BookShelfQuery($first, $after)`） | books.ts:462 verbatim | `crates/core/src/tbf/queries.rs:6` |
-| `CHECKLIST_QUERY`（`EventOfflineCircleChecklistQuery`） | 2026-11-04 の Web バンドルから採取した現行形（旧 `firstAppearanceEventName` / `Event.databaseID` を削除、フォローは `@skip`） | `crates/core/src/tbf/queries.rs:8-110` |
+| `CHECKLIST_QUERY`（`EventOfflineCircleChecklistQuery`） | 2026-11-04 の Web バンドルから採取した現行形（`Event.databaseID` は削除、`firstAppearanceEventName` は初出抽出のため取得、フォローは `@skip`） | `crates/core/src/tbf/queries.rs:8-110` |
 | `PRODUCT_IMAGES_QUERY`（`ProductImagesQuery`、`images(first: 8)`） | samples.ts:97-115 verbatim | `crates/core/src/tbf/queries.rs:124-141`, `:129` |
 | `EVENT_QUERY`（`TbfEventQuery($eventID)`） | events.ts:96 verbatim | `crates/core/src/tbf/queries.rs:145-146` |
 | `LOGIN_MUTATION`（`UserLoginMutation`） | 2026-08-21 にブラウザで実採取 | `crates/core/src/tbf/queries.rs:148-150` |
@@ -1270,7 +1270,11 @@ Cookie の `Domain` / `Path` / `Secure` / 期限は `CookieEntry` に保存し�
   （縦列はセルの上、横並びは右下、そ は右上）に置く。番号は各セルの中央に小さく出す。
   赤い順番矢印は描かない — `crates/app/src/views/checklist.rs` の `build_circle_map_svg`
 - 会場データの無いイベントは、チェックリストのスペース番号を 10 個ずつにまとめた簡易マップを生成する
-- 表示は固定サイズのビューポート。初期は等倍、ボタンで「全体表示 / 等倍表示」を切り替える。ドラッグ（慣性あり）・ホイール拡大縮小・ダブルクリック拡大 — `crates/app/src/views/checklist.rs`
+- 表示は固定サイズのビューポート。初期は全体表示、ボタンで「全体表示 / 等倍表示」を切り替える。ドラッグ（慣性あり）・ホイール拡大縮小・ダブルクリック拡大。ホイールはマウス直下の地点をビューポート中央へ寄せる（同じジェスチャー中は最初の地点を固定し、16ms ごとの補間で滑らかに動かす）。色付きセルのクリックで対応するチェックリスト行を選択 — `crates/app/src/views/checklist.rs`
+- 行やセルを選択すると、そのサークルがビューポート中央に来るよう平行移動する。端のブロック（`あ`・`ち` など、色付きセルが無い所も含む）を中央へ寄せられるよう、平行移動の範囲は画像の中心がビューポートの端まで来る所まで許す（`clamp_circle_map_pan` / `center_selected_circle_map_cell`）
+- 地図の色付きセルを選ぶと、対応するチェックリスト行のページへ移動し、その行が見える位置までリストを自動スクロールする（`checklist_scroll_handle` / `select_circle_map_cell`）
+- 一覧の既定の並びはスペース番号の昇順（ブロック→番号）。ブロック「あ」から始まり、同じブロック内は番号の数値順（`あ2` → `あ10`）
+- 並び替えの隣に「初出が{選択中イベント}以外でも表示」スイッチ（既定 OFF）。ON にすると初出イベントのフィルタを解除し、一覧とマップの色付けの両方に全項目を使う（`show_other_first_appearance` / `visible_items`）
 
 #### 4.6 お気に入り取り込み（`import_favorites`）
 

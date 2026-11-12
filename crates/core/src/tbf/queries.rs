@@ -7,10 +7,9 @@ pub(crate) const BOOKSHELF_QUERY: &str = "query BookShelfQuery($first: Int!, $af
 
 /// checklist の `EventOfflineCircleChecklistQuery`。
 ///
-/// 2026-11-04 の Web バンドルから採取した現在の形に合わせる。旧クエリは
-/// `ProductInfo.firstAppearanceEventName` と `Event.databaseID` を要求していたが、
-/// 現行スキーマの checklist フラグメントはどちらも使わない（認証済み viewer で
-/// 実行すると GraphQL errors になり、同期が「upstream error」で失敗していた）。
+/// 2026-11-04 の Web バンドルから採取した現在の形に合わせる。
+/// `firstAppearanceEventName` は初出イベントでの抽出に使う。
+/// `Event.databaseID` は現行スキーマに無いため要求しない。
 /// `followingOrganizations` は `@skip` で取得しない（チェックリスト表示には不要）。
 pub(crate) const CHECKLIST_QUERY: &str = r#"
     query EventOfflineCircleChecklistQuery(
@@ -37,6 +36,7 @@ pub(crate) const CHECKLIST_QUERY: &str = r#"
                 id
                 databaseID
                 name
+                firstAppearanceEventName
                 loginUserBookShelfItem { id }
                 coverImage { url }
                 productVariants(first: 10) {
