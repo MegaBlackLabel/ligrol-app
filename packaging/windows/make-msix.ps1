@@ -26,8 +26,9 @@ $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 $version = $Version.TrimStart('v')
-if ($version -notmatch '^\d+\.\d+\.\d+') {
-    throw "MSIX のバージョンは semver（例 0.3.0）で指定してください: $Version"
+# 数値の 3 桁 or 4 桁だけを受け付ける（`0.3.0-rc1` などを弾く）。
+if ($version -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
+    throw "MSIX のバージョンは数値の semver（例 0.3.0 / 0.3.0.0）で指定してください: $Version"
 }
 # MSIX は 4 桁必要（0.3.0 -> 0.3.0.0）
 if ($version -notmatch '^\d+\.\d+\.\d+\.\d+$') {

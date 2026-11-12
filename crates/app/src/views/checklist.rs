@@ -3902,7 +3902,7 @@ mod tests {
         );
     }
 
-    /// 選択中セルは通常の橙/青より優先して緑になる。
+    /// 選択中セルは通常の橙/青より優先して赤になる。
     #[test]
     fn tbf21_map_selected_cell_uses_selected_color() {
         let checked = HashSet::from([("あ".to_string(), 1)]);

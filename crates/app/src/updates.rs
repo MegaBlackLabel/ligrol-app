@@ -344,8 +344,9 @@ impl Updates {
     fn schedule_auto_check(&self, cx: &mut Context<Self>) {
         let handle = cx.entity();
         cx.spawn(async move |_weak, cx| {
+            // 初回だけ起動 30 秒後。以降は 24 時間おき。
+            cx.background_executor().timer(FIRST_CHECK_DELAY).await;
             loop {
-                cx.background_executor().timer(FIRST_CHECK_DELAY).await;
                 handle.update(cx, |this, cx| this.check_if_due(cx));
                 cx.background_executor()
                     .timer(Duration::from_secs(CHECK_INTERVAL_SECS as u64))
