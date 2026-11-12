@@ -34,11 +34,11 @@ jobs:
         include:
           # arch だけだと macOS x86_64 と Windows x86_64 でファイル名/アーティファクト名が
           # 衝突する（upload-artifact@v4 は同名で 409 になる）ため os_name も持たせる
-          - os: macos-14
+          - os: macos-latest
             os_name: macos
             target: aarch64-apple-darwin
             arch: aarch64
-          - os: macos-14
+          - os: macos-latest
             os_name: macos
             target: x86_64-apple-darwin
             arch: x86_64
