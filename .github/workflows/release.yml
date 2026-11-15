@@ -350,6 +350,9 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          # 未設定なら make-msix.ps1 の既定（Store の発行元）を使う。
+          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+          MSIX_IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
         run: |
           # PDFium (Apache-2.0) は実行時ロードなので、exe と同じフォルダに同梱する。
           # pdfium-render の pdfium_7881 バインディングに対応するバージョンを使い、
@@ -390,14 +393,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "MSI の作成に失敗しました" }
 
           # Store 用: 署名なしの MSIX（Store が再署名する）。
+          # Publisher / IdentityName は Partner Center の発行元の値が make-msix.ps1 の既定に
+          # 入っている。ここで別の値に上書きすると「パッケージ ファミリ名が無効」で弾かれるので、
+          # リポジトリ変数が設定されているときだけ渡す（未設定ならスクリプトの既定に任せる）。
           $msix = "ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-windows.msix"
-          $publisher = "${{ vars.MSIX_PUBLISHER }}"
-          if ([string]::IsNullOrWhiteSpace($publisher)) { $publisher = "CN=MegaBlackLabel" }
-          $identity = "${{ vars.MSIX_IDENTITY_NAME }}"
-          if ([string]::IsNullOrWhiteSpace($identity)) { $identity = "MegaBlackLabel.Ligrol" }
-          & pwsh -NoProfile -File packaging/windows/make-msix.ps1 `
-            -Version "${{ steps.ver.outputs.v }}" -SourceDir $releaseDir -Output $msix `
-            -Publisher $publisher -IdentityName $identity
+          $msixArgs = @(
+            "-NoProfile", "-File", "packaging/windows/make-msix.ps1",
+            "-Version", "${{ steps.ver.outputs.v }}",
+            "-SourceDir", $releaseDir,
+            "-Output", $msix
+          )
+          if ($env:MSIX_PUBLISHER) { $msixArgs += @("-Publisher", $env:MSIX_PUBLISHER) }
+          if ($env:MSIX_IDENTITY_NAME) { $msixArgs += @("-IdentityName", $env:MSIX_IDENTITY_NAME) }
+          & pwsh @msixArgs
           if ($LASTEXITCODE -ne 0) { throw "MSIX の作成に失敗しました" }
 
       # 配布物の部品表（CycloneDX JSON）を作る。`Cargo.lock` と `cargo metadata` の両方から
