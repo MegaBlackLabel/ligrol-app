@@ -2262,14 +2262,15 @@ impl ImageViewer {
             "up" | "k" | "backspace" => {
                 window.dispatch_action(Box::new(crate::actions::CloseReader), cx);
             }
-            // ESC: パネルが開いていれば閉じる、なければメニューを表示する（トグル）
+            // ESC: パネルが開いていれば閉じる。閉じていればビューアーを閉じる
+            // （メニューを開くのはクリック / メニュートリガーの役目）。
             "escape" => {
                 if self.active_panel.is_some() {
                     self.active_panel = None;
+                    cx.notify();
                 } else {
-                    self.active_panel = Some(PanelView::Menu);
+                    window.dispatch_action(Box::new(CloseReader), cx);
                 }
-                cx.notify();
             }
             _ => {}
         }
@@ -5325,6 +5326,32 @@ mod tests {
         assert_eq!(view.read_with(cx, |v, _| v.current_page), 0);
     }
 
+    /// パネルが開いている間の Esc は、ビューアーではなくパネルを閉じる。
+    #[gpui_kit::test]
+    async fn escape_closes_open_panel_before_viewer(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::component::init);
+        let view = viewer(cx, 3);
+        let window = cx.open_window(
+            gpui_kit::Size {
+                width: gpui_kit::px(800.0),
+                height: gpui_kit::px(600.0),
+            },
+            |window, cx| gpui_kit::component::Root::new(view.clone(), window, cx),
+        );
+        cx.update_window(*window, |_root, window, cx| {
+            view.update(cx, |this, cx| {
+                this.active_panel = Some(PanelView::Menu);
+                this.handle_key(&escape_event(), window, cx);
+            });
+        })
+        .unwrap();
+        assert_eq!(
+            view.read_with(cx, |v, _| v.active_panel),
+            None,
+            "開いているパネルは Esc で閉じること"
+        );
+    }
+
     #[gpui_kit::test]
     async fn autoplay_slider_initializes_with_valid_range(cx: &mut TestAppContext) {
         cx.update(gpui_kit::component::init);
@@ -5628,6 +5655,14 @@ mod tests {
     fn left_event() -> KeyDownEvent {
         KeyDownEvent {
             keystroke: gpui_kit::Keystroke::parse("left").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        }
+    }
+
+    fn escape_event() -> KeyDownEvent {
+        KeyDownEvent {
+            keystroke: gpui_kit::Keystroke::parse("escape").unwrap(),
             is_held: false,
             prefer_character_input: false,
         }
