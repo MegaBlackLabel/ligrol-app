@@ -131,3 +131,39 @@ Google に依存しない復元手段を持てますが、設定の「パスフ�
 - 連絡先: [megablacklabel@gmail.com](mailto:megablacklabel@gmail.com)
 - 不具合・要望: [Issues](https://github.com/MegaBlackLabel/ligrol-app/issues)
 - 脆弱性: 公開 Issue には書かず、[SECURITY.md](../SECURITY.md) の手順で報告してください。
+
+## Privacy Policy (English)
+
+This English section provides the same disclosures as the Japanese policy above for Google OAuth verification.
+
+### Google user data we access
+
+- Google account identifier (`sub`), email address, display name, and profile image URL.
+- OAuth access token and refresh token for Google Drive.
+- Files created by Ligrol in the Google Drive `ligrol/` folder, and files you select for import.
+
+### How we use Google user data
+
+- To sign you in and display your account.
+- To back up and restore your library and books in Google Drive.
+- To import books you choose. We do not use Google user data for advertising, credit-worthiness, or AI/ML training.
+
+### How we store and protect Google user data
+
+OAuth tokens are stored in the OS credential store (Windows Credential Manager or macOS Keychain) with encryption. Google Drive backups are encrypted before upload.
+
+### How we share Google user data
+
+We do not sell, rent, or share Google user data with third parties. We do not disclose it for advertising, credit-worthiness, or any purpose other than providing the app features described above.
+
+### Retention and deletion
+
+We retain Google user data while your Google account is connected or a Google Drive backup exists. Logging out deletes the OAuth tokens. You can delete backups from the app or Google Drive. You may request deletion by contacting megablacklabel@gmail.com; we delete the data within 30 days after verifying your request.
+
+### Limited Use
+
+Ligrol's use and transfer to any other app of information received from Google APIs will adhere to the Google API Services User Data Policy, including the Limited Use requirements.
+
+### Contact
+
+MegaBlackLabel, megablacklabel@gmail.com
