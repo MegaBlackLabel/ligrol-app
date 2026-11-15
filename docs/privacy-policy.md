@@ -2,7 +2,8 @@
 
 Ligrol（以下「本アプリ」）における、利用者の情報の取り扱いを定めます。
 
-- 最終更新: 2026-11-09
+- 提供: MegaBlackLabel
+- 最終更新: 2026-11-15
 - 対象: 本アプリのデスクトップ版（Windows / macOS）
 
 ## 1. 基本方針
@@ -55,11 +56,18 @@ Google ログインは、**Google Drive へのバックアップ**と**本の取
 
 `drive.file` 以外の Drive 全体へのアクセス権（`drive` / `drive.readonly`）は要求しません。
 
-### 4.3 Google から取得したデータの扱い
+### 4.3 Google ユーザーデータの取り扱い
 
-- 取得したデータは、本アプリの機能（バックアップ・復元・本の取り込み）の提供にのみ使います。
-- **第三者への提供・販売、広告への利用、AI モデルの学習への利用は行いません。**
-- Google API Services User Data Policy（Limited Use 要件を含む）を遵守します。
+- **取得する情報**: アカウント識別子（`sub`）、メールアドレス、表示名、プロフィール画像の URL、OAuth アクセストークン・リフレッシュトークン。
+- **利用目的**: ログイン、Google Drive のバックアップ・復元、本の取り込み。それ以外には使いません。
+- **保存**: トークンは OS の資格情報ストアに暗号化して保存します。Drive のバックアップは暗号化して `ligrol/` フォルダに保存します。
+- **共有・第三者提供**: Google ユーザーデータを第三者に販売・提供・開示しません。広告、信用調査、AI/ML モデルの学習には使いません。
+- **保護**: OS の資格情報ストアと、本の鍵による暗号化で保護します。
+- **保持期間**: Google アカウントとの連携中、または Google Drive にバックアップが存在する間。
+- **削除**: ログアウトでトークンを削除します。Drive のバックアップは設定または Google ドライブから削除できます。削除を依頼する場合は [megablacklabel@gmail.com](mailto:megablacklabel@gmail.com) に連絡してください。本人確認後 30 日以内に削除します。
+- **アクセス権の解除**: [Google アカウントの権限ページ](https://myaccount.google.com/permissions) から本アプリのアクセスを解除できます。
+
+Ligrol's use and transfer to any other app of information received from Google APIs will adhere to the Google API Services User Data Policy, including the Limited Use requirements.
 
 ### 4.4 Google Drive に保存される内容
 
@@ -108,6 +116,8 @@ Google に依存しない復元手段を持てますが、設定の「パスフ�
 | Google の認証トークン | 「ログアウト」で OS の資格情報ストアから削除 |
 | 端末内のすべてのデータ | 設定 →「全データ削除」（復元不可） |
 | Google Drive のバックアップ | 設定から Drive 上のコピーを削除するか、Google ドライブから削除 |
+| Google ユーザーデータの保持期間 | Google アカウントとの連携中、またはバックアップが存在する間 |
+| 削除を依頼する場合 | [megablacklabel@gmail.com](mailto:megablacklabel@gmail.com) に連絡してください。本人確認後 30 日以内に削除します |
 | アンインストール後の残存 | OS の資格情報ストアの項目と Google Drive の `ligrol/` フォルダは手動で削除してください |
 
 ## 8. 本ポリシーの変更
@@ -117,5 +127,7 @@ Google に依存しない復元手段を持てますが、設定の「パスフ�
 
 ## 9. 問い合わせ
 
+- 提供: MegaBlackLabel
+- 連絡先: [megablacklabel@gmail.com](mailto:megablacklabel@gmail.com)
 - 不具合・要望: [Issues](https://github.com/MegaBlackLabel/ligrol-app/issues)
 - 脆弱性: 公開 Issue には書かず、[SECURITY.md](../SECURITY.md) の手順で報告してください。
