@@ -721,43 +721,25 @@ const VIEW_SESSIONS: &[(&str, &str, u32, &str, u32)] = &[
 ];
 
 /// 技術書典のイベント（チェックリストの親。本棚のイベント名にも使う）。
-const EVENT_ID: &str = "demo-tbf-20";
-const EVENT_SLUG: &str = "demo-tbf-20";
-const EVENT_NAME: &str = "技術書典20";
-/// サンプルの購入日（本棚の並び順・イベントの開催日）。
+const EVENT_ID: &str = "tbf21";
+const EVENT_SLUG: &str = "tbf21";
+const EVENT_NAME: &str = "技術書典21";
+/// サンプルの購入日（本棚の並び順）。
 const PURCHASED_AT: &str = "2026-09-12 10:00:00";
-const EVENT_DATE: &str = "2026-09-12";
+const PURCHASE_DATE: &str = "2026-09-12";
+const EVENT_START_DATE: &str = "2026-11-21";
+const EVENT_END_DATE: &str = "2026-12-06";
 
 /// チェックリストの項目（`(id, サークル, スペース, タイトル, チェック済み)`）。
 const CHECKLIST: &[(&str, &str, &str, &str, bool)] = &[
-    (
-        "demo-check-1",
-        "こもれび工房",
-        "東2 あ-12",
-        "はじめての設計メモ",
-        true,
-    ),
-    (
-        "demo-check-2",
-        "星屑ラボ",
-        "東2 い-05",
-        "小さな道具をつくる Rust",
-        true,
-    ),
-    (
-        "demo-check-3",
-        "しろくま出版",
-        "東3 う-21",
-        "色と余白のレイアウト帳",
-        false,
-    ),
-    (
-        "demo-check-4",
-        "もりのなか技術班",
-        "東3 え-08",
-        "図解アルゴリズム散歩",
-        false,
-    ),
+    ("demo-check-1", "こもれび工房", "あ-12", "はじめての設計メモ", true),
+    ("demo-check-2", "星屑ラボ", "い-05", "小さな道具をつくる Rust", true),
+    ("demo-check-3", "しろくま出版", "う-21", "色と余白のレイアウト帳", true),
+    ("demo-check-4", "もりのなか技術班", "え-08", "図解アルゴリズム散歩", true),
+    ("demo-check-5", "ひだまりソフト", "お-03", "小さな Web アプリの作り方", true),
+    ("demo-check-6", "あおぞら技術部", "か-14", "テストの書き方ノート", true),
+    ("demo-check-7", "みかづき書房", "き-07", "手書きで学ぶデータベース", true),
+    ("demo-check-8", "かたつむり開発室", "く-19", "毎日の自動化レシピ", true),
 ];
 
 /// お気に入りのサークル / 作者（本棚のチップにハートが付く）。
@@ -964,9 +946,9 @@ fn event() -> TbfEvent {
         slug: Some(EVENT_SLUG.to_string()),
         tbf_event_id: None,
         event_name: EVENT_NAME.to_string(),
-        event_date: Some(EVENT_DATE.to_string()),
-        event_start_date: Some(EVENT_DATE.to_string()),
-        event_end_date: Some(EVENT_DATE.to_string()),
+        event_date: Some(EVENT_START_DATE.to_string()),
+        event_start_date: Some(EVENT_START_DATE.to_string()),
+        event_end_date: Some(EVENT_END_DATE.to_string()),
         event_format: "offline".to_string(),
         is_cancelled: 0,
         display_order: 0,
@@ -998,14 +980,7 @@ fn seed_checklist(pool: &SqlitePool, owner: Option<&str>) -> anyhow::Result<()> 
                 thumbnail_data: None,
                 price: Some(1000 + index as i64 * 500),
                 is_purchased: i64::from(*checked),
-                first_appearance_event_name: Some(
-                    if index < 2 {
-                        "技術書典21"
-                    } else {
-                        "技術書典20"
-                    }
-                    .into(),
-                ),
+                first_appearance_event_name: Some(EVENT_NAME.into()),
                 sample_fetch_attempted_at: None,
                 created_at: PURCHASED_AT.to_string(),
             },
@@ -1123,7 +1098,7 @@ fn local_book(book: &DemoBook) -> Book {
         title: book.title.to_string(),
         author: book.author.to_string(),
         circle_name: book.circle.to_string(),
-        purchase_date: Some(EVENT_DATE.to_string()),
+        purchase_date: Some(PURCHASE_DATE.to_string()),
         file_name: format!("{}.pdf", book.database_id),
         // 実体（pack）は無い。0 だと一覧で「空」に見えるため、ページ数から見た目の値を作る。
         file_size: i64::from(book.page_count) * 120_000,
@@ -2127,7 +2102,19 @@ mod tests {
         assert_eq!(events.len(), 1, "イベントの数が違う");
         assert_eq!(events[0].site_id, SITE_ID_TECHBOOKFEST);
         let items = db::checklist::list_items(&pool, &events[0].id).unwrap();
-        assert!(items.len() >= 3, "チェックリストの項目が少ない");
+        assert_eq!(
+            events[0].slug.as_deref(),
+            Some("tbf21"),
+            "サンプルの技術書典イベントが tbf21 でない"
+        );
+        assert!(
+            items.iter().any(|item| item.space_number == "あ-12"),
+            "tbf21 の会場マップに載るスペース番号が無い"
+        );
+        assert!(
+            items.len() >= 8,
+            "チェックリストの項目が少ない"
+        );
         assert!(
             items.iter().any(|item| item.is_checked != 0),
             "チェック済みの項目が無い（チェックリスト画面が全部未チェックになる）"
