@@ -2560,7 +2560,10 @@ impl ChecklistView {
                             .child(
                                 div()
                                     .absolute()
-                                    .inset_0()
+                                    .top_0()
+                                    .bottom_0()
+                                    .right_0()
+                                    .w(px(12.0))
                                     .child(Scrollbar::vertical(&checklist_scroll_handle)),
                             )
                             .into_any_element()
