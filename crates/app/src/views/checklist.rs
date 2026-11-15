@@ -153,8 +153,8 @@ struct CellRect {
     y1: f32,
 }
 
-/// 地図の表示領域（960px のパネル - `p_3` の左右 24px）。
-const CIRCLE_MAP_VIEWPORT_WIDTH: f32 = 936.0;
+/// 地図の表示領域（1080px のパネル - `p_3` の左右 24px）。
+const CIRCLE_MAP_VIEWPORT_WIDTH: f32 = 1056.0;
 const CIRCLE_MAP_VIEWPORT_HEIGHT: f32 = 520.0;
 /// 地図モードの倍率（1.0 = 原寸）。全体表示まで縮小できる。
 const CIRCLE_MAP_MIN_ZOOM: f32 = 0.2;
@@ -621,9 +621,10 @@ impl ChecklistView {
             return;
         };
         self.show_circle_map = true;
-        self.reset_circle_map_view();
         if !self.circle_map_images.contains_key(&slug) && !self.circle_map_fetching.contains(&slug)
         {
+            // 初回だけ全体表示にリセットする。再表示では前回の倍率・位置を保つ。
+            self.reset_circle_map_view();
             // 再取得ボタンは置かない。失敗していたら、もう一度開いたときに再試行する。
             self.circle_map_error.remove(&slug);
             self.build_circle_map(cx, slug);
@@ -1704,7 +1705,8 @@ impl ChecklistView {
         let move_handle = handle.clone();
         let up_handle = handle.clone();
         let out_handle = handle.clone();
-        let wheel_handle = handle;
+        let wheel_handle = handle.clone();
+        let pinch_handle = handle;
         let display_width = width * zoom;
         let display_height = height * zoom;
         let display_left = (CIRCLE_MAP_VIEWPORT_WIDTH - display_width) / 2.0 + pan.x;
@@ -1871,6 +1873,37 @@ impl ChecklistView {
                         factor,
                         cx,
                     );
+                });
+                cx.stop_propagation();
+            })
+            .on_pinch(move |event, _window, cx| {
+                // トラックパッドのピンチ（magnify）。delta は正が拡大・負が縮小。
+                // ピンチは連続入力なので、アニメーションを挟まず直接ズームする。
+                let factor = 1.0 + event.delta;
+                if factor <= 0.0 {
+                    return;
+                }
+                let mouse = gpui_kit::Point::new(
+                    event.position.x.as_f32(),
+                    event.position.y.as_f32(),
+                );
+                pinch_handle.update(cx, |this, cx| {
+                    let anchor = this
+                        .circle_map_viewport_bounds
+                        .get()
+                        .map(|bounds| {
+                            gpui_kit::Point::new(
+                                mouse.x - bounds.origin.x.as_f32(),
+                                mouse.y - bounds.origin.y.as_f32(),
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            gpui_kit::Point::new(
+                                CIRCLE_MAP_VIEWPORT_WIDTH / 2.0,
+                                CIRCLE_MAP_VIEWPORT_HEIGHT / 2.0,
+                            )
+                        });
+                    this.zoom_circle_map_at(factor, anchor, cx);
                 });
                 cx.stop_propagation();
             })
@@ -2186,7 +2219,7 @@ impl ChecklistView {
                     .child(
                 div()
                     .mx_auto()
-                    .w(px(960.0))
+                    .w(px(1080.0))
                     .py_8()
                     .px_4()
                     .flex()
@@ -2213,36 +2246,20 @@ impl ChecklistView {
                                                                 }),
                             ),
                     )
-                    // ヘッダー: イベント名 + 日付
+                    // ヘッダー + ツールバー（1列に統合）
                     .child(
                         div()
                             .flex()
-                            .flex_col()
-                            .gap_1()
+                            .flex_row()
+                            .items_center()
+                            .gap_2()
+                            .flex_wrap()
                             .child(
                                 div()
-                                    .text_xl()
+                                    .text_lg()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(event.as_ref().map(|e| e.event_name.clone()).unwrap_or_default()),
                             )
-                            .child(if let Some(event) = &event {
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap_1()
-                                    .text_sm()
-                                    .text_color(muted_fg)
-                                    .child(
-                                        Icon::new(IconName::Calendar)
-                                            .size(px(14.0))
-                                            .text_color(muted_fg),
-                                    )
-                                    .child(self.format_event_date(event))
-                                    .into_any_element()
-                            } else {
-                                div().into_any_element()
-                            })
                             // ポーリング ON/OFF
                             .child(if let Some(event) = &event {
                                 let poll_slug = event.slug.clone().unwrap_or_default();
@@ -2271,22 +2288,14 @@ impl ChecklistView {
                                         div()
                                             .text_sm()
                                             .text_color(muted_fg)
-                                            .child("このイベントについて、技術書典から最新状況を同期する"),
+                                            .child("自動同期"),
                                     )
                                     .into_any_element()
                             } else {
                                 div().into_any_element()
-                            }),
-                    )
-                    // ツールバー
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_2()
-                            .flex_wrap()
-                            .child(if !sorted.is_empty() {
+                            })
+                    // 件数
+                    .child(if !sorted.is_empty() {
                                 div()
                                     .text_sm()
                                     .text_color(muted_fg)
@@ -2305,6 +2314,7 @@ impl ChecklistView {
                                 Button::new("checklist-sync").cursor_pointer()
                                     .icon(AppIcon::RefreshCw)
                                     .label("同期")
+                                    .debug_selector(|| "checklist-sync".into())
                                     .disabled(busy || demo).cursor_pointer().on_click({
                                 let handle = handle.clone();
                                 move |_, _window, cx| {
@@ -2315,9 +2325,9 @@ impl ChecklistView {
                             .child(
                                 Button::new("checklist-circle-map").cursor_pointer()
                                     .label(if show_circle_map {
-                                        "サークルマップを隠す"
+                                        "マップ非表示"
                                     } else {
-                                        "サークルマップ"
+                                        "マップ表示"
                                     })
                                     .small()
                                     .disabled(demo)
@@ -2365,11 +2375,7 @@ impl ChecklistView {
                             )
                             .child({
                                 let toggle_handle = handle.clone();
-                                let label = if selected_event_name.is_empty() {
-                                    "初出以外も表示".to_string()
-                                } else {
-                                    format!("初出が{selected_event_name}以外でも表示")
-                                };
+                                let label = "全項目表示".to_string();
                                 div()
                                     .flex()
                                     .flex_row()
@@ -2399,7 +2405,7 @@ impl ChecklistView {
                                             .text_color(muted_fg)
                                             .child(label),
                                     )
-                            }),
+                            })
                     )
                     // サークルマップ（会場配置図）。取得はボタンを押したときだけ。
                     .child(if show_circle_map {
@@ -3322,6 +3328,49 @@ mod tests {
         assert_eq!(checked, 1);
     }
 
+    /// ヘッダーとツールバーは 1 列に統合され、同期ボタンと初出トグルが同じ行に並ぶ。
+    #[gpui_kit::test]
+    async fn event_header_and_toolbar_share_one_row(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::component::init);
+        cx.update(AppState::init_test);
+        seed_event(cx, "tbf20", "技術書典20");
+        seed_item(cx, "item-1", "tbf20", "サークルA");
+        let view = cx.new(ChecklistView::new);
+        let window = cx.open_window(
+            gpui_kit::Size {
+                width: gpui_kit::px(1200.0),
+                height: gpui_kit::px(1000.0),
+            },
+            |window, cx| gpui_kit::component::Root::new(view.clone(), window, cx),
+        );
+        let visual = gpui_kit::VisualTestContext::from_window(*window, cx).into_mut();
+        let draw = |visual: &mut gpui_kit::VisualTestContext| {
+            visual.update(|window, cx| {
+                let arena_clear = window.draw(cx);
+                arena_clear.clear(cx);
+            });
+        };
+        cx.update(|cx| {
+            view.update(cx, |this, cx| {
+                this.select_event(cx, "tbf20");
+                cx.notify();
+            })
+        });
+        draw(visual);
+        let sync = visual
+            .debug_bounds("checklist-sync")
+            .expect("同期ボタンが描かれていない");
+        let toggle = visual
+            .debug_bounds("checklist-show-other-first-appearance")
+            .expect("初出トグルが描かれていない");
+        assert!(
+            (sync.center().y.as_f32() - toggle.center().y.as_f32()).abs() < 1.0,
+            "ヘッダーとツールバーが縦に積まれている: sync={:?} toggle={:?}",
+            sync.center(),
+            toggle.center()
+        );
+    }
+
     #[test]
     fn decode_thumbnail_scales_down_large_images() {
         // 1024x1024 の画像を作ってデコード → 256px 幅に縮小される
@@ -3686,6 +3735,38 @@ mod tests {
         assert!(
             visual.debug_bounds("circle-map-image").is_some(),
             "再度トグルしてもサークルマップが表示されない"
+        );
+    }
+
+    /// マップを非表示にして再表示しても、倍率と位置が保たれる。
+    #[gpui_kit::test]
+    async fn circle_map_toggle_keeps_zoom_and_pan(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::component::init);
+        cx.update(AppState::init_test);
+        seed_event(cx, "tbf20", "技術書典20");
+        seed_item(cx, "item-1", "tbf20", "サークルA");
+        let view = cx.new(ChecklistView::new);
+        cx.update(|cx| {
+            view.update(cx, |this, cx| {
+                this.select_event(cx, "tbf20");
+                this.apply_circle_map("tbf20", dummy_render_image());
+                this.circle_map_fit = false;
+                this.circle_map_zoom = 2.5;
+                this.circle_map_pan = gpui_kit::Point::new(120.0, -80.0);
+                cx.notify();
+            })
+        });
+        // 非表示 → 再表示
+        cx.update(|cx| view.update(cx, |this, cx| this.toggle_circle_map(cx)));
+        cx.update(|cx| view.update(cx, |this, cx| this.toggle_circle_map(cx)));
+        let (zoom, pan) = view.read_with(cx, |v, _| (v.circle_map_zoom, v.circle_map_pan));
+        assert!(
+            (zoom - 2.5).abs() < 0.001,
+            "再表示で倍率がリセットされた: {zoom}"
+        );
+        assert!(
+            (pan.x - 120.0).abs() < 0.001 && (pan.y + 80.0).abs() < 0.001,
+            "再表示で位置がリセットされた: {pan:?}"
         );
     }
 
@@ -4380,6 +4461,69 @@ mod tests {
         assert!(
             after <= before * 1.10,
             "1 ホイールの拡大が粗すぎる: {before} -> {after}"
+        );
+    }
+
+    /// 地図モード: トラックパッドのピンチ（magnify）で滑らかに拡大縮小できる。
+    /// ピンチは連続入力なので、アニメーションを挟まず即座に反映されること。
+    #[gpui_kit::test]
+    async fn circle_map_pinch_zooms(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::component::init);
+        cx.update(AppState::init_test);
+        seed_event(cx, "tbf20", "技術書典20");
+        seed_item(cx, "item-1", "tbf20", "サークルA");
+        let image = Arc::new(RenderImage::new([image::Frame::new(
+            image::RgbaImage::from_pixel(2000, 1000, image::Rgba([240, 240, 240, 255])),
+        )]));
+        let view = cx.new(ChecklistView::new);
+        let window = cx.open_window(
+            gpui_kit::Size {
+                width: gpui_kit::px(1200.0),
+                height: gpui_kit::px(1000.0),
+            },
+            |window, cx| gpui_kit::component::Root::new(view.clone(), window, cx),
+        );
+        let visual = gpui_kit::VisualTestContext::from_window(*window, cx).into_mut();
+        let draw = |visual: &mut gpui_kit::VisualTestContext| {
+            visual.update(|window, cx| {
+                let arena_clear = window.draw(cx);
+                arena_clear.clear(cx);
+            });
+        };
+        cx.update(|cx| {
+            view.update(cx, |this, cx| {
+                this.select_event(cx, "tbf20");
+                this.apply_circle_map("tbf20", image);
+                this.show_circle_map = true;
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            view.update(cx, |this, cx| {
+                this.circle_map_fit = false;
+                this.circle_map_zoom = 1.0;
+                this.circle_map_pan = gpui_kit::Point::new(0.0, 0.0);
+                cx.notify();
+            })
+        });
+        draw(visual);
+        let bounds = visual
+            .debug_bounds("circle-map-image")
+            .expect("地図の表示領域が無い");
+        let start = bounds.center();
+
+        let before = view.read_with(cx, |v, _| v.circle_map_zoom);
+        visual.simulate_event(gpui_kit::PinchEvent {
+            position: start,
+            delta: 0.1,
+            ..Default::default()
+        });
+        // アニメーションを進めずに、イベント直後の倍率を確認する。
+        let after = view.read_with(cx, |v, _| v.circle_map_zoom);
+        assert!(
+            after > before,
+            "ピンチで即座に拡大していない: {before} -> {after}"
         );
     }
 
