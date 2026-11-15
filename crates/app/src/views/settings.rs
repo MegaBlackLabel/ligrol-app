@@ -20,7 +20,7 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{ActiveTheme as _, Disableable as _, Icon, IconName};
 use ligrol_core::db;
 use ligrol_core::drive::sync;
-use ligrol_core::drive::{DriveClient, SYNC_FOLDER_NAME, ensure_folder};
+use ligrol_core::drive::{DriveClient, ensure_sync_folder};
 use ligrol_core::secrets;
 use ligrol_core::tbf::UreqTransport;
 
@@ -1507,17 +1507,12 @@ impl SettingsView {
             };
             let mut drive = DriveClient::new(Box::new(UreqTransport::new()), token);
             log::info!("sync_drive_now: token ok, drive client ready");
-            let folder_id = match folder_id {
-                Some(id) => id,
-                None => {
-                    log::info!("sync_drive_now: looking for an existing folder");
-                    // 既存の同名フォルダを先に探す（毎回作ると My Drive 直下に孤児が増える）
-                    let id =
-                        ensure_folder(&mut drive, SYNC_FOLDER_NAME).map_err(|e| e.to_string())?;
-                    let _ = db::settings::set(&db, "drive.sync.folder_id", &id);
-                    id
-                }
-            };
+            // 保存済みの id は別アカウントのフォルダを指していることがある（404）。
+            // その場合は新しいアカウントの同名フォルダを探す / 作って保存し直す。
+            let folder_id = ensure_sync_folder(&mut drive, folder_id.as_deref())
+                .map_err(|e| e.to_string())?;
+            let _ = db::settings::set(&db, "drive.sync.folder_id", &folder_id);
+            log::info!("sync_drive_now: folder_id resolved={folder_id}");
             // 利用者が手動で同期した＝Drive 同期は有効。トグルを行を持たない状態
             // （「同期情報をクリア」後の再同期など）で終了時のアップロード確認が
             // 抑止されないよう、ここで確実に立てる。

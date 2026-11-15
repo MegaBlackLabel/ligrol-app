@@ -195,7 +195,15 @@ pub trait DriveApi {
 /// なお、どのフォルダもアプリ専用ではないので、**古いフォルダは消さない**
 /// （ユーザーが手で置いたファイルを失わないため）。件数だけ警告して気付けるようにする。
 pub fn ensure_folder(drive: &mut dyn DriveApi, name: &str) -> Result<String, DriveError> {
-    let mut folders = drive.find_root_folders(name)?;
+    let folders = drive.find_root_folders(name)?;
+    match choose_root_folder(folders, name) {
+        Some(id) => Ok(id),
+        None => drive.create_folder(name),
+    }
+}
+
+/// ルート直下の同名フォルダから 1 つ選ぶ（`modifiedTime` 降順 → `id` 昇順）。
+fn choose_root_folder(mut folders: Vec<DriveFile>, name: &str) -> Option<String> {
     if folders.len() > 1 {
         let ids: Vec<&str> = folders.iter().map(|folder| folder.id.as_str()).collect();
         log::warn!(
@@ -210,9 +218,33 @@ pub fn ensure_folder(drive: &mut dyn DriveApi, name: &str) -> Result<String, Dri
             .cmp(&a.modified_time.as_deref())
             .then_with(|| a.id.cmp(&b.id))
     });
-    match folders.first() {
-        Some(folder) => Ok(folder.id.clone()),
-        None => drive.create_folder(name),
+    folders.first().map(|folder| folder.id.clone())
+}
+
+/// 保存済みの同期フォルダ id を検証し、無ければ既存フォルダを探す / 作る。
+///
+/// Google アカウントを切り替えると、以前のアカウントの `drive.sync.folder_id` は
+/// 新しいトークンから見えなくなる。`files.list` は存在しない parent でも
+/// 200 + 空配列を返すため、アップロード時の 404 を防ぐには現在のアカウントの
+/// ルート直下に実在するかを確認する。無ければ新しいアカウントの同名フォルダを
+/// 使い、1 つも無ければ作る。
+pub fn ensure_sync_folder(
+    drive: &mut dyn DriveApi,
+    saved: Option<&str>,
+) -> Result<String, DriveError> {
+    let folders = drive.find_root_folders(SYNC_FOLDER_NAME)?;
+    if let Some(folder_id) = saved.filter(|id| !id.trim().is_empty()) {
+        if folders.iter().any(|folder| folder.id == folder_id) {
+            return Ok(folder_id.to_string());
+        }
+        log::warn!(
+            "drive: 保存済みの同期フォルダが見つかりません（id={folder_id}）。\
+             アカウント変更後に新しいフォルダを解決します"
+        );
+    }
+    match choose_root_folder(folders, SYNC_FOLDER_NAME) {
+        Some(id) => Ok(id),
+        None => drive.create_folder(SYNC_FOLDER_NAME),
     }
 }
 
@@ -1429,6 +1461,8 @@ mod tests {
     struct FolderDrive {
         roots: Vec<DriveFile>,
         created: Vec<String>,
+        find_root_status: Option<u16>,
+        find_root_calls: usize,
     }
 
     impl FolderDrive {
@@ -1436,6 +1470,17 @@ mod tests {
             Self {
                 roots,
                 created: Vec::new(),
+                find_root_status: None,
+                find_root_calls: 0,
+            }
+        }
+
+        fn with_root_status(roots: Vec<DriveFile>, status: u16) -> Self {
+            Self {
+                roots,
+                created: Vec::new(),
+                find_root_status: Some(status),
+                find_root_calls: 0,
             }
         }
     }
@@ -1469,7 +1514,11 @@ mod tests {
         }
 
         fn find_root_folders(&mut self, _name: &str) -> Result<Vec<DriveFile>, DriveError> {
-            Ok(self.roots.clone())
+            self.find_root_calls += 1;
+            match self.find_root_status {
+                Some(status) => Err(DriveError::Http(status, "root list failed".into())),
+                None => Ok(self.roots.clone()),
+            }
         }
 
         fn create_folder(&mut self, name: &str) -> Result<String, DriveError> {
@@ -1539,5 +1588,54 @@ mod tests {
             "a"
         );
         assert!(drive.created.is_empty(), "既存があるので作らない");
+    }
+
+    /// 保存済み id が現在のアカウントのルート直下に実在すれば、それを使う。
+    #[test]
+    fn ensure_sync_folder_keeps_a_valid_saved_folder() {
+        let mut drive = FolderDrive::with_roots(vec![root_folder(
+            "saved",
+            Some("2026-11-16T00:00:00.000Z"),
+        )]);
+        let id = ensure_sync_folder(&mut drive, Some("saved")).expect("有効な id");
+        assert_eq!(id, "saved");
+        assert_eq!(drive.find_root_calls, 1);
+        assert!(drive.created.is_empty());
+    }
+
+    /// アカウント切り替えで保存済み id が見えなくなったら、新しいアカウントの
+    /// 同名フォルダを使う（無ければ作る）。終了時アップロードがここで詰まらない。
+    #[test]
+    fn ensure_sync_folder_recreates_a_missing_saved_folder() {
+        let mut drive = FolderDrive::with_roots(vec![root_folder(
+            "new-account",
+            Some("2026-11-16T00:00:00.000Z"),
+        )]);
+        let id = ensure_sync_folder(&mut drive, Some("old-account")).expect("解決できる");
+        assert_eq!(id, "new-account");
+        assert_eq!(drive.find_root_calls, 1);
+        assert!(drive.created.is_empty(), "既存フォルダがあるので作らない");
+    }
+
+    /// 404 以外（権限エラー等）はフォルダを作り直さず、そのまま返す。
+    #[test]
+    fn ensure_sync_folder_propagates_non_404_errors() {
+        let mut drive = FolderDrive::with_root_status(Vec::new(), 403);
+        let error = ensure_sync_folder(&mut drive, Some("denied")).expect_err("403");
+        assert!(matches!(error, DriveError::Http(403, _)), "{error:?}");
+        assert_eq!(drive.find_root_calls, 1);
+        assert!(drive.created.is_empty());
+    }
+
+    /// 保存済み id が無いときは従来どおり既存を探す / 作る。
+    #[test]
+    fn ensure_sync_folder_finds_a_folder_when_nothing_is_saved() {
+        let mut drive = FolderDrive::with_roots(vec![root_folder(
+            "existing",
+            Some("2026-11-16T00:00:00.000Z"),
+        )]);
+        let id = ensure_sync_folder(&mut drive, None).expect("解決できる");
+        assert_eq!(id, "existing");
+        assert_eq!(drive.find_root_calls, 1);
     }
 }

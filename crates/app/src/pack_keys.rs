@@ -21,7 +21,7 @@ use gpui_kit::ReadGlobal as _;
 use nartik::{PackKeyBundle, PackRootKey, WrapKind, derive_owner_id};
 use parking_lot::Mutex;
 use ligrol_core::db::{self, SqlitePool};
-use ligrol_core::drive::{DriveApi, DriveClient, SYNC_FOLDER_NAME, ensure_folder};
+use ligrol_core::drive::{DriveApi, DriveClient, ensure_sync_folder};
 use ligrol_core::google::{GoogleClient, GoogleProfile};
 use ligrol_core::import::{ImportError, pack_root_key_for_import};
 use ligrol_core::pack_keys::{PackKeyStore, PackKeysError};
@@ -329,14 +329,12 @@ impl KeyContext {
 
     /// Drive の同期フォルダ id（未設定なら既存を探して使い、無ければ作る）。
     pub fn drive_folder(&self, drive: &mut dyn DriveApi) -> Result<String, String> {
-        if let Some(id) = db::settings::get(&self.pool, DRIVE_FOLDER_KEY)
+        let saved = db::settings::get(&self.pool, DRIVE_FOLDER_KEY)
             .ok()
-            .flatten()
-        {
-            return Ok(id);
-        }
-        // 既存の同名フォルダを先に探す（毎回作ると My Drive 直下に孤児が増える）
-        let id = ensure_folder(drive, SYNC_FOLDER_NAME).map_err(|error| error.to_string())?;
+            .flatten();
+        // 別アカウントのフォルダ id が残っていると 404 になるため、その場合は
+        // 新しいアカウントの同名フォルダを探す / 作る。
+        let id = ensure_sync_folder(drive, saved.as_deref()).map_err(|error| error.to_string())?;
         let _ = db::settings::set(&self.pool, DRIVE_FOLDER_KEY, &id);
         Ok(id)
     }
@@ -1456,7 +1454,7 @@ mod tests {
         );
     }
 
-    /// 設定に id があるときは Drive を探さない（保存済みの id が優先）。
+    /// 保存済み id が現在のアカウントのルート直下に実在すれば、それを使う。
     #[test]
     fn drive_folder_prefers_the_saved_id() {
         let pool = ligrol_core::db::test_pool();
@@ -1464,9 +1462,37 @@ mod tests {
         db::settings::set(&pool, DRIVE_FOLDER_KEY, "saved").unwrap();
         let context = folder_context(pool.clone());
         let mut drive = FakeDrive::new();
-        drive.root_folders = vec![root_folder("other", "2026-01-01T00:00:00.000Z")];
+        drive.root_folders = vec![
+            root_folder("saved", "2026-01-01T00:00:00.000Z"),
+            root_folder("other", "2026-02-01T00:00:00.000Z"),
+        ];
         assert_eq!(context.drive_folder(&mut drive).unwrap(), "saved");
         assert!(drive.created_folders.is_empty(), "作らない");
+    }
+
+    /// アカウント切り替えで保存済み id が見えなくなったら、新しいアカウントの
+    /// フォルダに差し替えて保存する（終了時アップロードの 404 を防ぐ）。
+    #[test]
+    fn drive_folder_replaces_a_saved_id_missing_from_the_current_account() {
+        let pool = ligrol_core::db::test_pool();
+        ligrol_core::db::migrate(&pool).unwrap();
+        db::settings::set(&pool, DRIVE_FOLDER_KEY, "old-account").unwrap();
+        let context = folder_context(pool.clone());
+        let mut drive = FakeDrive::new();
+        drive.root_folders = vec![root_folder("new-account", "2026-01-01T00:00:00.000Z")];
+        assert_eq!(
+            context.drive_folder(&mut drive).unwrap(),
+            "new-account",
+            "現在のアカウントのフォルダへ差し替える"
+        );
+        assert_eq!(
+            db::settings::get(&pool, DRIVE_FOLDER_KEY)
+                .unwrap()
+                .as_deref(),
+            Some("new-account"),
+            "差し替えた id を保存する"
+        );
+        assert!(drive.created_folders.is_empty(), "既存があるので作らない");
     }
 }
 

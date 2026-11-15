@@ -328,6 +328,26 @@ pub fn sync_with_progress(
     request: SyncRequest<'_>,
     on_progress: &mut dyn FnMut(&SyncProgress) -> bool,
 ) -> Result<SyncOutcome, SyncError> {
+    sync_inner(request, on_progress, true)
+}
+
+/// 終了時バックアップ用の **アップロード専用** 同期。
+///
+/// ダウンロード（復元・pack 取得）は行わない。終了時は「いまのローカルを上げて
+/// 終わる」だけが目的で、別アカウントの Drive に暗号化 pack があっても鍵が無い
+/// だけで終了できなくなるのを避ける。アップロードと DB バックアップは通常どおり行う。
+pub fn sync_upload_only_with_progress(
+    request: SyncRequest<'_>,
+    on_progress: &mut dyn FnMut(&SyncProgress) -> bool,
+) -> Result<SyncOutcome, SyncError> {
+    sync_inner(request, on_progress, false)
+}
+
+fn sync_inner(
+    request: SyncRequest<'_>,
+    on_progress: &mut dyn FnMut(&SyncProgress) -> bool,
+    download_books: bool,
+) -> Result<SyncOutcome, SyncError> {
     let SyncRequest {
         pool,
         drive,
@@ -369,129 +389,133 @@ pub fn sync_with_progress(
         .map(|size| size.max(0) as u64)
         .sum();
 
-    log::info!("drive sync: download direction start");
-    // -- download direction -------------------------------------------------
-    // 「書籍のバックアップ」OFF のときは pack を取得しない（本のファイルだけが対象。
-    // DB バックアップと pack 鍵 bundle は役割が別なので続ける）。
-    // 進捗の分母（転送対象の総数）を確定させるため、md5 一致でスキップする分を先に外す
-    // （スキップを分母に数えると「2/5」のまま終わらず、利用者に進まないように見える）。
-    let mut pending_downloads: Vec<(&str, &DriveFile, String)> = Vec::new();
-    if sync_books {
-        for (pack_id, file) in &drive_pack_by_id {
-            let state = sync_state::get(pool, pack_id)?;
-            let drive_md5 = file.md5_checksum.clone().unwrap_or_default();
-            if let Some(state) = &state
-                && !drive_md5.is_empty()
-                && drive_md5 == state.md5
-            {
-                outcome.skipped.push((*pack_id).to_string());
-                continue;
-            }
-            pending_downloads.push((pack_id, file, drive_md5));
-        }
-    } else {
-        log::info!("drive sync: 書籍のバックアップが OFF のため pack のダウンロードをスキップ");
-    }
-    let download_count = pending_downloads.len();
-    // 進捗コールバックが中止を求めた（`false`）。転送が進捗を報告しない場合
-    // （`Content-Length` 無しの小さな pack など）でも、次の pack へ進む前に止める。
-    let mut cancelled = false;
-    for (offset, (pack_id, file, drive_md5)) in pending_downloads.into_iter().enumerate() {
-        if cancelled {
-            return Err(SyncError::Cancelled);
-        }
-        let local_path = crate::pack_path::pack_path(packs_dir, pack_id)
-            .map_err(|e| SyncError::InvalidPack(format!("{pack_id}: {e}")))?;
-
-        std::fs::create_dir_all(downloads_dir)?;
-        std::fs::create_dir_all(packs_dir)?;
-        let temp = crate::pack_path::pack_path(downloads_dir, pack_id)
-            .map_err(|e| SyncError::InvalidPack(format!("{pack_id}: {e}")))?;
-
-        // 進捗つきの取得（16MiB の API 上限ではなく 2GiB のダウンロード経路）。
-        // **一時ファイルへ直接ストリーム**するので、pack 全体を RAM に載せない
-        // （2GiB を超える pack でもメモリ使用量は一定）。
-        let written = drive
-            .download_to_file(&file.id, &temp, &mut |received, total| {
-                if cancelled {
-                    return false;
+    if download_books {
+        log::info!("drive sync: download direction start");
+        // -- download direction -------------------------------------------------
+        // 「書籍のバックアップ」OFF のときは pack を取得しない（本のファイルだけが対象。
+        // DB バックアップと pack 鍵 bundle は役割が別なので続ける）。
+        // 進捗の分母（転送対象の総数）を確定させるため、md5 一致でスキップする分を先に外す
+        // （スキップを分母に数えると「2/5」のまま終わらず、利用者に進まないように見える）。
+        let mut pending_downloads: Vec<(&str, &DriveFile, String)> = Vec::new();
+        if sync_books {
+            for (pack_id, file) in &drive_pack_by_id {
+                let state = sync_state::get(pool, pack_id)?;
+                let drive_md5 = file.md5_checksum.clone().unwrap_or_default();
+                if let Some(state) = &state
+                    && !drive_md5.is_empty()
+                    && drive_md5 == state.md5
+                {
+                    outcome.skipped.push((*pack_id).to_string());
+                    continue;
                 }
-                cancelled = !on_progress(&SyncProgress {
-                    phase: SyncPhase::Download,
-                    name: file.name.clone(),
-                    index: offset + 1,
-                    count: download_count,
-                    bytes: received,
-                    // 転送側は「総数不明」を 0 で表す（`read_body_with_progress`）
-                    total_bytes: (total > 0).then_some(total),
-                });
-                !cancelled
-            })
-            .map_err(|error| match error {
-                DriveError::Cancelled => SyncError::Cancelled,
-                other => SyncError::Drive(other),
-            })?;
-
-        // 検証も**ファイル裏打ち**で行う（全体を読まない）。失敗したら一時ファイルを消す
-        // （壊れた pack を置き場に残さない）。
-        {
-            let reader = match nartik::PackFileReader::open(&temp) {
-                Ok(reader) => reader,
-                Err(error) => {
-                    let _ = std::fs::remove_file(&temp);
-                    return Err(pack_open_error(pack_id, error));
-                }
-            };
-            // v3 の暗号化は header / entry の `ENCRYPTED` で判定する
-            // （v2 の `IDENTITY_BOUND` は v3 に存在しない）。
-            let encrypted = reader.header().flags & pack_flags::ENCRYPTED != 0;
-            if encrypted && pack_root_key.is_none() {
-                let _ = std::fs::remove_file(&temp);
-                return Err(SyncError::PackKeyRequired((*pack_id).to_string()));
+                pending_downloads.push((pack_id, file, drive_md5));
             }
-            // ここで reader（開いているファイル）を落とす: Windows では開いている
-            // ファイルを rename できないため。
+        } else {
+            log::info!("drive sync: 書籍のバックアップが OFF のため pack のダウンロードをスキップ");
         }
-
-        // sync_state 行が無い場合（新規ダウンロード直後・state クリア後・DB 復元後）は
-        // local_changed が false になるため、条件にするとローカル専有の内容を退避せずに
-        // 上書きしてしまう。ローカルに実体がある限り必ず退避する。
-        if local_path.exists() {
-            let backup = crate::pack_path::conflict_backup_path(packs_dir, pack_id)
+        let download_count = pending_downloads.len();
+        // 進捗コールバックが中止を求めた（`false`）。転送が進捗を報告しない場合
+        // （`Content-Length` 無しの小さな pack など）でも、次の pack へ進む前に止める。
+        let mut cancelled = false;
+        for (offset, (pack_id, file, drive_md5)) in pending_downloads.into_iter().enumerate() {
+            if cancelled {
+                return Err(SyncError::Cancelled);
+            }
+            let local_path = crate::pack_path::pack_path(packs_dir, pack_id)
                 .map_err(|e| SyncError::InvalidPack(format!("{pack_id}: {e}")))?;
-            std::fs::copy(&local_path, &backup)?;
-            outcome.conflicts.push((*pack_id).to_string());
-        }
-        // 直接 write だと書き込み途中のクラッシュで pack が壊れるため、
-        // 同一ファイルシステム内の rename で置換する（原子的）。
-        if let Err(error) = std::fs::rename(&temp, &local_path) {
-            let _ = std::fs::remove_file(&temp);
-            return Err(SyncError::Io(error));
-        }
-        // 取り込みは最終パスから開き直す（この時点で開いているハンドルは無い）。
-        let reader = match nartik::PackFileReader::open(&local_path) {
-            Ok(reader) => reader,
-            Err(error) => return Err(pack_open_error(pack_id, error)),
-        };
-        import_book(pool, &reader, pack_id, pack_root_key, written as i64)?;
-        // ダウンロードした pack は現在 sub の所有として記録する（フォルダ分離前提で帰属を信頼）。
-        if let (Some(sub), Some(key)) = (identity_sub, owner_key) {
-            books::set_owner_sub(pool, pack_id, Some(crate::owner::encrypt(key, sub)))?;
-        }
-        sync_state::upsert(
-            pool,
-            &sync_state::DriveSyncState {
-                pack_id: (*pack_id).to_string(),
-                drive_file_id: file.id.clone(),
-                md5: drive_md5,
-                modified_time: file.modified_time.clone(),
-                last_synced_at: now(),
-            },
-        )?;
-        outcome.downloaded.push((*pack_id).to_string());
-    }
 
-    log::info!("drive sync: download direction done, upload direction start");
+            std::fs::create_dir_all(downloads_dir)?;
+            std::fs::create_dir_all(packs_dir)?;
+            let temp = crate::pack_path::pack_path(downloads_dir, pack_id)
+                .map_err(|e| SyncError::InvalidPack(format!("{pack_id}: {e}")))?;
+
+            // 進捗つきの取得（16MiB の API 上限ではなく 2GiB のダウンロード経路）。
+            // **一時ファイルへ直接ストリーム**するので、pack 全体を RAM に載せない
+            // （2GiB を超える pack でもメモリ使用量は一定）。
+            let written = drive
+                .download_to_file(&file.id, &temp, &mut |received, total| {
+                    if cancelled {
+                        return false;
+                    }
+                    cancelled = !on_progress(&SyncProgress {
+                        phase: SyncPhase::Download,
+                        name: file.name.clone(),
+                        index: offset + 1,
+                        count: download_count,
+                        bytes: received,
+                        // 転送側は「総数不明」を 0 で表す（`read_body_with_progress`）
+                        total_bytes: (total > 0).then_some(total),
+                    });
+                    !cancelled
+                })
+                .map_err(|error| match error {
+                    DriveError::Cancelled => SyncError::Cancelled,
+                    other => SyncError::Drive(other),
+                })?;
+
+            // 検証も**ファイル裏打ち**で行う（全体を読まない）。失敗したら一時ファイルを消す
+            // （壊れた pack を置き場に残さない）。
+            {
+                let reader = match nartik::PackFileReader::open(&temp) {
+                    Ok(reader) => reader,
+                    Err(error) => {
+                        let _ = std::fs::remove_file(&temp);
+                        return Err(pack_open_error(pack_id, error));
+                    }
+                };
+                // v3 の暗号化は header / entry の `ENCRYPTED` で判定する
+                // （v2 の `IDENTITY_BOUND` は v3 に存在しない）。
+                let encrypted = reader.header().flags & pack_flags::ENCRYPTED != 0;
+                if encrypted && pack_root_key.is_none() {
+                    let _ = std::fs::remove_file(&temp);
+                    return Err(SyncError::PackKeyRequired((*pack_id).to_string()));
+                }
+                // ここで reader（開いているファイル）を落とす: Windows では開いている
+                // ファイルを rename できないため。
+            }
+
+            // sync_state 行が無い場合（新規ダウンロード直後・state クリア後・DB 復元後）は
+            // local_changed が false になるため、条件にするとローカル専有の内容を退避せずに
+            // 上書きしてしまう。ローカルに実体がある限り必ず退避する。
+            if local_path.exists() {
+                let backup = crate::pack_path::conflict_backup_path(packs_dir, pack_id)
+                    .map_err(|e| SyncError::InvalidPack(format!("{pack_id}: {e}")))?;
+                std::fs::copy(&local_path, &backup)?;
+                outcome.conflicts.push((*pack_id).to_string());
+            }
+            // 直接 write だと書き込み途中のクラッシュで pack が壊れるため、
+            // 同一ファイルシステム内の rename で置換する（原子的）。
+            if let Err(error) = std::fs::rename(&temp, &local_path) {
+                let _ = std::fs::remove_file(&temp);
+                return Err(SyncError::Io(error));
+            }
+            // 取り込みは最終パスから開き直す（この時点で開いているハンドルは無い）。
+            let reader = match nartik::PackFileReader::open(&local_path) {
+                Ok(reader) => reader,
+                Err(error) => return Err(pack_open_error(pack_id, error)),
+            };
+            import_book(pool, &reader, pack_id, pack_root_key, written as i64)?;
+            // ダウンロードした pack は現在 sub の所有として記録する（フォルダ分離前提で帰属を信頼）。
+            if let (Some(sub), Some(key)) = (identity_sub, owner_key) {
+                books::set_owner_sub(pool, pack_id, Some(crate::owner::encrypt(key, sub)))?;
+            }
+            sync_state::upsert(
+                pool,
+                &sync_state::DriveSyncState {
+                    pack_id: (*pack_id).to_string(),
+                    drive_file_id: file.id.clone(),
+                    md5: drive_md5,
+                    modified_time: file.modified_time.clone(),
+                    last_synced_at: now(),
+                },
+            )?;
+            outcome.downloaded.push((*pack_id).to_string());
+        }
+
+        log::info!("drive sync: download direction done, upload direction start");
+    } else {
+        log::info!("drive sync: upload-only; download direction skipped");
+    }
     // -- upload direction ---------------------------------------------------
     let drive_ids: Vec<&str> = files.iter().map(|file| file.id.as_str()).collect();
     // バックアップ対象外の本（`books.backup_excluded = 1`）を 1 回だけ読む。

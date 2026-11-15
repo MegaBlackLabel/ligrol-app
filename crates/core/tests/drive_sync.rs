@@ -8,7 +8,8 @@ use std::sync::Arc;
 use nartik::{BACKUP_LABEL, PackBuilder, PackRootKey, SealedEnvelope};
 use ligrol_core::db;
 use ligrol_core::drive::sync::{
-    BACKUP_BASELINE_KEY, SyncError, SyncPhase, SyncProgress, sync, sync_with_progress,
+    BACKUP_BASELINE_KEY, SyncError, SyncPhase, SyncProgress, sync, sync_upload_only_with_progress,
+    sync_with_progress,
 };
 use ligrol_core::drive::{DriveApi, DriveError, DriveFile};
 
@@ -917,6 +918,38 @@ fn encrypted_pack_without_key_is_rejected() {
     let err = sync_env(&mut env, &mut drive).unwrap_err();
     assert!(matches!(&err, SyncError::PackKeyRequired(id) if id == "pack-e"));
     // nothing imported
+    assert!(db::books::get(&env.pool, "pack-e").unwrap().is_none());
+}
+
+#[test]
+fn upload_only_skips_encrypted_pack_download_without_key() {
+    let env = TestEnv::new("upload-only-no-key");
+    let mut drive = FakeDrive::new();
+    let root = PackRootKey::generate();
+    let bytes = encrypted_pack(&root, "pack-e", b"SECRET");
+    drive.seed("pack-e.nartik", &bytes);
+
+    // 終了時バックアップはダウンロードしない。別アカウントの暗号化 pack が
+    // あっても鍵不足で終了できなくならない。
+    let outcome = sync_upload_only_with_progress(
+        ligrol_core::drive::sync::SyncRequest {
+            pool: &env.pool,
+            drive: &mut drive,
+            packs_dir: &env.packs(),
+            downloads_dir: &env.downloads(),
+            identity_sub: None,
+            pack_root_key: None,
+            owner_key: None,
+            folder_id: "folder-1",
+            sync_books: true,
+            db_path: None,
+            thumbnails_dir: None,
+        },
+        &mut |_| true,
+    )
+    .unwrap();
+    assert!(outcome.downloaded.is_empty());
+    assert_eq!(drive.download_count(), 0, "ダウンロードしてはいけない");
     assert!(db::books::get(&env.pool, "pack-e").unwrap().is_none());
 }
 

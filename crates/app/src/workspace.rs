@@ -1674,11 +1674,11 @@ impl Workspace {
             std::sync::mpsc::channel::<ligrol_core::drive::sync::SyncProgress>();
         let task: gpui_kit::Task<Result<(), String>> = cx.background_executor().spawn(async move {
             log::info!("exit upload: start");
-            let folder_id = db::settings::get(&db, "drive.sync.folder_id")
+            let saved_folder_id = db::settings::get(&db, "drive.sync.folder_id")
                 .ok()
                 .flatten()
                 .ok_or_else(|| "Drive 同期が未設定です".to_string())?;
-            log::info!("exit upload: folder_id={folder_id}");
+            log::info!("exit upload: folder_id={saved_folder_id}");
             // 鍵（v3 の PRK）を用意する。無ければ暗号化 pack は上げられない
             // （必要なら解錠ダイアログが出る。終了処理なので失敗しても終了はする）。
             //
@@ -1709,12 +1709,21 @@ impl Workspace {
                 Box::new(ligrol_core::tbf::UreqTransport::new()),
                 token,
             );
+            // アカウント切り替え後は保存済み folder_id が 404 になる。作り直して
+            // 保存しないと、終了時アップロードが失敗してアプリが終了できなくなる。
+            let folder_id =
+                ligrol_core::drive::ensure_sync_folder(&mut drive, Some(&saved_folder_id))
+                    .map_err(|e| e.to_string())?;
+            if folder_id != saved_folder_id {
+                let _ = db::settings::set(&db, "drive.sync.folder_id", &folder_id);
+                log::info!("exit upload: folder_id を再解決 {saved_folder_id} -> {folder_id}");
+            }
             log::info!("exit upload: sync 開始");
             let progress_tx = progress_tx;
             // 書籍のバックアップ ON/OFF（行が無ければ ON）。OFF でも DB バックアップと
             // 鍵 bundle は同期する（本のファイルとは失うものが別）。
             let sync_books = ligrol_core::drive::sync::books_backup_enabled(&db);
-            let _ = ligrol_core::drive::sync::sync_with_progress(
+            let _ = ligrol_core::drive::sync::sync_upload_only_with_progress(
                 ligrol_core::drive::sync::SyncRequest {
                     pool: &db,
                     drive: &mut drive,
@@ -6357,6 +6366,37 @@ mod tests {
         let closed = ws.read_with(cx, |w, _| w.reader.is_none());
         assert!(closed, "reader should close");
     }
+    /// ビューアーのトップメニューが閉じているとき、Esc はビューアーを閉じる。
+    /// メニューを開くのはクリック / メニュートリガーの役目で、Esc ではない。
+    #[gpui_kit::test]
+    async fn escape_closes_reader_when_menu_is_closed(cx: &mut TestAppContext) {
+        let ws = setup(cx);
+        let window = cx.open_window(
+            gpui_kit::Size {
+                width: gpui_kit::px(1200.0),
+                height: gpui_kit::px(800.0),
+            },
+            |window, cx| gpui_kit::component::Root::new(ws.clone(), window, cx),
+        );
+        let visual = gpui_kit::VisualTestContext::from_window(*window, cx).into_mut();
+        cx.update(|cx| {
+            ws.update(cx, |w, cx| w.open_reader(cx, "missing-book".into()));
+        });
+        draw_frames(visual);
+        // リーダーを開いた直後はビューアーにフォーカスを合わせる。
+        visual.update(|window, cx| {
+            let reader = ws.read(cx).reader.clone().expect("reader");
+            reader.update(cx, |reader, cx| reader.focus_view(window, cx));
+        });
+
+        press_key(visual, "escape");
+
+        assert!(
+            ws.read_with(cx, |w, _| w.reader.is_none()),
+            "トップメニューが閉じているときの Esc でビューアーが閉じること"
+        );
+    }
+
     #[gpui_kit::test]
     async fn closing_reader_refreshes_bookshelf_read_state(cx: &mut TestAppContext) {
         use ligrol_core::db::documents;
