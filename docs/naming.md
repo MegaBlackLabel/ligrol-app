@@ -10,7 +10,7 @@
 > （liglol＝巻物をほどく／スクロールする）を1文字もじった `Ligrol` に決定した。
 > メインアイコンは `crates/app/assets/app-icon/app-icon-ligrol-w6b-original-tab.svg`。
 > 小サイズ用は `app-icon-ligrol-small32.svg`（32px）と
-> `app-icon-ligrol-small16-monogram.svg`（16px）。
+> `app-icon-ligrol-small16-L.svg`（16px）。
 >
 > **カタカナ検索の注意（2026-10-30 実測）**: `リグロル` は Google / Yahoo! で
 > `リグロス` に自動矯正される。経緯と実測は §7。
