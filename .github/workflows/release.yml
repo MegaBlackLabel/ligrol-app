@@ -518,8 +518,10 @@ jobs:
   # 必要な Secrets / Variables は docs/store-release.md を参照。
   # 未設定のときは警告を出してスキップする（通常の GitHub Release は止めない）。
   store-submit:
-    needs: [build, release]
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    # macOS の公証失敗など、他プラットフォームの失敗で Windows Store 提出まで
+    # 止めない。Windows の artifact が無い場合はダウンロードで失敗する。
+    if: always() && startsWith(github.ref, 'refs/tags/')
     runs-on: windows-latest
     steps:
       - name: Check Store configuration
