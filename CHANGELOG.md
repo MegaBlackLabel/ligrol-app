@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-11-16
+
+### Fixed
+
+- **Store 提出ジョブの artifact 取得アクション**: `download-artifact` を誤った SHA
+  （upload-artifact のもの）で固定していたため、ジョブ開始時に失敗していた。正しい v4 の
+  SHA に修正。
+
 ## [0.3.4] - 2026-11-16
 
 ### Fixed
