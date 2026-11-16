@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-16
+
 ### Added
 
 - **配布物と更新フィード**: Windows は Store 用 **MSIX** と直販用 **MSI**、macOS は **dmg** を
