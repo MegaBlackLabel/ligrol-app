@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-16
+
+### Fixed
+
+- **Microsoft Store 提出が macOS のビルド失敗で止まる問題**: Store 提出ジョブを
+  `build` のみに依存させ、macOS の公証が失敗しても Windows の MSIX を提出できるようにした。
+
 ## [0.3.2] - 2026-11-16
 
 ### Added
