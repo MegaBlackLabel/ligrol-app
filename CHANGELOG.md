@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-11-16
+
+### Fixed
+
+- **Store 提出アクションが組織の SHA 固定ポリシーで拒否される問題**: 
+  `microsoft/microsoft-store-apppublisher` を `v1.1` タグから完全なコミット SHA に固定した。
+
 ## [0.3.3] - 2026-11-16
 
 ### Fixed

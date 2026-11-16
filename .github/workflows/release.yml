@@ -563,7 +563,7 @@ jobs:
 
       - name: Configure Microsoft Store CLI
         if: steps.store.outputs.configured == 'true'
-        uses: microsoft/microsoft-store-apppublisher@v1.1
+        uses: microsoft/microsoft-store-apppublisher@15abd1c50fcc164b19cb240fb04ef3c49bf715a2 # v1.1
 
       - name: Authenticate to Partner Center
         if: steps.store.outputs.configured == 'true'
