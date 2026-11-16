@@ -511,6 +511,84 @@ jobs:
           security delete-keychain "$RUNNER_TEMP/build.keychain-db" 2>/dev/null || true
           rm -f "$RUNNER_TEMP"/cert.p12 "$RUNNER_TEMP"/notarize.zip || true
 
+  # Microsoft Store への提出。GitHub Release の作成後に、Windows の MSIX を
+  # Microsoft Store Developer CLI（msstore）で提出する。
+  #
+  # 初回の提出は手動で行い、Store にアプリが存在していること。
+  # 必要な Secrets / Variables は docs/store-release.md を参照。
+  # 未設定のときは警告を出してスキップする（通常の GitHub Release は止めない）。
+  store-submit:
+    needs: [build, release]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-latest
+    steps:
+      - name: Check Store configuration
+        id: store
+        shell: pwsh
+        env:
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+          STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
+        run: |
+          $missing = @()
+          foreach ($name in @(
+            'AZURE_AD_TENANT_ID',
+            'AZURE_AD_APPLICATION_CLIENT_ID',
+            'AZURE_AD_APPLICATION_SECRET',
+            'SELLER_ID',
+            'STORE_PRODUCT_ID'
+          )) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              $missing += $name
+            }
+          }
+          if ($missing.Count -gt 0) {
+            Write-Warning "Store submission skipped: missing $($missing -join ', ')"
+            "configured=false" >> $env:GITHUB_OUTPUT
+          } else {
+            "configured=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Download Windows MSIX
+        if: steps.store.outputs.configured == 'true'
+        uses: actions/download-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          pattern: ligrol-*-windows
+          path: artifacts
+          merge-multiple: true
+
+      - name: Configure Microsoft Store CLI
+        if: steps.store.outputs.configured == 'true'
+        uses: microsoft/microsoft-store-apppublisher@v1.1
+
+      - name: Authenticate to Partner Center
+        if: steps.store.outputs.configured == 'true'
+        shell: pwsh
+        env:
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+        run: |
+          msstore reconfigure `
+            --tenantId $env:AZURE_AD_TENANT_ID `
+            --sellerId $env:SELLER_ID `
+            --clientId $env:AZURE_AD_APPLICATION_CLIENT_ID `
+            --clientSecret $env:AZURE_AD_APPLICATION_SECRET
+
+      - name: Publish MSIX to Microsoft Store
+        if: steps.store.outputs.configured == 'true'
+        shell: pwsh
+        env:
+          STORE_PRODUCT_ID: ${{ vars.STORE_PRODUCT_ID }}
+        run: |
+          $msix = Get-ChildItem artifacts -Recurse -Filter *.msix | Select-Object -First 1
+          if (-not $msix) { throw "MSIX が見つかりません" }
+          Write-Host "Publishing $($msix.FullName) to Store product $env:STORE_PRODUCT_ID"
+          msstore publish $msix.FullName -id $env:STORE_PRODUCT_ID
+
   release:
     needs: build
     runs-on: ubuntu-latest
