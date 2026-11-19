@@ -416,6 +416,16 @@ fn sidebar_logo_glyph_color(
 
 impl Workspace {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        // 既存データに残った「記号だけの生成タグ」を起動時に掃除する。
+        // 新規取り込みは `tags::is_word_tag` で弾くが、過去のデータは残るため。
+        {
+            let state = AppState::global(cx);
+            match db::tags::delete_non_word_generated(&state.db_pool) {
+                Ok(0) => {}
+                Ok(count) => log::info!("startup: 記号だけの生成タグを {count} 件削除した"),
+                Err(error) => log::warn!("startup: 生成タグの掃除に失敗: {error}"),
+            }
+        }
         let settings = cx.new(SettingsView::new);
         let bookshelf = cx.new(BookshelfView::new);
         let history = cx.new(HistoryView::new);

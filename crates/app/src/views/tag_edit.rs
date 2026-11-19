@@ -69,10 +69,11 @@ impl TagEditDialog {
                 let state = AppState::global(cx);
                 let db = &state.db_pool;
                 let tags = if let Some(book_id) = self.resolve_local_book_id(db) {
+                    // generated（取り込み時の自動タグ）も表示する。保存時に
+                    // manual へ置き換わるが、編集画面に出さないと保存で消える。
                     db::tags::list_for_book(db, &book_id)
                         .unwrap_or_default()
                         .into_iter()
-                        .filter(|tag| tag.source == "manual")
                         .map(|tag| tag.tag_name)
                         .collect::<Vec<_>>()
                 } else {
