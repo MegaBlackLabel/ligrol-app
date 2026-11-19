@@ -87,6 +87,30 @@ pub fn tag_names_by_book(
     })
 }
 
+/// 取り込み時に生成されたタグのうち、記号・数字だけのものを削除する。
+/// 既存データに残った「おかしなタグ」を起動時に掃除するための一回限りの処理。
+pub fn delete_non_word_generated(pool: &SqlitePool) -> Result<usize, sqlx::Error> {
+    crate::db::block_on(async {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, tag_name FROM book_tags WHERE source = 'generated'",
+        )
+        .fetch_all(pool)
+        .await?;
+        let mut deleted = 0usize;
+        for (id, tag_name) in rows {
+            if crate::tags::is_word_tag(&tag_name) {
+                continue;
+            }
+            sqlx::query("DELETE FROM book_tags WHERE id = ?1")
+                .bind(&id)
+                .execute(pool)
+                .await?;
+            deleted += 1;
+        }
+        Ok(deleted)
+    })
+}
+
 /// Distinct tag names across all books (for the tag filter).
 pub fn all_tags(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
     crate::db::block_on(async {
@@ -241,6 +265,24 @@ mod tag_crud_tests {
         set_favorite(&pool, "react", false, None).unwrap();
         let favs = list_favorites(&pool).unwrap();
         assert_eq!(favs, vec!["rust".to_string()]);
+    }
+
+    #[test]
+    fn delete_non_word_generated_keeps_words_and_manual_tags() {
+        let pool = open_db();
+        seed_book(&pool, "book-1");
+        set_for_book(
+            &pool,
+            "book-1",
+            &[("!", "generated"), ("2026", "generated"), ("Rust", "generated"), ("!", "manual")],
+        )
+        .unwrap();
+        let deleted = delete_non_word_generated(&pool).unwrap();
+        assert_eq!(deleted, 2);
+        let tags = list_for_book(&pool, "book-1").unwrap();
+        assert!(tags.iter().any(|t| t.tag_name == "Rust" && t.source == "generated"));
+        assert!(tags.iter().any(|t| t.tag_name == "!" && t.source == "manual"));
+        assert!(!tags.iter().any(|t| t.source == "generated" && t.tag_name == "!"));
     }
 
     #[test]

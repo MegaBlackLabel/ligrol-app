@@ -59,6 +59,12 @@ pub fn analyze_page(text: &str) -> Result<Vec<NounToken>, String> {
     Ok(out)
 }
 
+/// タグとして採用できる語か。記号・数字だけのトークン（`!`、`-`、`+4`、
+/// `2026` など）は名詞として解析されることがあるので除外する。
+pub(crate) fn is_word_tag(word: &str) -> bool {
+    word.chars().next().is_some_and(char::is_alphabetic)
+}
+
 /// Noun frequencies across pages, descending, excluding words in
 /// `excluded` (author/circle names) and words longer than 20 chars.
 /// The key is the base form when available, otherwise the surface form.
@@ -74,6 +80,9 @@ pub fn extract_nouns(text: &str, excluded: &[&str]) -> Vec<(String, usize)> {
             token.base_form
         };
         if word.chars().count() > MAX_WORD_CHARS {
+            continue;
+        }
+        if !is_word_tag(&word) {
             continue;
         }
         if excluded.iter().any(|e| *e == word) {
@@ -162,4 +171,37 @@ pub fn generate_tags(texts: &[&str], excluded: &[&str], zenn_tags: &[String]) ->
         .take(MAX_TAGS)
         .map(|(word, _)| word)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 本文中の記号・数字だけのトークンをタグにしない。
+    #[test]
+    fn extract_nouns_keeps_only_words() {
+        let tokens = extract_nouns("! \" - ' : +4 2026 Rust 本", &[]);
+        let words: Vec<&str> = tokens.iter().map(|(word, _)| word.as_str()).collect();
+        assert!(words.contains(&"Rust"), "{words:?}");
+        assert!(words.contains(&"本"), "{words:?}");
+        for word in words {
+            assert!(
+                word.chars().next().is_some_and(char::is_alphabetic),
+                "記号・数字だけのタグが混ざっている: {word:?}"
+            );
+        }
+    }
+
+    /// Zenn タグが取れないときのフォールバックでも、記号だけのタグを出さない。
+    #[test]
+    fn generate_tags_falls_back_to_words_only() {
+        let tags = generate_tags(&["! \" - ' : +4 2026 Rust 本"], &[], &[]);
+        assert!(tags.iter().any(|tag| tag == "Rust"), "{tags:?}");
+        for tag in tags {
+            assert!(
+                tag.chars().next().is_some_and(char::is_alphabetic),
+                "記号・数字だけのタグが混ざっている: {tag:?}"
+            );
+        }
+    }
 }

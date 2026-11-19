@@ -5874,14 +5874,12 @@ impl BookshelfView {
             let state = Self::app_state(cx);
             let db = &state.db_pool;
             let tags = if let Some(local_id) = Self::resolve_local_book_id(db, book_id) {
+                // 取り込み時に生成したタグ（source = generated）も編集画面に出す。
+                // ここで manual 系だけに絞ると、編集せず保存しただけで生成タグが
+                // set_for_book に消される。
                 db::tags::list_for_book(db, &local_id)
                     .unwrap_or_default()
                     .into_iter()
-                    .filter(|tag| {
-                        tag.source == "manual"
-                            || tag.source == "fanza_genre"
-                            || tag.source == "dlsite_genre"
-                    })
                     .map(|tag| tag.tag_name)
                     .collect::<Vec<_>>()
             } else {
@@ -16368,6 +16366,68 @@ mod tests {
         assert!(
             view.read_with(cx, |this, _| this.download_states.is_empty()),
             "save button must not trigger a card download"
+        );
+    }
+
+    /// 取り込み時に生成されたタグも編集画面に出し、保存で消さない。
+    #[gpui_kit::test]
+    async fn tag_editor_shows_generated_tags_and_keeps_them_on_save(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::component::init);
+        cx.update(AppState::init_test);
+        seed_book(cx, "b1", "本1", "サークルA");
+        seed_shelf_item(cx, "db-1", "本1", "サークルA", None);
+        cx.update(|cx| {
+            let db = &AppState::global(cx).db_pool;
+            ligrol_core::db::block_on(async {
+                sqlx::query("UPDATE books SET tbf_product_id = 'db-1' WHERE id = 'b1'")
+                    .execute(db)
+                    .await
+            })
+            .unwrap();
+            db::tags::set_for_book(db, "b1", &[("生成タグ", "generated")]).unwrap();
+        });
+        let view = cx.new(BookshelfView::new);
+        let window = cx.open_window(
+            gpui_kit::Size {
+                width: gpui_kit::px(900.0),
+                height: gpui_kit::px(600.0),
+            },
+            |window, cx| gpui_kit::component::Root::new(view.clone(), window, cx),
+        );
+        let visual = gpui_kit::VisualTestContext::from_window(*window, cx).into_mut();
+        for _ in 0..4 {
+            visual.update(|window, cx| {
+                let arena_clear = window.draw(cx);
+                arena_clear.clear(cx);
+            });
+        }
+        let edit = visual
+            .debug_bounds("tag-edit-db-1")
+            .expect("tag edit button rendered");
+        visual.simulate_click(edit.center(), gpui_kit::Modifiers::default());
+        assert!(
+            view.read_with(cx, |this, _| this
+                .editing_tags
+                .contains(&"生成タグ".to_string())),
+            "生成タグが編集画面に出ていない"
+        );
+        for _ in 0..4 {
+            visual.update(|window, cx| {
+                let arena_clear = window.draw(cx);
+                arena_clear.clear(cx);
+            });
+        }
+        let save = visual
+            .debug_bounds("tag-edit-save-btn")
+            .expect("save button rendered");
+        visual.simulate_click(save.center(), gpui_kit::Modifiers::default());
+        let stored = cx.update(|cx| {
+            let db = &AppState::global(cx).db_pool;
+            db::tags::list_for_book(db, "b1").unwrap_or_default()
+        });
+        assert!(
+            stored.iter().any(|tag| tag.tag_name == "生成タグ"),
+            "編集せず保存しただけで生成タグが消えている: {stored:?}"
         );
     }
 
