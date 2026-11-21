@@ -328,6 +328,32 @@ impl<'a> PackKeyStore<'a> {
         Ok(settings::get(self.pool, PENDING_UPLOAD_KEY)?)
     }
 
+    /// keyring に PRK があるのに Drive に bundle が無いとき、sub ラップ付きで作る。
+    ///
+    /// 鍵を新規作成した端末以外（bundle を消した / アップロード前に落ちたが pending が
+    /// 残らなかった等）で `ligrol-keys.json` が永久に無いままになるのを防ぐ。
+    /// **PRK が無いときは何もしない**（勝手に新しい鍵を作らない）。アップロードしたら `true`。
+    pub fn upload_if_missing(
+        &self,
+        drive: &mut dyn DriveApi,
+        sub: &str,
+    ) -> Result<bool, PackKeysError> {
+        let owner_id = derive_owner_id(sub);
+        if load_bundle(drive, self.folder_id, &owner_id)?.is_some() {
+            return Ok(false);
+        }
+        let Some(root) = load_keyring(self.secrets, &owner_id)? else {
+            return Ok(false);
+        };
+        let now_ms = now_ms();
+        let mut bundle = PackKeyBundle::new(owner_id.clone(), now_ms);
+        bundle.upsert_wrap(PackRootKeyWrap::wrap_with_sub(&root, sub, &owner_id, now_ms));
+        bundle.touch(now_ms);
+        upload_bundle(drive, self.folder_id, &bundle)?;
+        log::info!("pack keys: Drive に無かった鍵 bundle を作成した（owner_id={owner_id}）");
+        Ok(true)
+    }
+
     /// pending があれば bundle をアップロードして印を消す（同期の最後に呼ぶ。仕様 §5.1）。
     ///
     /// この端末に PRK が無い（未ログイン / 別アカウント / keyring 障害）ときは何もしない。
@@ -799,6 +825,37 @@ mod tests {
             root.as_bytes()
         );
         assert_eq!(drive.uploads, 1, "2 回目はアップロードしない");
+    }
+
+    /// 8b. keyring に PRK があるのに Drive に bundle が無いとき、同期で作り直す。
+    #[test]
+    fn upload_if_missing_recreates_a_lost_bundle_from_keyring() {
+        let sub = "sub-pack-keys-missing-bundle";
+        let owner_id = derive_owner_id(sub);
+        let secrets = secrets();
+        let pool = pool();
+        let root = PackRootKey::generate();
+        secrets
+            .save_pack_root_key(&owner_id, &root.to_base64())
+            .unwrap();
+        let keys = PackKeyStore::new(&secrets, &pool, "folder-1");
+        let mut drive = FakeDrive::new();
+
+        assert!(
+            keys.upload_if_missing(&mut drive, sub).unwrap(),
+            "bundle が無ければ keyring から作る"
+        );
+        let bundle = load_bundle(&mut drive, "folder-1", &owner_id)
+            .unwrap()
+            .expect("bundle が上がっている");
+        assert_eq!(
+            bundle.unwrap_with_sub(sub).unwrap().as_bytes(),
+            root.as_bytes()
+        );
+        assert!(
+            !keys.upload_if_missing(&mut drive, sub).unwrap(),
+            "bundle があれば何もしない"
+        );
     }
 
     /// 8. アップロード失敗でも取り込みは止めず、pending を残して次の同期で再試行する（§5.1）。

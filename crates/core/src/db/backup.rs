@@ -2,9 +2,11 @@
 //!
 //! DB ファイル全体（画像 base64 を含み 200MB 級になる）をそのまま
 //! Drive に上げるのは重いため、主要テーブルのテキストデータだけを
-//! JSON にまとめる。画像データ（`thumbnail_data` / `image_data`）と
-//! 環境依存の設定（`drive.*` / `api.last_sync_at` 等）は含めない:
+//! JSON にまとめる。画像データ（`image_data`）と環境依存の設定
+//! （`drive.*` / `api.last_sync_at` 等）は含めない:
 //! サイズを抑え、同期のたびに内容が変わって毎回アップロードされるのを防ぐ。
+//! 例外として `checked_items.thumbnail_data`（256px JPEG の base64）は
+//! Web のチェックリスト表示用に含める（`EXCLUDED_COLUMNS` 参照）。
 
 use serde_json::{Map, Number, Value};
 use sqlx::{Row, TypeInfo, ValueRef};
@@ -43,17 +45,21 @@ const TABLES: &[&str] = &[
 ];
 /// 画像・バイナリ・本文テキストとして除外するカラム名。
 ///
-/// `thumbnail_data` / `image_data` は画像の base64（1 行が数百 KB になり、
-/// 同期のたびに Drive へ上げ直すには重すぎる）。`product_sample_pages` の
-/// `image_data` はこれに当たるが、**`image_url` は残す**ので復元先でも試し読みを
-/// 開ける（試し読みを開く経路は毎回 `/api/image/` から取り直して保存し直す。
-/// `crates/app/src/views/checklist.rs` の `fetch_sample`）。
+/// `image_data` は画像の base64（1 行が数百 KB になり、同期のたびに Drive へ
+/// 上げ直すには重すぎる）。`product_sample_pages` の `image_data` はこれに当たるが、
+/// **`image_url` は残す**ので復元先でも試し読みを開ける（試し読みを開く経路は毎回
+/// `/api/image/` から取り直して保存し直す。`crates/app/src/views/checklist.rs` の
+/// `fetch_sample`）。
+///
+/// `checked_items.thumbnail_data` は**Web の本棚がチェックリストの表紙を出すために
+/// バックアップへ含める**（256px JPEG の base64。Web 側は既に受け取り実装済み）。
+/// 画像そのものではなく表示用に縮小した派生データで、再取得もできる。
 ///
 /// `extracted_text`（`document_images`）は暗号化 pack から取り出したページ本文で、
 /// 平文のまま Drive のバックアップ JSON に載ると、pack を暗号化した意味が失われる。
 /// アプリはこの列を読まない（本文は `document_text` 側にあり、そちらは
 /// バックアップ対象テーブルに含まれない）ため、除外しても復元結果は変わらない。
-const EXCLUDED_COLUMNS: &[&str] = &["thumbnail_data", "image_data", "extracted_text"];
+const EXCLUDED_COLUMNS: &[&str] = &["image_data", "extracted_text"];
 
 /// 比較のときに無視する揮発列（アプリ自身が同期のたびに書き換える時刻）。
 /// 内容が同じでも値が変わるため、そのまま比較すると毎回「差分あり」になる。
@@ -970,7 +976,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn export_json_contains_tables_without_images() {
+    fn export_json_includes_checklist_thumbnail_data() {
         let pool = crate::db::test_pool();
         // 本とチェックリスト項目を 1 件ずつ入れる
         crate::db::books::insert(
@@ -1058,12 +1064,20 @@ mod tests {
         let books = payload["books"].as_array().unwrap();
         assert_eq!(books.len(), 1);
         assert_eq!(books[0]["title"], "テスト本");
-        // checked_items に thumbnail_data が含まれない（画像は除外）
+        // checked_items の thumbnail_data も Web 表示用に含める
         let items = payload["checked_items"].as_array().unwrap();
         assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]["thumbnail_data"], "aGVsbG8=",
+            "Web のチェックリスト表紙がバックアップから読めること"
+        );
+        // 試し読みの image_data は引き続き除外する
         assert!(
-            items[0].get("thumbnail_data").is_none(),
-            "image columns must be excluded"
+            payload.get("product_sample_pages").is_none()
+                || payload["product_sample_pages"]
+                    .as_array()
+                    .is_none_or(|rows| rows.iter().all(|row| row.get("image_data").is_none())),
+            "image_data must stay excluded"
         );
     }
     #[test]

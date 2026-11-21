@@ -675,12 +675,12 @@ impl Workspace {
                             .unwrap_or(5);
                     // 未ログインならスキップ（次の周期へ）。tbf ログイン必須。
                     if !*tbf_logged_in_for_poll.lock() {
-                        return (interval_min, false, false);
+                        return (interval_min, false, false, 0);
                     }
                     let enabled =
                         db::checklist::list_enabled_slugs(&db_for_poll).unwrap_or_default();
                     if enabled.is_empty() {
-                        return (interval_min, false, false);
+                        return (interval_min, false, false, 0);
                     }
                     let mut any_changed = false;
                     let mut session_expired = false;
@@ -708,16 +708,25 @@ impl Workspace {
                             }
                         }
                     }
-                    (interval_min, any_changed, session_expired)
+                    // Web のチェックリスト表紙（ligrol-backup.json の thumbnail_data）用。
+                    // 画面を開かなくても次の Drive 同期までに埋める。失敗分は次回に回る。
+                    let fetched_thumbnails =
+                        crate::views::checklist::backfill_missing_thumbnails(&db_for_poll, 500);
+                    (
+                        interval_min,
+                        any_changed,
+                        session_expired,
+                        fetched_thumbnails,
+                    )
                 });
-                let (interval_min, any_changed, session_expired) = task.await;
+                let (interval_min, any_changed, session_expired, fetched_thumbnails) = task.await;
                 if session_expired && !auth_dispatched {
                     auth_dispatched = true;
                     cx.update(|app| {
                         app.defer(|app| app.dispatch_action(&crate::actions::OpenAuth));
                     });
                 }
-                if any_changed {
+                if any_changed || fetched_thumbnails > 0 {
                     let _ = settings_entity
                         .update(cx, |settings, cx| settings.sync_drive_now(false, cx));
                 }

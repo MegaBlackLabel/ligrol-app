@@ -173,7 +173,7 @@ pub fn upsert_item(pool: &SqlitePool, item: &CheckedItem) -> Result<(), sqlx::Er
                product_id = excluded.product_id,
                product_title = excluded.product_title,
                thumbnail_url = excluded.thumbnail_url,
-               thumbnail_data = excluded.thumbnail_data,
+               thumbnail_data = COALESCE(excluded.thumbnail_data, checked_items.thumbnail_data),
                price = excluded.price,
                is_purchased = excluded.is_purchased,
                first_appearance_event_name = excluded.first_appearance_event_name,
@@ -274,6 +274,27 @@ pub fn thumbnails_of(
         .fetch_all(pool)
         .await?;
         Ok(rows)
+    })
+}
+
+/// サムネイル未保存（`thumbnail_data` が空）で、取得先 URL がある項目。
+///
+/// チェックリスト同期後のバックフィル（Web の表紙用）と、表示時の取得が使う。
+pub fn missing_thumbnail_items(
+    pool: &SqlitePool,
+    limit: usize,
+) -> Result<Vec<(String, String)>, sqlx::Error> {
+    crate::db::block_on(async {
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT id, thumbnail_url FROM checked_items \
+             WHERE (thumbnail_data IS NULL OR thumbnail_data = '') \
+               AND thumbnail_url IS NOT NULL AND thumbnail_url <> '' \
+             ORDER BY event_id, sort_order, circle_name \
+             LIMIT ?1",
+        )
+        .bind(limit as i64)
+        .fetch_all(pool)
+        .await
     })
 }
 
@@ -401,6 +422,45 @@ mod tests {
                 .unwrap()
                 .poll_sync_enabled,
             1
+        );
+    }
+
+    #[test]
+    fn upsert_item_preserves_downloaded_thumbnail_data() {
+        let pool = crate::db::test_pool();
+        upsert_event(&pool, &event("tbf20")).unwrap();
+        let item = CheckedItem {
+            id: "tbf20:p1".into(),
+            event_id: "tbf20".into(),
+            circle_name: "サークル".into(),
+            space_number: "あ-01".into(),
+            memo: String::new(),
+            is_checked: 0,
+            sort_order: 0,
+            tbf_circle_id: None,
+            product_id: Some("p1".into()),
+            product_title: "本".into(),
+            thumbnail_url: Some("https://example.com/img.png".into()),
+            thumbnail_data: Some("aGVsbG8=".into()),
+            price: None,
+            is_purchased: 0,
+            first_appearance_event_name: None,
+            sample_fetch_attempted_at: None,
+            created_at: "2026-01-01 00:00:00".into(),
+        };
+        upsert_item(&pool, &item).unwrap();
+        // 同期は thumbnail_data を持たない（None）で来る。既存の画像を消さない。
+        let fresh = CheckedItem {
+            thumbnail_data: None,
+            thumbnail_url: Some("https://example.com/img2.png".into()),
+            ..item
+        };
+        upsert_item(&pool, &fresh).unwrap();
+        let stored = get_item(&pool, "tbf20:p1").unwrap().unwrap();
+        assert_eq!(stored.thumbnail_data.as_deref(), Some("aGVsbG8="));
+        assert_eq!(
+            stored.thumbnail_url.as_deref(),
+            Some("https://example.com/img2.png")
         );
     }
 

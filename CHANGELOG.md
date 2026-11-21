@@ -6,6 +6,13 @@
 
 ### Fixed
 
+- **Web でチェックリストの表紙が出ない問題**: `ligrol-backup.json` の除外列から
+  `checked_items.thumbnail_data` を外し、デスクトップが取得済みの 256px JPEG を
+  バックアップに含めるようにした。チェックリスト同期時に未取得のサムネイルを
+  バックグラウンドで埋め、同期後の Drive バックアップへ反映する。
+  同期の upsert が既存の `thumbnail_data` を消していた問題も直した。
+- **`ligrol-keys.json` が Drive に無いままになる問題**: keyring に PRK があるのに
+  Drive の鍵 bundle が無い場合、Drive 同期で sub ラップ付き bundle を作り直す。
 - **Store 版とビルド版で小さいアイコンが違う問題**: Windows の exe アイコンも、
   MSIX と同じく 16/24px は L モノグラム、32px 以上は ligrol ワードマークに揃えた。
   16px のワードマークが潰れて Store 版と別アプリに見えるのを防ぐ。

@@ -2893,6 +2893,50 @@ fn apply_tbf21_highlights(
     out
 }
 
+/// チェックリスト同期後に、未保存のサムネイルをまとめて取得する。
+///
+/// Web のチェックリスト表紙は `ligrol-backup.json` の `thumbnail_data` から出すため、
+/// チェックリスト画面を開かなくてもバックアップ前に埋めておく。1 回 `limit` 件まで。
+/// 失敗した項目は `thumbnail_data` が空のまま残るので、次の同期で再試行される。
+pub(crate) fn backfill_missing_thumbnails(db: &db::SqlitePool, limit: usize) -> usize {
+    let Ok(items) = db::checklist::missing_thumbnail_items(db, limit) else {
+        return 0;
+    };
+    if items.is_empty() {
+        return 0;
+    }
+    let agent = ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .timeout_connect(Some(std::time::Duration::from_secs(15)))
+            .timeout_per_read(Some(std::time::Duration::from_secs(30)))
+            .build(),
+    );
+    let mut fetched = 0usize;
+    for (id, url) in items {
+        let result = (|| {
+            let resp = agent.get(&url).call().map_err(|e| e.to_string())?;
+            let mut body = Vec::new();
+            resp.into_body()
+                .into_reader()
+                .read_to_end(&mut body)
+                .map_err(|e| e.to_string())?;
+            let jpeg_b64 = thumbnail_jpeg_base64(&body).ok_or("not an image")?;
+            db::checklist::update_thumbnail_data(db, &id, &jpeg_b64).map_err(|e| e.to_string())?;
+            let _ = ligrol_core::thumbs::cache_checklist_thumbnail(db, &id, &jpeg_b64);
+            Ok::<(), String>(())
+        })();
+        if result.is_ok() {
+            fetched += 1;
+        } else {
+            log::warn!("checklist thumbnail backfill failed: {id}");
+        }
+    }
+    if fetched > 0 {
+        log::info!("checklist thumbnail backfill: {fetched} 件");
+    }
+    fetched
+}
+
 /// 画像バイト列を幅 256px 上限まで縮小した RGBA 画像にする。
 fn shrink_rgba(bytes: &[u8]) -> Option<image::RgbaImage> {
     let format = image::guess_format(bytes).ok()?;
@@ -2909,7 +2953,7 @@ fn shrink_rgba(bytes: &[u8]) -> Option<image::RgbaImage> {
 
 /// ダウンロードした表紙画像を縮小 JPEG の base64 に変換する（DB 保存用）。
 /// 元画像（最大 2MB 級）をそのまま保存せず、表示に十分なサイズで永続化する。
-fn thumbnail_jpeg_base64(bytes: &[u8]) -> Option<String> {
+pub(crate) fn thumbnail_jpeg_base64(bytes: &[u8]) -> Option<String> {
     let rgba = shrink_rgba(bytes)?;
     let (width, height) = rgba.dimensions();
     // JPEG は RGB のみ（アルファなし）なので変換してからエンコードする

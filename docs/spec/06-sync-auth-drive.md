@@ -278,7 +278,7 @@
    4. 上げる場合 → **先に新しいバックアップを上げてから**旧ファイルを `delete`。`outcome.database_backed_up = true`。
    5. 上げない場合（同じ内容）→ `drive.touch(file.id)` で `modifiedTime` だけ現在時刻に更新（バックアップの更新日時が古いままにならないように）。
    6. どちらの場合も基準値を保存する（**v3 = `content_hmac` / v2 = 正規形 md5**。形式ごとに比較できる値が違う）`crates/core/src/drive/sync.rs:478-485`, `:598`。
-8. **鍵 bundle の再試行**（`identity_sub` があるとき）`crates/core/src/drive/sync.rs:487-500`: `pack_keys::PackKeyStore::retry_pending_upload` を呼び、`drive.pack_keys.pending` が自分の `owner_id` なら `ligrol-keys.json` を上げ直して印を消す。**失敗しても同期全体は成功**として扱う（印は残り、次の同期で再試行。§3.1）。
+8. **鍵 bundle の再試行**（`identity_sub` があるとき）`crates/core/src/drive/sync.rs:487-500`: `pack_keys::PackKeyStore::retry_pending_upload` を呼び、`drive.pack_keys.pending` が自分の `owner_id` なら `ligrol-keys.json` を上げ直して印を消す。続けて `upload_if_missing` を呼び、pending が無くても keyring に PRK があり Drive に bundle が無ければ sub ラップ付きで作り直す。**失敗しても同期全体は成功**として扱う（印は残り、次の同期で再試行。§3.1）。
 - 進捗つき API: `sync(request)` は `sync_with_progress(request, &mut |_| true)`（進捗を使わない呼び出し＝起動時・終了時の自動同期）。`SyncProgress` は `phase`（`Download` / `Upload` / `Backup`）+ 名前・何件目/全件（`0` = 総数不明）・受信バイト数を持つ。ダウンロードの分母 `count` は**その回に転送する pack の総数**で、md5 一致でスキップした pack は数えない（先に転送対象を確定してから回す）。**中止が効くのはこの 3 つの区切りだけ**（取得中はその場、アップロードは次のファイルの直前、バックアップは書き出す前）。
 - 戻り値 `SyncOutcome` `crates/core/src/drive/sync.rs:31-43`: `downloaded` / `uploaded` / `skipped` / `conflicts`（pack_id の Vec）, `file_count`（Drive フォルダ内の全ファイル数）, `total_bytes`（Σ size、bytes）, `database_backed_up`, `database_restored`。
 - エラー型 `SyncError`: `Drive` / `Io` / **`Cancelled`**（進捗コールバックが中止を要求した。利用者操作なので UI はエラーではなく通知で伝える） / `Db` / `Pack` / `InvalidPack` / **`PackKeyRequired`**（暗号化 pack だが PRK が無い。fail-closed） / **`UnsupportedPackVersion { pack_id, version }`**（v2 以前の pack。再取り込みを案内） / **`BackupKeyRequired(owner_id)`**（暗号化された DB バックアップだが鍵が無い） / **`Backup(BackupError)`**（バックアップの形式不正・復号失敗）。
@@ -293,11 +293,12 @@
 
 ### 3.4 DB バックアップの中身（`db/backup.rs`）
 
-- 目的（モジュールコメント）: 画像 base64 を含む DB ファイル全体（200MB 級）を上げるのは重いため、主要テーブルのテキストのみ JSON 化する。`thumbnail_data` / `image_data` と環境依存設定（`drive.*` / `api.last_sync_at` 等）は含めない `crates/core/src/db/backup.rs:1-8`。
+- 目的（モジュールコメント）: 画像 base64 を含む DB ファイル全体（200MB 級）を上げるのは重いため、主要テーブルのテキストのみ JSON 化する。`image_data` と環境依存設定（`drive.*` / `api.last_sync_at` 等）は含めない `crates/core/src/db/backup.rs:1-9`。例外として `checked_items.thumbnail_data`（256px JPEG の base64）は Web のチェックリスト表紙表示用に含める。
 - 対象テーブル（17 個、この順で処理。FK 参照元が先）: `books`, `bookshelf_items`, `checked_items`, `product_sample_pages`, `tbf_events`, `book_contents`, `content_formats`, `reading_progress`, `page_views`, `book_tags`, `favorite_tags`, `favorite_entities`, `imported_documents`, `document_images`, `book_first_events`, `zenn_tag_metadata`, `view_history` `crates/core/src/db/backup.rs:17-43`。
-- 除外カラム: `thumbnail_data`, `image_data`, `extracted_text`（`document_images` の
+- 除外カラム: `image_data`, `extracted_text`（`document_images` の
   ページ本文。暗号化 pack から取り出した平文で、バックアップに載ると暗号化の意味が
-  失われる。アプリはこの列を読まない）`crates/core/src/db/backup.rs:46`。
+  失われる。アプリはこの列を読まない）`crates/core/src/db/backup.rs:60`。
+  `checked_items.thumbnail_data` は Web のチェックリスト表紙用に**含める**。
 - owner フィルタ（P3）: `book_ids` を渡すと `books` を絞り、関連テーブルも `book_id IN (...)` で連動して除外する。加えて `OwnerFilter { key, sub }` を渡すと、本に紐づかない
   `OWNER_SCOPED_TABLES`（`bookshelf_items` / `checked_items` / `book_first_events` /
   `favorite_tags` / `favorite_entities`）を `owner_sub` の復号比較で絞る `crates/core/src/db/backup.rs`。
