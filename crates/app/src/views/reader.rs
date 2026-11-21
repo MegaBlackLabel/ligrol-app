@@ -359,13 +359,15 @@ impl ReaderView {
     pub fn for_sample(cx: &mut Context<Self>, item_id: String) -> Self {
         let state = AppState::global(cx);
         let db = state.db_pool.clone();
+        let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
         let (title, pages) = {
-            let title = db::checklist::get_item(&db, &item_id)
+            let title = db::checklist::get_item_for_owner(&db, &item_id, &owner_id)
                 .ok()
                 .flatten()
                 .map(|item| item.product_title)
                 .unwrap_or_else(|| "試し読み".to_string());
-            let pages: Vec<(String, u32, u32)> = db::samples::list_for_item(&db, &item_id)
+            let pages: Vec<(String, u32, u32)> =
+                db::samples::list_for_item_for_owner(&db, &item_id, &owner_id)
                 .unwrap_or_default()
                 .into_iter()
                 .filter_map(|row| {

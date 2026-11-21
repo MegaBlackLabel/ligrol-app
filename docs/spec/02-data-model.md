@@ -647,7 +647,7 @@ CREATE TABLE IF NOT EXISTS drive_sync_state (
 | `tbf_events` | 技術書典イベント（チェックリスト・イベント名補完） | `id` | `site_id → sites(id)` | `schema.sql:55-74` |
 | `bookshelf_items` | 本棚（同期スナップショット） | `(site_id, database_id)` | `site_id → sites(id)`, `event_id → tbf_events(id)` | `schema.sql:76-106` |
 | `reading_progress` | 読書位置（コンテンツ単位） | `(book_id, content_id)` | `book_id → books(id) ON DELETE CASCADE` | `schema.sql:108-117` |
-| `checked_items` | チェックリスト項目 | `id` | `event_id → tbf_events(id)` | `schema.sql:119-136` |
+| `checked_items` | チェックリスト項目。**複数アカウント対応で PK は `(id, owner_id)`**（`owner_id` は `derive_owner_id(sub)`。旧行は起動時に `owner_sub` から埋める） | `(id, owner_id)` | `event_id → tbf_events(id)` | `schema.sql:119-136` / `crates/core/src/db/mod.rs`（`migrate_owner_aware_checklist`） |
 | `book_contents` | 読む単位（本文・別冊等） | `content_id` | `book_id → books(id) ON DELETE CASCADE` | `schema.sql:138-148` |
 | `content_formats` | レンディション（PDF版/画像版等） | `format_id` | `content_id → book_contents(content_id) ON DELETE CASCADE` | `schema.sql:150-161` |
 | `imported_documents` | 取り込みドキュメント | `id` | `book_id → books(id)`（ON DELETE なし） | `schema.sql:163-173` |
@@ -660,7 +660,7 @@ CREATE TABLE IF NOT EXISTS drive_sync_state (
 | `favorite_tags` | お気に入りタグ | `tag_name` | — | `schema.sql:243-247` |
 | `favorite_entities` | サークル / 作者のお気に入り（種別ごとに独立） | `(entity_kind, entity_name)` | — | `schema.sql:249-254` |
 | `book_first_events` | 本の初出イベント | `(site_id, database_id)` | 複合 FK `(site_id, database_id) → bookshelf_items(site_id, database_id)` | `schema.sql:256-264` |
-| `product_sample_pages` | 試し読み画像 | `id` | `checklist_item_id → checked_items(id)` | `schema.sql:266-281` |
+| `product_sample_pages` | 試し読み画像。**`owner_id` を持ち、複合 FK `(checklist_item_id, owner_id) → checked_items(id, owner_id)`** | `id` | `(checklist_item_id, owner_id) → checked_items(id, owner_id)` | `schema.sql:266-281` / `crates/core/src/db/mod.rs` |
 | `thumbnail_share` | 表紙バンドル（Drive `ligrol-thumbs.json`）に載せる画像の派生キャッシュ。**DB バックアップの対象外**（復元先で作り直せる） | `(kind, item_key)` | — | `schema.sql:291-306` / `crates/core/src/db/mod.rs`（`migrate`） |
 | `drive_sync_state` | Drive 同期の記帳 | `pack_id` | — | `crates/core/src/db/desktop.sql:3-9` / `0001_init.sql:230-238` |
 | `view_history` | 閲覧セッション（開始/終了時刻） | `id` | `book_id → books(id) ON DELETE CASCADE` | `crates/core/src/db/mod.rs:274` |
@@ -758,7 +758,7 @@ AES-256-GCM にして保存する。
 | `books` | `owner_sub` | ローカル鍵で暗号化済みの sub（`None` = 未所属）。暗号化は `crate::owner` 側 | `db/books.rs:247-266` |
 | `tbf_events` | `id` | 技術書典の slug（例 `tbf18`）。`tbf_event_id` は `format!("Event:{slug}")` | `core/src/tbf/mod.rs:339-340`, `:1143-1144` |
 | `bookshelf_items` | `(site_id, database_id)` | `database_id` はサイト API の作品 ID（自前生成しない） | `db/bookshelf.rs:61-63` |
-| `checked_items` | `id` | 技術書典 API の `entry.id` をそのまま使う | `core/src/tbf/sync.rs:182-184` |
+| `checked_items` | `id` | 技術書典 API の `entry.id` をそのまま使う。**同一 id を owner ごとに持てる**（PK = `id` + `owner_id`） | `core/src/tbf/sync.rs` / `db/checklist.rs` |
 | `book_contents` | `content_id` | `Uuid::new_v4()`（ZIP 取り込みは `commit_zip` 内で 1 コンテンツ 1 個、PDF/画像/EPUB 単体は `single_content`、復元は `infer_contents`） | `import/mod.rs:1508`, `:819`, `:1981` |
 | `content_formats` | `format_id` | `Uuid::new_v4()`（1 レンディション 1 個） | `import/mod.rs:1511`, `:825`, `:1987` |
 | `imported_documents` | `id` | `Uuid::new_v4()`（document 行は最後に作るが id は先に採番） | `import/mod.rs:980`, `:1771` |

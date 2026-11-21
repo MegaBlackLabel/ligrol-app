@@ -25,6 +25,7 @@ pub mod view_history;
 
 use std::path::Path;
 
+use sqlx::Acquire as _;
 use sqlx::SqliteConnection;
 pub use sqlx::sqlite::SqlitePool;
 
@@ -73,6 +74,314 @@ pub fn connect(path: &Path) -> Result<SqlitePool, sqlx::Error> {
 /// 開発中のためマイグレーションファイルは作らず、既存の runtime DDL（hidden_at /
 /// owner_sub 等）と同様に PRAGMA で列の有無を確認してから `ALTER TABLE ... ADD COLUMN` で
 /// 冪等に列を追加する。
+/// 既存の `bookshelf_items` / `book_first_events` を owner 込みの PK へ作り替える。
+///
+/// SQLite は PK を ALTER できないため、旧テーブルを rename して新テーブルへ
+/// `INSERT ... SELECT` する。`owner_id` は既存行では空文字（未バックフィル）にし、
+/// 起動後に DB 鍵で `owner_sub` から埋める。`thumbnail_share` は派生キャッシュなので
+/// 旧スキーマを捨てて作り直す。
+async fn migrate_owner_aware_shelf(conn: &mut sqlx::SqliteConnection) -> Result<(), sqlx::Error> {
+    let has_owner_id = has_column(&mut *conn, "bookshelf_items", "owner_id").await?;
+    let has_first_owner_id = has_column(&mut *conn, "book_first_events", "owner_id").await?;
+    if has_owner_id && has_first_owner_id {
+        return Ok(());
+    }
+
+    let fk_enabled: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+        .fetch_one(&mut *conn)
+        .await?;
+    if fk_enabled != 0 {
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await?;
+    }
+
+    let result = async {
+        let mut tx = conn.begin().await?;
+        if !has_owner_id {
+            sqlx::query("ALTER TABLE bookshelf_items RENAME TO bookshelf_items_old")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                "CREATE TABLE bookshelf_items (
+                  site_id TEXT NOT NULL REFERENCES sites(id),
+                  database_id TEXT NOT NULL,
+                  title TEXT NOT NULL,
+                  circle_name TEXT NOT NULL DEFAULT '',
+                  thumbnail_url TEXT,
+                  format TEXT NOT NULL DEFAULT '',
+                  causedAt TEXT,
+                  event_name TEXT,
+                  event_slug TEXT,
+                  event_id TEXT REFERENCES tbf_events(id),
+                  file_name TEXT,
+                  download_url TEXT,
+                  is_downloadable INTEGER NOT NULL DEFAULT 0,
+                  is_checked INTEGER NOT NULL DEFAULT 0,
+                  is_purchased INTEGER NOT NULL DEFAULT 0,
+                  is_new INTEGER NOT NULL DEFAULT 0,
+                  is_active INTEGER NOT NULL DEFAULT 1,
+                  is_favorite INTEGER NOT NULL DEFAULT 0,
+                  is_hidden INTEGER NOT NULL DEFAULT 0,
+                  tags_json TEXT,
+                  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  hidden_at TEXT,
+                  author TEXT NOT NULL DEFAULT '',
+                  tags_fetched INTEGER NOT NULL DEFAULT 0,
+                  download_options TEXT,
+                  media_category TEXT,
+                  ai_type TEXT,
+                  is_drm INTEGER NOT NULL DEFAULT 2,
+                  release_date TEXT,
+                  description TEXT,
+                  theme TEXT,
+                  maker_id TEXT,
+                  page_count INTEGER,
+                  age_rating TEXT,
+                  series_name TEXT,
+                  owner_sub TEXT,
+                  owner_id TEXT NOT NULL DEFAULT '',
+                  PRIMARY KEY (site_id, database_id, owner_id)
+                )",
+            )
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO bookshelf_items (
+                  site_id, database_id, title, circle_name, thumbnail_url, format, causedAt,
+                  event_name, event_slug, event_id, file_name, download_url, is_downloadable,
+                  is_checked, is_purchased, is_new, is_active, is_favorite, is_hidden, tags_json,
+                  synced_at, created_at, updated_at, hidden_at, author, tags_fetched,
+                  download_options, media_category, ai_type, is_drm, release_date, description,
+                  theme, maker_id, page_count, age_rating, series_name, owner_sub
+                ) SELECT
+                  site_id, database_id, title, circle_name, thumbnail_url, format, causedAt,
+                  event_name, event_slug, event_id, file_name, download_url, is_downloadable,
+                  is_checked, is_purchased, is_new, is_active, is_favorite, is_hidden, tags_json,
+                  synced_at, created_at, updated_at, hidden_at, author, tags_fetched,
+                  download_options, media_category, ai_type, is_drm, release_date, description,
+                  theme, maker_id, page_count, age_rating, series_name, owner_sub
+                FROM bookshelf_items_old",
+            )
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DROP TABLE bookshelf_items_old")
+                .execute(&mut *tx)
+                .await?;
+        }
+        if !has_first_owner_id {
+            sqlx::query("ALTER TABLE book_first_events RENAME TO book_first_events_old")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                "CREATE TABLE book_first_events (
+                  site_id TEXT NOT NULL,
+                  database_id TEXT NOT NULL,
+                  first_event_name TEXT,
+                  first_event_slug TEXT,
+                  fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  owner_sub TEXT,
+                  owner_id TEXT NOT NULL DEFAULT '',
+                  PRIMARY KEY (site_id, database_id, owner_id),
+                  FOREIGN KEY (site_id, database_id, owner_id)
+                    REFERENCES bookshelf_items(site_id, database_id, owner_id)
+                )",
+            )
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO book_first_events (
+                  site_id, database_id, first_event_name, first_event_slug, fetched_at, owner_sub
+                ) SELECT site_id, database_id, first_event_name, first_event_slug, fetched_at, owner_sub
+                  FROM book_first_events_old",
+            )
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DROP TABLE book_first_events_old")
+                .execute(&mut *tx)
+                .await?;
+        }
+        // 派生キャッシュ。旧 owner 無しの行はどこにも帰属できないので捨てる。
+        sqlx::query("DROP TABLE IF EXISTS thumbnail_share")
+            .execute(&mut *tx)
+            .await?;
+        // rename / drop で旧テーブルの索引も消えるため作り直す。
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS bookshelf_items_site_id_idx \
+             ON bookshelf_items(site_id)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS bookshelf_items_event_id_idx \
+             ON bookshelf_items(event_id)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS bookshelf_items_owner_id_idx \
+             ON bookshelf_items(owner_id)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok::<(), sqlx::Error>(())
+    }
+    .await;
+
+    if fk_enabled != 0 {
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&mut *conn)
+            .await?;
+    }
+    result
+}
+
+/// 既存の `checked_items` / `product_sample_pages` を owner 込みの PK へ作り替える。
+///
+/// 技術書典の項目 ID はアカウント間で同じため、`id` 単独の PK では 2 アカウント目が
+/// 同じ項目を持てない。`checked_items` は `(id, owner_id)`、試し読みは
+/// `(checklist_item_id, owner_id)` の複合 FK にする。
+async fn migrate_owner_aware_checklist(
+    conn: &mut sqlx::SqliteConnection,
+) -> Result<(), sqlx::Error> {
+    let has_item_owner = has_column(&mut *conn, "checked_items", "owner_id").await?;
+    let has_sample_owner = has_column(&mut *conn, "product_sample_pages", "owner_id").await?;
+    if has_item_owner && has_sample_owner {
+        return Ok(());
+    }
+
+    let fk_enabled: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+        .fetch_one(&mut *conn)
+        .await?;
+    if fk_enabled != 0 {
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await?;
+    }
+
+    let result = async {
+        let mut tx = conn.begin().await?;
+        if !has_item_owner {
+            sqlx::query("ALTER TABLE checked_items RENAME TO checked_items_old")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                "CREATE TABLE checked_items (
+                  id TEXT NOT NULL,
+                  event_id TEXT NOT NULL REFERENCES tbf_events(id),
+                  circle_name TEXT NOT NULL,
+                  space_number TEXT NOT NULL DEFAULT '',
+                  memo TEXT NOT NULL DEFAULT '',
+                  is_checked INTEGER NOT NULL DEFAULT 0,
+                  sort_order INTEGER NOT NULL DEFAULT 0,
+                  tbf_circle_id TEXT,
+                  product_id TEXT,
+                  product_title TEXT NOT NULL DEFAULT '',
+                  thumbnail_url TEXT,
+                  thumbnail_data TEXT,
+                  price INTEGER,
+                  is_purchased INTEGER NOT NULL DEFAULT 0,
+                  sample_fetch_attempted_at TEXT,
+                  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  first_appearance_event_name TEXT,
+                  owner_sub TEXT,
+                  owner_id TEXT NOT NULL DEFAULT '',
+                  PRIMARY KEY (id, owner_id)
+                )",
+            )
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO checked_items (
+                  id, event_id, circle_name, space_number, memo, is_checked, sort_order,
+                  tbf_circle_id, product_id, product_title, thumbnail_url, thumbnail_data,
+                  price, is_purchased, sample_fetch_attempted_at, createdAt,
+                  first_appearance_event_name, owner_sub
+                ) SELECT
+                  id, event_id, circle_name, space_number, memo, is_checked, sort_order,
+                  tbf_circle_id, product_id, product_title, thumbnail_url, thumbnail_data,
+                  price, is_purchased, sample_fetch_attempted_at, createdAt,
+                  first_appearance_event_name, owner_sub
+                FROM checked_items_old",
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        if !has_sample_owner {
+            sqlx::query("ALTER TABLE product_sample_pages RENAME TO product_sample_pages_old")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                "CREATE TABLE product_sample_pages (
+                  id TEXT PRIMARY KEY,
+                  checklist_item_id TEXT NOT NULL,
+                  owner_id TEXT NOT NULL DEFAULT '',
+                  product_id TEXT,
+                  page_number INTEGER NOT NULL,
+                  image_url TEXT,
+                  image_data TEXT,
+                  mime_type TEXT NOT NULL DEFAULT 'image/jpeg',
+                  width INTEGER,
+                  height INTEGER,
+                  file_size INTEGER,
+                  pack_id TEXT,
+                  pack_entry_path TEXT,
+                  fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  FOREIGN KEY (checklist_item_id, owner_id)
+                    REFERENCES checked_items(id, owner_id)
+                )",
+            )
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO product_sample_pages (
+                  id, checklist_item_id, owner_id, product_id, page_number, image_url,
+                  image_data, mime_type, width, height, file_size, pack_id, pack_entry_path,
+                  fetched_at, created_at
+                ) SELECT
+                  p.id, p.checklist_item_id, COALESCE(c.owner_id, ''),
+                  p.product_id, p.page_number, p.image_url, p.image_data, p.mime_type,
+                  p.width, p.height, p.file_size, p.pack_id, p.pack_entry_path,
+                  p.fetched_at, p.created_at
+                FROM product_sample_pages_old p
+                LEFT JOIN checked_items c ON c.id = p.checklist_item_id",
+            )
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DROP TABLE product_sample_pages_old")
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        if !has_item_owner {
+            sqlx::query("DROP TABLE checked_items_old")
+                .execute(&mut *tx)
+                .await?;
+        }
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS checked_items_owner_id_idx \
+             ON checked_items(owner_id, event_id)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok::<(), sqlx::Error>(())
+    }
+    .await;
+
+    if fk_enabled != 0 {
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&mut *conn)
+            .await?;
+    }
+    result
+}
+
 async fn ensure_column(
     conn: &mut sqlx::SqliteConnection,
     table: &str,
@@ -86,9 +395,11 @@ async fn ensure_column(
             .fetch_one(&mut *conn)
             .await?;
     if exists == 0 {
-        sqlx::query(dynamic_sql(format!("ALTER TABLE {table} ADD COLUMN {definition}")))
-            .execute(&mut *conn)
-            .await?;
+        sqlx::query(dynamic_sql(format!(
+            "ALTER TABLE {table} ADD COLUMN {definition}"
+        )))
+        .execute(&mut *conn)
+        .await?;
     }
     Ok(())
 }
@@ -479,15 +790,41 @@ pub fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         ] {
             ensure_column(&mut conn, table, "owner_sub", "owner_sub TEXT").await?;
         }
+        // 複数アカウント対応: 同じ商品を owner ごとに持てるよう、shelf の PK を
+        // `(site_id, database_id, owner_id)` に作り替える。既存 DB はテーブル再構築。
+        migrate_owner_aware_shelf(&mut conn).await?;
+        // 既存 DB は移行内で索引を作るが、移行済み DB でも owner 検索用の索引を保証する。
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS bookshelf_items_owner_id_idx \
+             ON bookshelf_items(owner_id)",
+        )
+        .execute(&mut *conn)
+        .await?;
+        // 複数アカウント対応: 技術書典のチェックリストも owner ごとに持てるよう、
+        // `checked_items` の PK と試し読みの FK を作り替える。
+        migrate_owner_aware_checklist(&mut conn).await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS checked_items_owner_id_idx \
+             ON checked_items(owner_id, event_id)",
+        )
+        .execute(&mut *conn)
+        .await?;
         // 表紙バンドル（`ligrol-thumbs.json`）に載せる画像の派生キャッシュ
         // （`db::thumbs`）。α版なのでマイグレーションファイルを足さず、
         // 上の runtime DDL と同様に冪等に作る（新規 DB も schema.sql が持つ）。
         // **`db::backup::TABLES` の許可リストには入れない**（復元先で作り直せる
         // 派生データで、DB バックアップを太らせる意味がない）。
+        // 旧 `thumbnail_share`（owner_id 無し）は PK を変更できないので作り直す。
+        if !has_column(&mut conn, "thumbnail_share", "owner_id").await? {
+            sqlx::query("DROP TABLE IF EXISTS thumbnail_share")
+                .execute(&mut *conn)
+                .await?;
+        }
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS thumbnail_share (
                  kind TEXT NOT NULL,
                  item_key TEXT NOT NULL,
+                 owner_id TEXT NOT NULL DEFAULT '',
                  mime TEXT NOT NULL,
                  width INTEGER NOT NULL,
                  height INTEGER NOT NULL,
@@ -496,7 +833,7 @@ pub fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
                  source_mtime INTEGER,
                  source_size INTEGER,
                  updated_at TEXT NOT NULL,
-                 PRIMARY KEY (kind, item_key)
+                 PRIMARY KEY (kind, item_key, owner_id)
              )",
         )
         .execute(&mut *conn)
@@ -596,9 +933,11 @@ pub fn migrate_drm_status_once(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
     }
     block_on(async {
         for table in ["bookshelf_items", "books"] {
-            sqlx::query(dynamic_sql(format!("UPDATE {table} SET is_drm = 2 WHERE is_drm = 0")))
-                .execute(pool)
-                .await?;
+            sqlx::query(dynamic_sql(format!(
+                "UPDATE {table} SET is_drm = 2 WHERE is_drm = 0"
+            )))
+            .execute(pool)
+            .await?;
         }
         Ok::<_, sqlx::Error>(())
     })?;

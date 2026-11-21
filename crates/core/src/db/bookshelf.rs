@@ -2,6 +2,7 @@
 //! Note: the verbatim Web schema uses camelCase `causedAt`.
 
 use crate::db::{SqlitePool, dynamic_sql};
+use sqlx::Row;
 
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct BookshelfItem {
@@ -82,15 +83,24 @@ impl BookshelfItem {
 /// ダウンロード時に取得したジャンル・作者が消えるので、値が無いときは
 /// 既存値を保持する（`is_favorite` / `is_hidden` と同じ扱い）。
 pub fn upsert(pool: &SqlitePool, item: &BookshelfItem) -> Result<(), sqlx::Error> {
+    upsert_for_owner(pool, item, "")
+}
+
+/// 所有者 ID を明示して upsert する（同期経路）。
+pub fn upsert_for_owner(
+    pool: &SqlitePool,
+    item: &BookshelfItem,
+    owner_id: &str,
+) -> Result<(), sqlx::Error> {
     crate::db::block_on(async {
         // 「不明」は同期の既定値なので、それを送ってきたときは既存の判定結果を残す。
         let unknown = crate::drm::DrmStatus::Unknown.as_db();
         sqlx::query(dynamic_sql(format!(
-            "INSERT INTO bookshelf_items ({COLUMNS}) VALUES \
+            "INSERT INTO bookshelf_items ({COLUMNS}, owner_id) VALUES \
              (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, \
              ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, \
-             ?36)
-             ON CONFLICT(site_id, database_id) DO UPDATE SET
+             ?36, ?37)
+             ON CONFLICT(site_id, database_id, owner_id) DO UPDATE SET
                title = excluded.title,
                circle_name = excluded.circle_name,
                author = excluded.author,
@@ -171,6 +181,7 @@ pub fn upsert(pool: &SqlitePool, item: &BookshelfItem) -> Result<(), sqlx::Error
         .bind(item.page_count)
         .bind(&item.age_rating)
         .bind(&item.series_name)
+        .bind(owner_id)
         .execute(pool)
         .await?;
         Ok(())
@@ -188,16 +199,41 @@ pub fn attribute_owner(
     site_id: &str,
     owner: Option<&str>,
 ) -> Result<u64, sqlx::Error> {
+    attribute_owner_with_id(pool, site_id, owner, None)
+}
+
+/// 所有者 sub と owner_id を同時に付ける（同期経路）。
+///
+/// `owner_id` は `derive_owner_id(sub)`。既存行（owner_sub が NULL）だけを埋め、
+/// 既に所有者が付いた行は書き換えない。
+pub fn attribute_owner_with_id(
+    pool: &SqlitePool,
+    site_id: &str,
+    owner: Option<&str>,
+    owner_id: Option<&str>,
+) -> Result<u64, sqlx::Error> {
     let Some(owner) = owner else {
         // 未ログイン: 未所属のままにする。
         return Ok(0);
     };
     crate::db::block_on(async {
+        // 未所属行に owner_sub を付ける。owner_id は、同じ商品の現所有者行が
+        // **まだ無いときだけ**移す（既にあるなら移すと PK 衝突する。旧行は
+        // owner_id='' のまま非表示に残る）。
         let result = sqlx::query(
-            "UPDATE bookshelf_items SET owner_sub = ?1 \
-             WHERE site_id = ?2 AND owner_sub IS NULL",
+            "UPDATE bookshelf_items AS old \
+             SET owner_sub = ?1, \
+                 owner_id = CASE \
+                   WHEN ?2 <> '' AND old.owner_id = '' AND NOT EXISTS ( \
+                     SELECT 1 FROM bookshelf_items AS current \
+                     WHERE current.site_id = old.site_id \
+                       AND current.database_id = old.database_id \
+                       AND current.owner_id = ?2 \
+                   ) THEN ?2 ELSE old.owner_id END \
+             WHERE old.site_id = ?3 AND old.owner_sub IS NULL",
         )
         .bind(owner)
+        .bind(owner_id.unwrap_or(""))
         .bind(site_id)
         .execute(pool)
         .await?;
@@ -213,16 +249,94 @@ pub fn set_event_name(
     database_id: &str,
     event_name: &str,
 ) -> Result<(), sqlx::Error> {
+    set_event_name_for_owner(pool, site_id, database_id, "", event_name)
+}
+
+/// 所有者を明示してイベント名を更新する。
+pub fn set_event_name_for_owner(
+    pool: &SqlitePool,
+    site_id: &str,
+    database_id: &str,
+    owner_id: &str,
+    event_name: &str,
+) -> Result<(), sqlx::Error> {
     crate::db::block_on(async {
         sqlx::query(
-            "UPDATE bookshelf_items SET event_name = ?1, updated_at = CURRENT_TIMESTAMP          WHERE site_id = ?2 AND database_id = ?3",
+            "UPDATE bookshelf_items SET event_name = ?1, updated_at = CURRENT_TIMESTAMP \
+             WHERE site_id = ?2 AND database_id = ?3 AND owner_id = ?4",
         )
         .bind(event_name)
         .bind(site_id)
         .bind(database_id)
+        .bind(owner_id)
         .execute(pool)
         .await?;
         Ok(())
+    })
+}
+
+/// 既存行の `owner_sub`（暗号文）から `owner_id` を一度だけ埋める。
+///
+/// `owner_id` 列を追加しただけでは既存行は空のままなので、表示・バックアップの
+/// 所有者絞り込みから漏れる。DB 鍵で復号できた行だけを埋め、未所属（NULL）は空のまま。
+/// 復号できない行は**未所属扱いにせず**空のまま残す（表示は空 owner に一致しない）。
+pub fn backfill_owner_ids(pool: &SqlitePool, key: &[u8; 32]) -> Result<u64, sqlx::Error> {
+    crate::db::block_on(async {
+        let mut tx = pool.begin().await?;
+        // 親（bookshelf_items）と子（book_first_events）を同じトランザクションで
+        // 付け替えるため、即時 FK 検査をコミット時まで遅らせる。
+        sqlx::query("PRAGMA defer_foreign_keys = ON")
+            .execute(&mut *tx)
+            .await?;
+        let mut updated = 0u64;
+        let rows = sqlx::query(
+            "SELECT site_id, database_id, owner_sub FROM bookshelf_items \
+             WHERE owner_id = '' AND owner_sub IS NOT NULL",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        for row in rows {
+            let site_id: String = row.try_get("site_id")?;
+            let database_id: String = row.try_get("database_id")?;
+            let stored: Option<String> = row.try_get("owner_sub")?;
+            let Some(sub) = stored
+                .as_deref()
+                .and_then(|value| crate::owner::decrypt(key, value))
+            else {
+                continue;
+            };
+            let owner_id = nartik::derive_owner_id(&sub);
+            updated += sqlx::query(
+                "UPDATE bookshelf_items SET owner_id = ?1 \
+                 WHERE site_id = ?2 AND database_id = ?3 AND owner_id = '' \
+                   AND NOT EXISTS ( \
+                     SELECT 1 FROM bookshelf_items AS current \
+                     WHERE current.site_id = ?2 AND current.database_id = ?3 \
+                       AND current.owner_id = ?1 \
+                   )",
+            )
+            .bind(&owner_id)
+            .bind(&site_id)
+            .bind(&database_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+        }
+        // 子（初出イベント）は親の owner_id を正とする。owner_sub が NULL の旧行も
+        // 親に合わせることで、複合 FK を壊さない。
+        updated += sqlx::query(
+            "UPDATE book_first_events SET owner_id = COALESCE((
+               SELECT p.owner_id FROM bookshelf_items p
+               WHERE p.site_id = book_first_events.site_id
+                 AND p.database_id = book_first_events.database_id
+             ), '') \
+             WHERE owner_id = ''",
+        )
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        Ok(updated)
     })
 }
 
@@ -232,6 +346,24 @@ pub fn list_all(pool: &SqlitePool) -> Result<Vec<BookshelfItem>, sqlx::Error> {
         sqlx::query_as::<_, BookshelfItem>(dynamic_sql(format!(
             "SELECT {COLUMNS} FROM bookshelf_items              ORDER BY causedAt IS NULL, causedAt DESC, title ASC"
         )))
+        .fetch_all(pool)
+        .await
+    })
+}
+
+/// 現在の所有者の本棚だけを返す（`owner_id` = `derive_owner_id(sub)`、未ログインは空）。
+///
+/// 同じ作品を複数アカウントが購入していても、所有者ごとに行が分かれる。
+pub fn list_all_for_owner(
+    pool: &SqlitePool,
+    owner_id: &str,
+) -> Result<Vec<BookshelfItem>, sqlx::Error> {
+    crate::db::block_on(async {
+        sqlx::query_as::<_, BookshelfItem>(dynamic_sql(format!(
+            "SELECT {COLUMNS} FROM bookshelf_items WHERE owner_id = ?1 \
+             ORDER BY causedAt IS NULL, causedAt DESC, title ASC"
+        )))
+        .bind(owner_id)
         .fetch_all(pool)
         .await
     })
@@ -250,6 +382,24 @@ pub fn list(pool: &SqlitePool, site_id: &str) -> Result<Vec<BookshelfItem>, sqlx
     })
 }
 
+/// 現在の所有者の、指定サイトの本棚だけを返す。
+pub fn list_for_owner(
+    pool: &SqlitePool,
+    site_id: &str,
+    owner_id: &str,
+) -> Result<Vec<BookshelfItem>, sqlx::Error> {
+    crate::db::block_on(async {
+        sqlx::query_as::<_, BookshelfItem>(dynamic_sql(format!(
+            "SELECT {COLUMNS} FROM bookshelf_items WHERE site_id = ?1 AND owner_id = ?2 \
+             ORDER BY causedAt IS NULL, causedAt DESC, title ASC"
+        )))
+        .bind(site_id)
+        .bind(owner_id)
+        .fetch_all(pool)
+        .await
+    })
+}
+
 /// Replace the manual tags for a bookshelf item (`tags_json`), mirroring the
 /// Web `updateBookTags` fallback for not-yet-downloaded books.
 pub fn update_tags(
@@ -258,16 +408,28 @@ pub fn update_tags(
     database_id: &str,
     tags: &[String],
 ) -> Result<(), sqlx::Error> {
+    update_tags_for_owner(pool, site_id, database_id, "", tags)
+}
+
+/// 所有者を明示してタグを更新する。
+pub fn update_tags_for_owner(
+    pool: &SqlitePool,
+    site_id: &str,
+    database_id: &str,
+    owner_id: &str,
+    tags: &[String],
+) -> Result<(), sqlx::Error> {
     let json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string());
     crate::db::block_on(async {
         sqlx::query(
             "UPDATE bookshelf_items SET tags_json = ?1, tags_fetched = 1, \
              updated_at = CURRENT_TIMESTAMP \
-             WHERE site_id = ?2 AND database_id = ?3",
+             WHERE site_id = ?2 AND database_id = ?3 AND owner_id = ?4",
         )
         .bind(json)
         .bind(site_id)
         .bind(database_id)
+        .bind(owner_id)
         .execute(pool)
         .await?;
         Ok(())
@@ -288,6 +450,17 @@ pub fn store_fetched_tags(
     database_id: &str,
     tags: &[String],
 ) -> Result<(), sqlx::Error> {
+    store_fetched_tags_for_owner(pool, site_id, database_id, "", tags)
+}
+
+/// 所有者を明示して取得タグを保存する。
+pub fn store_fetched_tags_for_owner(
+    pool: &SqlitePool,
+    site_id: &str,
+    database_id: &str,
+    owner_id: &str,
+    tags: &[String],
+) -> Result<(), sqlx::Error> {
     let json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string());
     crate::db::block_on(async {
         sqlx::query(
@@ -296,11 +469,12 @@ pub fn store_fetched_tags(
                WHEN ?1 = '[]' AND tags_json IS NOT NULL AND tags_json NOT IN ('[]', '') \
                THEN tags_json ELSE ?1 END, \
              tags_fetched = 1, updated_at = CURRENT_TIMESTAMP \
-             WHERE site_id = ?2 AND database_id = ?3",
+             WHERE site_id = ?2 AND database_id = ?3 AND owner_id = ?4",
         )
         .bind(json)
         .bind(site_id)
         .bind(database_id)
+        .bind(owner_id)
         .execute(pool)
         .await?;
         Ok(())
@@ -316,6 +490,26 @@ pub fn pending_tag_fetch_count(pool: &SqlitePool, site_id: &str) -> Result<i64, 
                AND NOT EXISTS (SELECT 1 FROM books WHERE books.tbf_product_id = b.database_id)",
         )
         .bind(site_id)
+        .fetch_one(pool)
+        .await
+    })
+}
+
+/// 現在の所有者の、タグ未取得の未ダウンロード作品の件数。
+pub fn pending_tag_fetch_count_for_owner(
+    pool: &SqlitePool,
+    site_id: &str,
+    owner_id: &str,
+) -> Result<i64, sqlx::Error> {
+    crate::db::block_on(async {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM bookshelf_items b \
+             WHERE b.site_id = ?1 AND b.owner_id = ?2 AND b.is_active = 1 \
+               AND b.tags_fetched = 0 \
+               AND NOT EXISTS (SELECT 1 FROM books WHERE books.tbf_product_id = b.database_id)",
+        )
+        .bind(site_id)
+        .bind(owner_id)
         .fetch_one(pool)
         .await
     })
@@ -346,6 +540,30 @@ pub fn pending_tag_fetch(
     })
 }
 
+/// 現在の所有者の、タグ未取得の未ダウンロード作品を最大 `limit` 件返す。
+pub fn pending_tag_fetch_for_owner(
+    pool: &SqlitePool,
+    site_id: &str,
+    owner_id: &str,
+    limit: usize,
+) -> Result<Vec<String>, sqlx::Error> {
+    crate::db::block_on(async {
+        sqlx::query_scalar(
+            "SELECT b.database_id FROM bookshelf_items b \
+             WHERE b.site_id = ?1 AND b.owner_id = ?2 AND b.is_active = 1 \
+               AND b.tags_fetched = 0 \
+               AND NOT EXISTS (SELECT 1 FROM books WHERE books.tbf_product_id = b.database_id) \
+             ORDER BY b.causedAt DESC, b.database_id \
+             LIMIT ?3",
+        )
+        .bind(site_id)
+        .bind(owner_id)
+        .bind(limit as i64)
+        .fetch_all(pool)
+        .await
+    })
+}
+
 /// 渡された本のうち、タグ未取得（`tags_fetched = 0`）の `database_id` を返す。
 ///
 /// 対象は**呼び出し側が選ぶ**（表示中の本だけを取る手動操作のため、全件は走査しない）。
@@ -357,6 +575,25 @@ pub fn unfetched_among(
     site_id: &str,
     database_ids: &[String],
 ) -> Result<Vec<String>, sqlx::Error> {
+    unfetched_among_scoped(pool, site_id, None, database_ids)
+}
+
+/// 現在の所有者の本だけを対象に、タグ未取得の `database_id` を返す。
+pub fn unfetched_among_for_owner(
+    pool: &SqlitePool,
+    site_id: &str,
+    owner_id: &str,
+    database_ids: &[String],
+) -> Result<Vec<String>, sqlx::Error> {
+    unfetched_among_scoped(pool, site_id, Some(owner_id), database_ids)
+}
+
+fn unfetched_among_scoped(
+    pool: &SqlitePool,
+    site_id: &str,
+    owner_id: Option<&str>,
+    database_ids: &[String],
+) -> Result<Vec<String>, sqlx::Error> {
     if database_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -365,15 +602,26 @@ pub fn unfetched_among(
         // SQLite のプレースホルダ上限に余裕を持たせて分割する（表示分は数十件だが、
         // 全件表示で 1 画面に収まる以上の範囲を渡された場合に備える）。
         for chunk in database_ids.chunks(500) {
+            let first_placeholder = if owner_id.is_some() { 3 } else { 2 };
             let placeholders = (0..chunk.len())
-                .map(|index| format!("?{}", index + 2))
+                .map(|index| format!("?{}", index + first_placeholder))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let owner_clause = if owner_id.is_some() {
+                " AND owner_id = ?2"
+            } else {
+                ""
+            };
             let sql = format!(
                 "SELECT database_id FROM bookshelf_items \
-                 WHERE site_id = ?1 AND tags_fetched = 0 AND database_id IN ({placeholders})"
+                 WHERE site_id = ?1 AND tags_fetched = 0{owner_clause} \
+                 AND database_id IN ({placeholders})"
             );
-            let mut query = sqlx::query_scalar::<_, String>(dynamic_sql(sql.as_str())).bind(site_id);
+            let mut query =
+                sqlx::query_scalar::<_, String>(dynamic_sql(sql.as_str())).bind(site_id);
+            if let Some(owner_id) = owner_id {
+                query = query.bind(owner_id);
+            }
             for database_id in chunk {
                 query = query.bind(database_id);
             }
@@ -389,12 +637,24 @@ pub fn thumbnail_url(
     site_id: &str,
     database_id: &str,
 ) -> Result<Option<String>, sqlx::Error> {
+    thumbnail_url_for_owner(pool, site_id, database_id, "")
+}
+
+/// 所有者を明示して保存済みの表紙 URL を返す。
+pub fn thumbnail_url_for_owner(
+    pool: &SqlitePool,
+    site_id: &str,
+    database_id: &str,
+    owner_id: &str,
+) -> Result<Option<String>, sqlx::Error> {
     crate::db::block_on(async {
         let row: Option<Option<String>> = sqlx::query_scalar(
-            "SELECT thumbnail_url FROM bookshelf_items WHERE site_id = ?1 AND database_id = ?2",
+            "SELECT thumbnail_url FROM bookshelf_items \
+             WHERE site_id = ?1 AND database_id = ?2 AND owner_id = ?3",
         )
         .bind(site_id)
         .bind(database_id)
+        .bind(owner_id)
         .fetch_optional(pool)
         .await?;
         Ok(row.flatten())
@@ -408,14 +668,26 @@ pub fn update_author(
     database_id: &str,
     author: &str,
 ) -> Result<(), sqlx::Error> {
+    update_author_for_owner(pool, site_id, database_id, "", author)
+}
+
+/// 所有者を明示して作者名を更新する。
+pub fn update_author_for_owner(
+    pool: &SqlitePool,
+    site_id: &str,
+    database_id: &str,
+    owner_id: &str,
+    author: &str,
+) -> Result<(), sqlx::Error> {
     crate::db::block_on(async {
         sqlx::query(
             "UPDATE bookshelf_items SET author = ?1, updated_at = CURRENT_TIMESTAMP \
-             WHERE site_id = ?2 AND database_id = ?3",
+             WHERE site_id = ?2 AND database_id = ?3 AND owner_id = ?4",
         )
         .bind(author)
         .bind(site_id)
         .bind(database_id)
+        .bind(owner_id)
         .execute(pool)
         .await?;
         Ok(())
@@ -437,14 +709,26 @@ pub fn set_favorite(
     database_id: &str,
     favorite: bool,
 ) -> Result<(), sqlx::Error> {
+    set_favorite_for_owner(pool, site_id, database_id, "", favorite)
+}
+
+/// 所有者を明示してお気に入りを更新する。
+pub fn set_favorite_for_owner(
+    pool: &SqlitePool,
+    site_id: &str,
+    database_id: &str,
+    owner_id: &str,
+    favorite: bool,
+) -> Result<(), sqlx::Error> {
     crate::db::block_on(async {
         sqlx::query(
             "UPDATE bookshelf_items SET is_favorite = ?1, updated_at = CURRENT_TIMESTAMP \
-             WHERE site_id = ?2 AND database_id = ?3",
+             WHERE site_id = ?2 AND database_id = ?3 AND owner_id = ?4",
         )
         .bind(favorite as i64)
         .bind(site_id)
         .bind(database_id)
+        .bind(owner_id)
         .execute(pool)
         .await?;
         Ok(())
@@ -462,14 +746,26 @@ pub fn set_drm_status(
     database_id: &str,
     status: crate::drm::DrmStatus,
 ) -> Result<(), sqlx::Error> {
+    set_drm_status_for_owner(pool, site_id, database_id, "", status)
+}
+
+/// 所有者を明示して DRM 判定結果を記録する。
+pub fn set_drm_status_for_owner(
+    pool: &SqlitePool,
+    site_id: &str,
+    database_id: &str,
+    owner_id: &str,
+    status: crate::drm::DrmStatus,
+) -> Result<(), sqlx::Error> {
     crate::db::block_on(async {
         sqlx::query(
             "UPDATE bookshelf_items SET is_drm = ?1, updated_at = CURRENT_TIMESTAMP \
-             WHERE site_id = ?2 AND database_id = ?3",
+             WHERE site_id = ?2 AND database_id = ?3 AND owner_id = ?4",
         )
         .bind(status.as_db())
         .bind(site_id)
         .bind(database_id)
+        .bind(owner_id)
         .execute(pool)
         .await?;
         Ok(())
@@ -483,6 +779,17 @@ pub fn set_hidden(
     database_id: &str,
     hidden: bool,
 ) -> Result<(), sqlx::Error> {
+    set_hidden_for_owner(pool, site_id, database_id, "", hidden)
+}
+
+/// 所有者を明示して非表示を更新する。
+pub fn set_hidden_for_owner(
+    pool: &SqlitePool,
+    site_id: &str,
+    database_id: &str,
+    owner_id: &str,
+    hidden: bool,
+) -> Result<(), sqlx::Error> {
     crate::db::block_on(async {
         let hidden_at = if hidden {
             "CURRENT_TIMESTAMP".to_string()
@@ -492,11 +799,12 @@ pub fn set_hidden(
         sqlx::query(dynamic_sql(format!(
             "UPDATE bookshelf_items SET is_hidden = ?1, hidden_at = {hidden_at}, \
              updated_at = CURRENT_TIMESTAMP \
-             WHERE site_id = ?2 AND database_id = ?3"
+             WHERE site_id = ?2 AND database_id = ?3 AND owner_id = ?4"
         )))
         .bind(hidden as i64)
         .bind(site_id)
         .bind(database_id)
+        .bind(owner_id)
         .execute(pool)
         .await?;
         Ok(())
@@ -506,7 +814,6 @@ pub fn set_hidden(
 /// 非表示にした本の一覧（非表示にした日時付き。日時がない場合は現在日時で埋める）。
 pub fn list_hidden(pool: &SqlitePool) -> Result<Vec<BookshelfItem>, sqlx::Error> {
     crate::db::block_on(async {
-        // hidden_at が無い（既存データ）場合は現在日時を登録する
         sqlx::query(
             "UPDATE bookshelf_items SET hidden_at = CURRENT_TIMESTAMP \
              WHERE is_hidden = 1 AND hidden_at IS NULL",
@@ -522,6 +829,30 @@ pub fn list_hidden(pool: &SqlitePool) -> Result<Vec<BookshelfItem>, sqlx::Error>
     })
 }
 
+/// 現在の所有者の非表示本だけを返す。
+pub fn list_hidden_for_owner(
+    pool: &SqlitePool,
+    owner_id: &str,
+) -> Result<Vec<BookshelfItem>, sqlx::Error> {
+    crate::db::block_on(async {
+        // hidden_at が無い（既存データ）場合は現在日時を登録する
+        sqlx::query(
+            "UPDATE bookshelf_items SET hidden_at = CURRENT_TIMESTAMP \
+             WHERE is_hidden = 1 AND hidden_at IS NULL AND owner_id = ?1",
+        )
+        .bind(owner_id)
+        .execute(pool)
+        .await?;
+        sqlx::query_as::<_, BookshelfItem>(dynamic_sql(format!(
+            "SELECT {COLUMNS} FROM bookshelf_items WHERE is_hidden = 1 AND owner_id = ?1 \
+             ORDER BY hidden_at DESC, title ASC"
+        )))
+        .bind(owner_id)
+        .fetch_all(pool)
+        .await
+    })
+}
+
 /// Favorite shelf items (for the auto-download on startup).
 pub fn list_favorites(pool: &SqlitePool) -> Result<Vec<BookshelfItem>, sqlx::Error> {
     crate::db::block_on(async {
@@ -529,6 +860,22 @@ pub fn list_favorites(pool: &SqlitePool) -> Result<Vec<BookshelfItem>, sqlx::Err
             "SELECT {COLUMNS} FROM bookshelf_items WHERE is_favorite = 1 \
              ORDER BY causedAt IS NULL, causedAt DESC, title ASC"
         )))
+        .fetch_all(pool)
+        .await
+    })
+}
+
+/// 現在の所有者のお気に入り本だけを返す（起動時の自動ダウンロード用）。
+pub fn list_favorites_for_owner(
+    pool: &SqlitePool,
+    owner_id: &str,
+) -> Result<Vec<BookshelfItem>, sqlx::Error> {
+    crate::db::block_on(async {
+        sqlx::query_as::<_, BookshelfItem>(dynamic_sql(format!(
+            "SELECT {COLUMNS} FROM bookshelf_items WHERE is_favorite = 1 AND owner_id = ?1 \
+             ORDER BY causedAt IS NULL, causedAt DESC, title ASC"
+        )))
+        .bind(owner_id)
         .fetch_all(pool)
         .await
     })
@@ -847,5 +1194,123 @@ mod tests {
         let (tags, fetched) = tags_and_flag(&pool, "fanza", "d_3");
         assert_eq!(tags.as_deref(), Some(r#"["新しい"]"#));
         assert_eq!(fetched, 1);
+    }
+
+    /// 同じ作品を 2 アカウントが購入しても、所有者ごとに行が分かれ、
+    /// 一覧・お気に入り・非表示が混ざらない。
+    #[test]
+    fn owner_scoped_rows_are_isolated() {
+        let pool = crate::db::test_pool();
+        let owner_a = nartik::derive_owner_id("A");
+        let owner_b = nartik::derive_owner_id("B");
+        let item = shelf_item("booth", "100", None, None, None);
+        upsert_for_owner(&pool, &item, &owner_a).unwrap();
+        upsert_for_owner(&pool, &item, &owner_b).unwrap();
+
+        assert_eq!(list_all_for_owner(&pool, &owner_a).unwrap().len(), 1);
+        assert_eq!(list_all_for_owner(&pool, &owner_b).unwrap().len(), 1);
+        assert!(list_all_for_owner(&pool, "other").unwrap().is_empty());
+
+        set_favorite_for_owner(&pool, "booth", "100", &owner_a, true).unwrap();
+        set_hidden_for_owner(&pool, "booth", "100", &owner_a, true).unwrap();
+        update_tags_for_owner(&pool, "booth", "100", &owner_a, &["Aだけ".to_string()]).unwrap();
+
+        let a = &list_all_for_owner(&pool, &owner_a).unwrap()[0];
+        assert_eq!(a.is_favorite, 1);
+        assert_eq!(a.is_hidden, 1);
+        assert_eq!(tags_of(a), vec!["Aだけ".to_string()]);
+        let b = &list_all_for_owner(&pool, &owner_b).unwrap()[0];
+        assert_eq!(b.is_favorite, 0);
+        assert_eq!(b.is_hidden, 0);
+        assert!(tags_of(b).is_empty());
+        assert_eq!(list_favorites_for_owner(&pool, &owner_a).unwrap().len(), 1);
+        assert!(
+            list_favorites_for_owner(&pool, &owner_b)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(list_hidden_for_owner(&pool, &owner_a).unwrap().len(), 1);
+        assert!(list_hidden_for_owner(&pool, &owner_b).unwrap().is_empty());
+    }
+
+    /// 旧未所属行と現所有者行が同じ商品で共存しても、帰属付けで PK 衝突しない。
+    #[test]
+    fn attribute_owner_does_not_collide_with_an_existing_owner_row() {
+        let pool = crate::db::test_pool();
+        let key = [43u8; 32];
+        let sub = "B";
+        let owner_id = nartik::derive_owner_id(sub);
+        let owner = crate::owner::encrypt(&key, sub);
+        seed_item(&pool, "booth", "100");
+        upsert_for_owner(
+            &pool,
+            &shelf_item("booth", "100", None, None, None),
+            &owner_id,
+        )
+        .unwrap();
+
+        attribute_owner_with_id(&pool, "booth", Some(&owner), Some(&owner_id)).unwrap();
+
+        assert_eq!(list_all_for_owner(&pool, &owner_id).unwrap().len(), 1);
+        let empty_owner_count: i64 = crate::db::block_on(async {
+            sqlx::query_scalar(
+                "SELECT COUNT(*) FROM bookshelf_items \
+                 WHERE site_id = 'booth' AND database_id = '100' AND owner_id = ''",
+            )
+            .fetch_one(&pool)
+            .await
+        })
+        .unwrap();
+        assert_eq!(empty_owner_count, 1, "旧行は非表示のまま残る");
+    }
+
+    /// 既存行（`owner_id` が空・`owner_sub` が暗号文）を起動時に復号して埋める。
+    #[test]
+    fn backfill_owner_ids_fills_existing_encrypted_rows() {
+        let pool = crate::db::test_pool();
+        let key = [41u8; 32];
+        let owner_a = crate::owner::encrypt(&key, "A");
+        crate::db::block_on(async {
+            sqlx::query(
+                "INSERT INTO bookshelf_items (site_id, database_id, title, owner_sub) \
+                 VALUES ('booth', 'legacy', '旧データ', ?1)",
+            )
+            .bind(&owner_a)
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO book_first_events (site_id, database_id, owner_sub) \
+                 VALUES ('booth', 'legacy', ?1)",
+            )
+            .bind(&owner_a)
+            .execute(&pool)
+            .await
+            .unwrap();
+        });
+
+        assert_eq!(
+            backfill_owner_ids(&pool, &key).unwrap(),
+            2,
+            "owner_sub から owner_id を埋めていない"
+        );
+        assert_eq!(
+            list_all_for_owner(&pool, &nartik::derive_owner_id("A"))
+                .unwrap()
+                .len(),
+            1
+        );
+        let child_owner: String = crate::db::block_on(async {
+            sqlx::query_scalar(
+                "SELECT owner_id FROM book_first_events \
+                 WHERE site_id = 'booth' AND database_id = 'legacy'",
+            )
+            .fetch_one(&pool)
+            .await
+        })
+        .unwrap();
+        assert_eq!(child_owner, nartik::derive_owner_id("A"));
+        // 2 回目は対象が無い（冪等）
+        assert_eq!(backfill_owner_ids(&pool, &key).unwrap(), 0);
     }
 }

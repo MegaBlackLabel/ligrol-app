@@ -360,12 +360,13 @@ impl HistoryView {
         // 本棚と同じ表紙の解決順にそろえる（サイトのサムネキャッシュを最優先）
         let thumbnails_dir = state.data_dir.join("thumbnails");
         let owned = owned_book_ids(state);
+        let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
 
         let sessions = db::view_history::list_daily(pool).unwrap_or_default();
         let all_books = books::list(pool).unwrap_or_default();
         // 本棚と同じ「イベント名 or 購入日」を出すため、紐づく本棚アイテムを引く
-        let shelf_items = db::bookshelf::list_all(pool).unwrap_or_default();
+        let shelf_items = db::bookshelf::list_all_for_owner(pool, &owner_id).unwrap_or_default();
 
         let mut days: Vec<HistoryDay> = Vec::new();
         let mut sites: Vec<String> = Vec::new();
@@ -720,7 +721,14 @@ impl HistoryView {
             if let (Some(site), Some(database_id)) =
                 (book.site_id.as_deref(), book.tbf_product_id.as_deref())
             {
-                let _ = bookshelf::set_favorite(pool, site, database_id, new_state);
+                let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+                let _ = bookshelf::set_favorite_for_owner(
+                    pool,
+                    site,
+                    database_id,
+                    &owner_id,
+                    new_state,
+                );
             }
         }
         self.reload(cx);

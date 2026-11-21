@@ -130,10 +130,22 @@ fn cover_url(
 /// ユーザーの操作を挟んで少しずつ進めるための分割版（続きは `next` を次の呼び出しに渡す）。
 /// 注文の無いページで終端とみなす（一覧の総数が無いため、ページャの終わりはここでしか
 /// 分からない）。`owner` は暗号化済み sub（ログイン中のみ `Some`）。
+/// 既存 API（テスト・呼び出し互換）。所有者 ID は空で保存する。
 pub fn save_purchases_batch(
     pool: &SqlitePool,
     client: &mut FantiaClient,
     owner: Option<&str>,
+    cursor: PurchaseCursor,
+    pages: usize,
+) -> Result<PurchaseBatch, FantiaError> {
+    save_purchases_batch_with_owner(pool, client, owner, None, cursor, pages)
+}
+
+pub fn save_purchases_batch_with_owner(
+    pool: &SqlitePool,
+    client: &mut FantiaClient,
+    owner: Option<&str>,
+    owner_id: Option<&str>,
     cursor: PurchaseCursor,
     pages: usize,
 ) -> Result<PurchaseBatch, FantiaError> {
@@ -167,18 +179,18 @@ pub fn save_purchases_batch(
                 total_items += 1;
                 // 開けない拡張子は保存しない（商品ページも取りに行かない）
                 if !is_viewable_file(&item.file_name) {
-                    save_purchase(pool, item, ordered_at.clone(), None)?;
+                    save_purchase(pool, item, ordered_at.clone(), None, owner_id)?;
                     continue;
                 }
                 let thumbnail_url = cover_url(pool, client, &mut requests, &item.product_id)?;
-                if save_purchase(pool, item, ordered_at.clone(), thumbnail_url)? {
+                if save_purchase(pool, item, ordered_at.clone(), thumbnail_url, owner_id)? {
                     saved += 1;
                 }
             }
         }
         next_page += 1;
     }
-    bookshelf::attribute_owner(pool, SITE_ID, owner)?;
+    bookshelf::attribute_owner_with_id(pool, SITE_ID, owner, owner_id)?;
     let next = has_next.then(|| PurchaseCursor {
         page: last_fetched + 1,
     });
@@ -200,6 +212,7 @@ fn save_purchase(
     item: OrderedItem,
     ordered_at: Option<String>,
     thumbnail_url: Option<String>,
+    owner_id: Option<&str>,
 ) -> Result<bool, FantiaError> {
     let extension = file_extension(&item.file_name);
     if !is_viewable_file(&item.file_name) {
@@ -255,7 +268,7 @@ fn save_purchase(
         age_rating: None,
         series_name: None,
     };
-    bookshelf::upsert(pool, &shelf_item)?;
+    bookshelf::upsert_for_owner(pool, &shelf_item, owner_id.unwrap_or(""))?;
     Ok(true)
 }
 

@@ -147,8 +147,9 @@ impl NotesView {
         let state = AppState::global(cx);
         let pool = &state.db_pool;
         let owned = owned_book_ids(state);
+        let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
         let all_books = books::list(pool).unwrap_or_default();
-        let shelf_items = db::bookshelf::list_all(pool).unwrap_or_default();
+        let shelf_items = db::bookshelf::list_all_for_owner(pool, &owner_id).unwrap_or_default();
 
         let notes = db::notes::list_newest_first(pool).unwrap_or_default();
         let mut rows = Vec::new();
@@ -1942,8 +1943,7 @@ mod tests {
     /// 読めなければ `None` を返し、呼び出し側がプレースホルダを出す。
     #[test]
     fn note_cover_reads_the_pack_cover() {
-        let root =
-            std::env::temp_dir().join(format!("ligrol-notes-cover-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("ligrol-notes-cover-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let packs = root.join("packs");
         let thumbnails = root.join("thumbnails");

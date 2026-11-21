@@ -86,31 +86,33 @@ pub fn build_plaintext(
     let owned = db::thumbs::owned_keys(pool, owner_key, sub)?;
     let mut entries = db::thumbs::entries_for_owner(pool, &owned)?;
 
-    let mut missing: Vec<(String, String)> = owned
+    let mut missing: Vec<(String, String, String)> = owned
         .iter()
-        .filter(|(kind, key)| {
-            !entries
-                .iter()
-                .any(|entry| entry.kind == *kind && entry.key == *key)
+        .filter(|(kind, key, owner_id)| {
+            !entries.iter().any(|entry| {
+                entry.kind == *kind
+                    && entry.key == *key
+                    && (entry.owner_id.is_empty() || entry.owner_id == *owner_id)
+            })
         })
-        .map(|(kind, key)| (kind.to_string(), key.to_string()))
+        .map(|(kind, key, owner_id)| (kind.to_string(), key.to_string(), owner_id.to_string()))
         .collect();
     missing.sort();
 
     // チェックリストは DB に base64 JPEG を持っているので、必要な分だけまとめて読む
     let checklist_ids: Vec<String> = missing
         .iter()
-        .filter(|(kind, _)| kind == db::thumbs::KIND_CHECKLIST)
-        .map(|(_, key)| key.clone())
+        .filter(|(kind, _, _)| kind == db::thumbs::KIND_CHECKLIST)
+        .map(|(_, key, _)| key.clone())
         .collect();
     let checklist_thumbs: HashMap<String, String> =
-        db::checklist::thumbnails_of(pool, &checklist_ids)?
+        db::checklist::thumbnails_of_for_owner(pool, &owned.owner_id, &checklist_ids)?
             .into_iter()
             .collect();
 
     let mut encoded = 0usize;
     let mut deferred = 0usize;
-    for (kind, key) in missing {
+    for (kind, key, owner_id) in missing {
         if encoded >= max_encode {
             deferred += 1;
             continue;
@@ -129,7 +131,7 @@ pub fn build_plaintext(
             deferred += 1;
             continue;
         };
-        entries.push(store(pool, &kind, &key, source)?);
+        entries.push(store(pool, &kind, &key, &owner_id, source)?);
         encoded += 1;
     }
 
@@ -164,10 +166,12 @@ fn store(
     pool: &SqlitePool,
     kind: &str,
     key: &str,
+    owner_id: &str,
     image: EncodedImage,
 ) -> Result<db::thumbs::ThumbEntry, sqlx::Error> {
     let entry = db::thumbs::ThumbEntry {
         kind: kind.to_string(),
+        owner_id: owner_id.to_string(),
         key: key.to_string(),
         mime: image.mime.to_string(),
         width: image.width,
@@ -196,7 +200,7 @@ pub fn cache_shelf_cover(
     let Some(image) = encode_shelf_cover(thumbnails_dir, &key) else {
         return Ok(false);
     };
-    store(pool, db::thumbs::KIND_SHELF, &key, image)?;
+    store(pool, db::thumbs::KIND_SHELF, &key, "", image)?;
     Ok(true)
 }
 
@@ -209,10 +213,19 @@ pub fn cache_checklist_thumbnail(
     item_id: &str,
     data_base64: &str,
 ) -> Result<bool, sqlx::Error> {
+    cache_checklist_thumbnail_for_owner(pool, item_id, "", data_base64)
+}
+
+pub fn cache_checklist_thumbnail_for_owner(
+    pool: &SqlitePool,
+    item_id: &str,
+    owner_id: &str,
+    data_base64: &str,
+) -> Result<bool, sqlx::Error> {
     let Some(image) = decode_checklist_thumbnail(data_base64) else {
         return Ok(false);
     };
-    store(pool, db::thumbs::KIND_CHECKLIST, item_id, image)?;
+    store(pool, db::thumbs::KIND_CHECKLIST, item_id, owner_id, image)?;
     Ok(true)
 }
 

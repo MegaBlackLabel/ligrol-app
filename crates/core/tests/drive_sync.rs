@@ -2326,7 +2326,11 @@ fn thumbnail_bundle_is_not_reuploaded_when_unchanged() {
         first,
         "ファイルは置き換わらない"
     );
-    assert_eq!(drive.upload_count(), 1, "アップロードは 1 回だけ");
+    assert_eq!(
+        drive.upload_count(),
+        2,
+        "初回は鍵 bundle + 表紙のみ（2 回目は何も上げない）"
+    );
 }
 
 /// PRK が無いときは表紙バンドルを上げない（平文で蔵書を晒さない。
@@ -2388,7 +2392,11 @@ fn an_empty_bundle_never_replaces_the_existing_one() {
     .unwrap();
 
     assert!(!outcome.thumbnails_backed_up);
-    assert_eq!(drive.upload_count(), 0, "空のバンドルを上げない");
+    assert_eq!(
+        drive.upload_count(),
+        1,
+        "空の表紙バンドルは上げない（鍵 bundle の 1 回だけ）"
+    );
     assert_eq!(
         drive.files.get(&file_id).unwrap().bytes,
         existing,

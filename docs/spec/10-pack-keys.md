@@ -324,7 +324,7 @@ UI は `crates/app/src/views/settings.rs`（「本の鍵」カード）、解錠
 | 守る | Drive に上げる**メタデータバックアップ**（本棚・進捗・履歴・付箋メモ。`crates/core/src/db/backup.rs` の `TABLES` のテキスト列） |
 | **守らない（DB 全体）** | **ローカルの SQLite（`ligrol.db`）全体**。SQLCipher 等は入れない（重い・既存の読み書き経路を総取り替えになる）。**ただし機密列（`document_text.text_content` / `token_analysis` の `token`・`pos`・`base_form`・`reading` / `page_notes.memo`）だけは keyring の DB 鍵で暗号化する**（2026-09-26 / セキュリティ評価 F02。`crates/core/src/db/column_crypto.rs`、保存形式は `docs/spec/02-data-model.md` §1.11）。書誌・進捗・履歴などの他の列は平文のまま。**ディスク暗号化（BitLocker / FileVault 等）と OS アカウント分離**を前提にする（`README.md`） |
 | 守らない | 端末の OS アカウントを奪われて keyring を読まれる場合（PRK そのものが取られる。§1.2 と同じ） |
-| 対象外 | 画像（`thumbnail_data` / `image_data`）とページ本文（`extracted_text`）は**そもそもバックアップに含めない**（`docs/spec/06-sync-auth-drive.md` §3.4） |
+| 対象外 | `image_data`（試し読み画像）とページ本文（`extracted_text`）は**そもそもバックアップに含めない**（`docs/spec/06-sync-auth-drive.md` §3.4）。`checked_items.thumbnail_data` は Web のチェックリスト表紙表示用に含める |
 
 鍵は §2 の PRK から導出する。**新しい鍵管理を増やさない**（keyring と `ligrol-keys.json` の
 既存の仕組みをそのまま使う）。
@@ -756,8 +756,8 @@ Web は OS keyring を持たないので、`ligrol-keys.json`（同じフォル�
 
 | kind | entry のキー | 結合先 |
 |---|---|---|
-| `shelf` | `site_id` + `database_id` | `bookshelf_items` の PK（`site_id`, `database_id`） |
-| `checklist` | `item_id` | `checked_items.id` |
+| `shelf` | `site_id` + `database_id` | `bookshelf_items` の論理キー（owner で絞ったバックアップ内では `site_id` + `database_id` が一意。DB の PK は `owner_id` を含む 3 列） |
+| `checklist` | `item_id` | `checked_items.id`（owner は封筒側） |
 
 形の例（`data` は実際には base64 の画像。ここでは省略）:
 

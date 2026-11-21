@@ -26,9 +26,10 @@ use crate::icons::AppIcon;
 use crate::views::bookshelf::{progress_ring_image, rasterize_svg_scaled};
 use image::GenericImageView as _;
 
-/// デコード済みサムネイルの保持上限（1 ページ = 50 件 + 余裕を持たせた値）。
-/// これを超えたら古い順に追い出してメモリに残さない。
-const MAX_THUMB_CACHE: usize = 64;
+/// デコード済みサムネイルの保持上限。
+/// 1 イベント（〜200 件）なら全件を保持し、マップ選択でページを飛んでも
+/// 表紙が欠けないようにする。それを超えるイベントは表示ページ単位に戻す。
+const MAX_THUMB_CACHE: usize = 200;
 
 /// 並び替えフィールド（Web の SortField 相当）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -230,8 +231,11 @@ impl ChecklistView {
             }
             let events = db::checklist::list_events(db).unwrap_or_default();
             let selected = self.selected_slug.clone();
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
             let items = match &selected {
-                Some(slug) => db::checklist::list_items(db, slug).unwrap_or_default(),
+                Some(slug) => {
+                    db::checklist::list_items_for_owner(db, slug, &owner_id).unwrap_or_default()
+                }
                 None => Vec::new(),
             };
             let last_sync = db::settings::get(db, "api.last_sync_at").ok().flatten();
@@ -263,14 +267,43 @@ impl ChecklistView {
         cx.notify();
     }
 
-    /// 現在の並び替え・ページ設定で表示中の項目（Web の PAGE_SIZE = 50 件）。
+    /// 現在選択中のイベント名（未選択・テスト時は空）。
+    fn current_event_name(&self) -> String {
+        self.selected_slug
+            .as_deref()
+            .and_then(|slug| {
+                self.events
+                    .iter()
+                    .find(|event| event.slug.as_deref() == Some(slug))
+            })
+            .map(|event| event.event_name.clone())
+            .unwrap_or_default()
+    }
+
     /// サムネイルのデコード対象と、追い出しから守る範囲を揃えるために使う。
+    /// 現在の並び替え・ページ設定で表示中の項目（Web の PAGE_SIZE = 50 件）。
     fn page_items(&self) -> Vec<CheckedItem> {
-        let mut sorted = self.items.clone();
-        sorted.sort_by(|a, b| {
+        // 表示側（`render_event_detail`）と同じフィルタ・並び順に揃える。
+        // ここがずれると、画面上のページとデコード対象のページが食い違い、
+        // 一部の表紙だけが出ない（スクロールで気づく）。
+        let event_name = self.current_event_name();
+        let mut sorted = if event_name.is_empty() {
+            self.items.clone()
+        } else {
+            self.visible_items(&event_name)
+        };
+        self.sort_items(&mut sorted);
+        const PAGE_SIZE: usize = 50;
+        let start = self.page * PAGE_SIZE;
+        sorted.into_iter().skip(start).take(PAGE_SIZE).collect()
+    }
+
+    /// 表示中の並び順を適用する（`page_items` と `render_event_detail` で共有）。
+    fn sort_items(&self, items: &mut [CheckedItem]) {
+        items.sort_by(|a, b| {
             let ordering = match self.sort_field {
                 SortField::CircleName => a.circle_name.cmp(&b.circle_name),
-                SortField::SpaceNumber => a.space_number.cmp(&b.space_number),
+                SortField::SpaceNumber => compare_space_numbers(&a.space_number, &b.space_number),
                 SortField::SortOrder => a.sort_order.cmp(&b.sort_order),
             };
             if self.sort_ascending {
@@ -279,9 +312,6 @@ impl ChecklistView {
                 ordering.reverse()
             }
         });
-        const PAGE_SIZE: usize = 50;
-        let start = self.page * PAGE_SIZE;
-        sorted.into_iter().skip(start).take(PAGE_SIZE).collect()
     }
 
     /// 選択中イベントが初出の項目（「初出以外も表示」が ON なら全項目）。
@@ -296,27 +326,29 @@ impl ChecklistView {
     /// 選択中イベントの項目を、現在の並び順で返す。
     fn sorted_display_items(&self, event_name: &str) -> Vec<CheckedItem> {
         let mut items = self.visible_items(event_name);
-        items.sort_by(|a, b| {
-            let ordering = match self.sort_field {
-                SortField::CircleName => a.circle_name.cmp(&b.circle_name),
-                SortField::SpaceNumber => compare_space_numbers(&a.space_number, &b.space_number),
-                SortField::SortOrder => a.sort_order.cmp(&b.sort_order),
-            };
-            if self.sort_ascending {
-                ordering
-            } else {
-                ordering.reverse()
-            }
-        });
+        self.sort_items(&mut items);
         items
     }
 
     /// DB に保存済みの thumbnail_data（base64）をバックグラウンドで
     /// 縮小デコードしてキャッシュする（render で毎回デコードしない）。
-    /// デコード対象（thumbnail_data あり・未キャッシュ）を現在表示中の
-    /// ページ（50 件）に限定して返す。全件を一括デコードしない。
+    /// 通常のイベントは全件、巨大なイベントだけ現在ページに限定する。
     fn decode_pending(&self) -> Vec<(String, String)> {
-        self.page_items()
+        // 小〜中規模のイベント（〜MAX_THUMB_CACHE 件）は全件をデコードしておく。
+        // マップ選択でページを飛んでも、スクロールしても表紙が欠けない。
+        // それを超えるイベントだけ表示ページに限定する。
+        let event_name = self.current_event_name();
+        let all = if event_name.is_empty() {
+            self.items.clone()
+        } else {
+            self.visible_items(&event_name)
+        };
+        let targets = if all.len() <= MAX_THUMB_CACHE {
+            all
+        } else {
+            self.page_items()
+        };
+        targets
             .into_iter()
             .filter(|item| {
                 item.thumbnail_data.is_some()
@@ -474,6 +506,7 @@ impl ChecklistView {
         let handle = cx.entity();
         let state = AppState::global(cx);
         let db = state.db_pool.clone();
+        let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
         let task = cx.background_executor().spawn(async move {
             let agent = ureq::Agent::new_with_config(
                 ureq::Agent::config_builder()
@@ -504,9 +537,11 @@ impl ChecklistView {
                 }
             }
             for (id, data) in &stored {
-                let _ = db::checklist::update_thumbnail_data(&db, id, data);
+                let _ = db::checklist::update_thumbnail_data_for_owner(&db, id, &owner_id, data);
                 // Drive の表紙バンドル用の共有キャッシュにも入れる（再エンコードしない）
-                let _ = ligrol_core::thumbs::cache_checklist_thumbnail(&db, id, data);
+                let _ = ligrol_core::thumbs::cache_checklist_thumbnail_for_owner(
+                    &db, id, &owner_id, data,
+                );
             }
             (failed, stored)
         });
@@ -599,6 +634,7 @@ impl ChecklistView {
             self.sort_ascending = true;
         }
         self.page = 0;
+        self.decode_cached_thumbnails(cx);
         cx.notify();
     }
 
@@ -873,6 +909,7 @@ impl ChecklistView {
             return;
         };
         self.page = index / 50;
+        self.decode_cached_thumbnails(cx);
         // 子 0 はテーブルのヘッダー。選択行が表示範囲外なら最小限スクロールする。
         self.checklist_scroll_handle
             .scroll_to_item(index % 50 + 1);
@@ -1130,14 +1167,16 @@ impl ChecklistView {
         let db = state.db_pool.clone();
         let slug_for_task = slug.clone();
         let owner = crate::app_state::owner_token(state);
+        let owner_id = crate::app_state::owner_id(state);
         let task: gpui_kit::Task<Result<usize, String>> =
             cx.background_executor().spawn(async move {
                 let mut client = tbf_client.lock();
-                let outcome = tbf::sync::refresh_checklist(
+                let outcome = tbf::sync::refresh_checklist_with_owner(
                     &db,
                     &mut client,
                     &slug_for_task,
                     owner.as_deref(),
+                    owner_id.as_deref(),
                 )
                 .map_err(|e| e.to_string())?;
                 Ok(outcome.count)
@@ -1196,13 +1235,20 @@ impl ChecklistView {
         let db = state.db_pool.clone();
         let slug_for_task = slug.clone();
         let owner = crate::app_state::owner_token(state);
+        let owner_id = crate::app_state::owner_id(state);
         let task: gpui_kit::Task<Result<usize, String>> =
             cx.background_executor().spawn(async move {
                 let mut client = tbf_client.lock();
                 let entries = client
                     .favorites(&slug_for_task)
                     .map_err(|e| e.to_string())?;
-                tbf::sync::save_checklist(&db, &slug_for_task, &entries, owner.as_deref())
+                tbf::sync::save_checklist_with_owner(
+                    &db,
+                    &slug_for_task,
+                    &entries,
+                    owner.as_deref(),
+                    owner_id.as_deref(),
+                )
                     .map_err(|e| e.to_string())?;
                 Ok(entries.len())
             });
@@ -1235,13 +1281,22 @@ impl ChecklistView {
         let (next, slug) = {
             let state = AppState::global(cx);
             let db = &state.db_pool;
-            let current = db::checklist::get_item(db, item_id)
-                .ok()
-                .flatten()
-                .map(|item| item.is_checked != 0)
-                .unwrap_or(false);
+            let current = db::checklist::get_item_for_owner(
+                db,
+                item_id,
+                &crate::app_state::owner_id(state).unwrap_or_default(),
+            )
+            .ok()
+            .flatten()
+            .map(|item| item.is_checked != 0)
+            .unwrap_or(false);
             let slug = self.selected_slug.clone().unwrap_or_default();
-            let _ = db::checklist::set_checked(db, item_id, !current);
+            let _ = db::checklist::set_checked_for_owner(
+                db,
+                item_id,
+                &crate::app_state::owner_id(state).unwrap_or_default(),
+                !current,
+            );
             (!current, slug)
         };
         let _ = slug;
@@ -1261,6 +1316,7 @@ impl ChecklistView {
         let state = AppState::global(cx);
         let tbf_client = state.tbf.clone();
         let db = state.db_pool.clone();
+        let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
         let item_id = item.id.clone();
         let open_item_id = item_id.clone();
         // 取得中はその行の表紙に進捗リングを出す（0.0 から始めて完了時に消す）
@@ -1277,7 +1333,7 @@ impl ChecklistView {
                 let mut stored: Vec<(String, u32, u32)> = Vec::new();
                 // 旧ページを先に 1 回だけ削除してから全ページを保存する
                 {
-                    let _ = db::samples::delete_for_item(&db, &item_id);
+                    let _ = db::samples::delete_for_item_for_owner(&db, &item_id, &owner_id);
                 }
                 for (index, page) in pages.into_iter().enumerate() {
                     // 試し読み画像は本体（`/api/product-dlc/`）とは別の許可リストを通す
@@ -1304,7 +1360,7 @@ impl ChecklistView {
                         _ => decode_size(&bytes).unwrap_or((0, 0)),
                     };
                     {
-                        let _ = db::samples::insert_sample_page(
+                        let _ = db::samples::insert_sample_page_for_owner(
                             &db,
                             &db::samples::SamplePageRow {
                                 id: uuid::Uuid::new_v4().to_string(),
@@ -1319,6 +1375,7 @@ impl ChecklistView {
                                 file_size: Some(bytes.len() as i64),
                                 fetched_at: chrono::Utc::now().to_rfc3339(),
                             },
+                            &owner_id,
                         );
                     }
                     // ページを読み切ったぶんを確定させる（`Content-Length` が無い画像でも進む）
@@ -1394,6 +1451,11 @@ fn decode_size(bytes: &[u8]) -> Option<(i64, i64)> {
 /// 試し読み画像を同じウィンドウのリーダーで開く（workspace が処理）。
 impl Render for ChecklistView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // バックグラウンドのサムネイル取得が終わったら DB を読み直して表紙を反映する。
+        if *AppState::global(cx).checklist_invalidated.lock() {
+            *AppState::global(cx).checklist_invalidated.lock() = false;
+            self.reload(cx);
+        }
         // 追い出し済みサムネイルの GPU テクスチャを解放する（window を持つここで行う）
         self.release_evicted_thumbs(window);
         // Web と同じ 2 画面構成: 選択中イベントがなければ一覧、あれば詳細
@@ -2591,6 +2653,7 @@ impl ChecklistView {
                                 move |_, _window, cx| {
                                     handle.update(cx, |this, cx| {
                                         this.page = this.page.saturating_sub(1);
+                                        this.decode_cached_thumbnails(cx);
                                         cx.notify();
                                     });
                                 }
@@ -2610,6 +2673,7 @@ impl ChecklistView {
                                 move |_, _window, cx| {
                                     handle.update(cx, |this, cx| {
                                         this.page = (this.page + 1).min(total_pages - 1);
+                                        this.decode_cached_thumbnails(cx);
                                         cx.notify();
                                     });
                                 }
@@ -2893,6 +2957,57 @@ fn apply_tbf21_highlights(
     out
 }
 
+/// チェックリスト同期後に、未保存のサムネイルをまとめて取得する。
+///
+/// Web のチェックリスト表紙は `ligrol-backup.json` の `thumbnail_data` から出すため、
+/// チェックリスト画面を開かなくてもバックアップ前に埋めておく。1 回 `limit` 件まで。
+/// 失敗した項目は `thumbnail_data` が空のまま残るので、次の同期で再試行される。
+pub(crate) fn backfill_missing_thumbnails(
+    db: &db::SqlitePool,
+    owner_id: &str,
+    limit: usize,
+) -> usize {
+    let Ok(items) = db::checklist::missing_thumbnail_items_for_owner(db, owner_id, limit) else {
+        return 0;
+    };
+    if items.is_empty() {
+        return 0;
+    }
+    let agent = ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .timeout_connect(Some(std::time::Duration::from_secs(15)))
+            .timeout_per_read(Some(std::time::Duration::from_secs(30)))
+            .build(),
+    );
+    let mut fetched = 0usize;
+    for (id, url) in items {
+        let result = (|| {
+            let resp = agent.get(&url).call().map_err(|e| e.to_string())?;
+            let mut body = Vec::new();
+            resp.into_body()
+                .into_reader()
+                .read_to_end(&mut body)
+                .map_err(|e| e.to_string())?;
+            let jpeg_b64 = thumbnail_jpeg_base64(&body).ok_or("not an image")?;
+            db::checklist::update_thumbnail_data_for_owner(db, &id, owner_id, &jpeg_b64)
+                .map_err(|e| e.to_string())?;
+            let _ = ligrol_core::thumbs::cache_checklist_thumbnail_for_owner(
+                db, &id, owner_id, &jpeg_b64,
+            );
+            Ok::<(), String>(())
+        })();
+        if result.is_ok() {
+            fetched += 1;
+        } else {
+            log::warn!("checklist thumbnail backfill failed: {id}");
+        }
+    }
+    if fetched > 0 {
+        log::info!("checklist thumbnail backfill: {fetched} 件");
+    }
+    fetched
+}
+
 /// 画像バイト列を幅 256px 上限まで縮小した RGBA 画像にする。
 fn shrink_rgba(bytes: &[u8]) -> Option<image::RgbaImage> {
     let format = image::guess_format(bytes).ok()?;
@@ -2909,7 +3024,7 @@ fn shrink_rgba(bytes: &[u8]) -> Option<image::RgbaImage> {
 
 /// ダウンロードした表紙画像を縮小 JPEG の base64 に変換する（DB 保存用）。
 /// 元画像（最大 2MB 級）をそのまま保存せず、表示に十分なサイズで永続化する。
-fn thumbnail_jpeg_base64(bytes: &[u8]) -> Option<String> {
+pub(crate) fn thumbnail_jpeg_base64(bytes: &[u8]) -> Option<String> {
     let rgba = shrink_rgba(bytes)?;
     let (width, height) = rgba.dimensions();
     // JPEG は RGB のみ（アルファなし）なので変換してからエンコードする
@@ -3503,24 +3618,26 @@ mod tests {
     }
 
     #[test]
-    fn decode_pending_limits_to_current_page() {
-        // 60 件の項目を直接構築（非同期タスクなしで決定的に検証する）
+    fn decode_pending_covers_the_whole_small_event() {
+        // 60 件（MAX_THUMB_CACHE 以下）はページに関係なく全件が対象。
         let items: Vec<CheckedItem> = (0..60)
             .map(|i| test_item(&format!("item-{i:02}"), i as i64))
             .collect();
         let view = view_with_items(items);
-        // ページ 0 では先頭 50 件が対象（1 度の実行は 20 件まで）
         let pending = view.decode_pending();
-        assert_eq!(pending.len(), 20, "page 0: at most 20 per batch");
-        // ページ 1 では残り 10 件だけが対象（全 60 件を一括デコードしない）
+        assert_eq!(pending.len(), 20, "1 回の実行は 20 件まで");
+        // ページを変えても、対象は同じイベント全件のうち未デコード分。
         let mut page1 = view;
         page1.page = 1;
         let pending = page1.decode_pending();
-        assert_eq!(pending.len(), 10, "page 1: only the last 10 items");
+        assert_eq!(pending.len(), 20, "ページ 1 でも全件が対象");
         // fetch_failed に記録された項目は再試行されない
-        page1.fetch_failed.insert("item-59".into());
+        page1.fetch_failed.insert("item-01".into());
         let pending = page1.decode_pending();
-        assert_eq!(pending.len(), 9, "failed item must be skipped");
+        assert!(
+            !pending.iter().any(|(id, _)| id == "item-01"),
+            "failed item must be skipped"
+        );
     }
 
     #[test]
@@ -3587,7 +3704,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    async fn fetched_thumbnails_are_decoded_only_for_current_page(cx: &mut TestAppContext) {
+    async fn fetched_thumbnails_are_decoded_for_the_whole_small_event(cx: &mut TestAppContext) {
         cx.update(gpui_kit::component::init);
         cx.update(AppState::init_test);
         // 1x1 の透明 PNG（base64）。取得済みサムネイルとして渡す
@@ -3627,14 +3744,14 @@ mod tests {
                 this.fetch_failed.contains("item-02"),
                 "失敗が記録されていない"
             );
-            // 描画中のページ（ページ 0）だけデコードされる
+            // MAX_THUMB_CACHE 以下のイベントは全件デコードされる
             assert!(
                 this.thumbnail_images.contains_key("item-01"),
-                "表示中のサムネイルがデコードされていない"
+                "先頭のサムネイルがデコードされていない"
             );
             assert!(
-                !this.thumbnail_images.contains_key("item-59"),
-                "非表示ページのサムネイルまでデコードしている"
+                this.thumbnail_images.contains_key("item-59"),
+                "ページ 2 のサムネイルまでデコードされていない"
             );
         });
     }

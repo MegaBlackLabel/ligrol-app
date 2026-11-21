@@ -808,6 +808,12 @@ fn sync_inner(
             Ok(false) => {}
             Err(error) => log::warn!("drive sync: pack の鍵 bundle を再アップロードできない: {error}"),
         }
+        // pending が残っていなくても、Drive に bundle が無ければ keyring の PRK から作る。
+        match keys.upload_if_missing(drive, sub) {
+            Ok(true) => log::info!("drive sync: Drive に無かった pack の鍵 bundle を作成した"),
+            Ok(false) => {}
+            Err(error) => log::warn!("drive sync: pack の鍵 bundle を作成できない: {error}"),
+        }
     }
 
     Ok(outcome)

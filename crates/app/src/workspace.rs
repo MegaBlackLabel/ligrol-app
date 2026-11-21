@@ -658,28 +658,33 @@ impl Workspace {
             loop {
                 // 所有者（現在の Google アカウント）は周期ごとに読み直す
                 // （ログイン/ログアウトが次の周期から反映される）。
-                let owner = {
+                let (owner, owner_id) = {
                     let profile = google_profile.lock().clone();
-                    crate::app_state::owner_token_from(profile.as_ref(), &secrets)
+                    (
+                        crate::app_state::owner_token_from(profile.as_ref(), &secrets),
+                        profile.map(|profile| nartik::derive_owner_id(&profile.sub)),
+                    )
                 };
+                let owner_id_for_poll = owner_id.clone();
                 let db_for_poll = db.clone();
                 let tbf_client_for_poll = tbf_client.clone();
                 let tbf_logged_in_for_poll = tbf_logged_in.clone();
                 let task = spawn_checklist_poll_work(cx.background_executor(), move || {
-                    let interval_min = db::settings::get(&db_for_poll, "checklist.poll.interval_min")
-                        .ok()
-                        .flatten()
-                        .and_then(|v| v.parse::<i64>().ok())
-                        .map(|n| n.max(1))
-                        .unwrap_or(5);
+                    let interval_min =
+                        db::settings::get(&db_for_poll, "checklist.poll.interval_min")
+                            .ok()
+                            .flatten()
+                            .and_then(|v| v.parse::<i64>().ok())
+                            .map(|n| n.max(1))
+                            .unwrap_or(5);
                     // 未ログインならスキップ（次の周期へ）。tbf ログイン必須。
                     if !*tbf_logged_in_for_poll.lock() {
-                        return (interval_min, false, false);
+                        return (interval_min, false, false, 0);
                     }
                     let enabled =
                         db::checklist::list_enabled_slugs(&db_for_poll).unwrap_or_default();
                     if enabled.is_empty() {
-                        return (interval_min, false, false);
+                        return (interval_min, false, false, 0);
                     }
                     let mut any_changed = false;
                     let mut session_expired = false;
@@ -687,11 +692,12 @@ impl Workspace {
                     {
                         let mut client = tbf_client_for_poll.lock();
                         for slug in &enabled {
-                            match tbf::sync::refresh_checklist(
+                            match tbf::sync::refresh_checklist_with_owner(
                                 &db_for_poll,
                                 &mut client,
                                 slug,
                                 owner.as_deref(),
+                                owner_id_for_poll.as_deref(),
                             ) {
                                 Ok(outcome) => {
                                     if outcome.changed {
@@ -707,16 +713,39 @@ impl Workspace {
                             }
                         }
                     }
-                    (interval_min, any_changed, session_expired)
+                    // Web のチェックリスト表紙（ligrol-backup.json の thumbnail_data）用。
+                    // 画面を開かなくても次の Drive 同期までに埋める。失敗分は次回に回る。
+                    let fetched_thumbnails = crate::views::checklist::backfill_missing_thumbnails(
+                        &db_for_poll,
+                        owner_id_for_poll.as_deref().unwrap_or(""),
+                        500,
+                    );
+                    (
+                        interval_min,
+                        any_changed,
+                        session_expired,
+                        fetched_thumbnails,
+                    )
                 });
-                let (interval_min, any_changed, session_expired) = task.await;
+                let (interval_min, any_changed, session_expired, fetched_thumbnails) = task.await;
                 if session_expired && !auth_dispatched {
                     auth_dispatched = true;
                     cx.update(|app| {
                         app.defer(|app| app.dispatch_action(&crate::actions::OpenAuth));
                     });
                 }
-                if any_changed {
+                if fetched_thumbnails > 0 {
+                    cx.update(|app| {
+                        *AppState::global(app).checklist_invalidated.lock() = true;
+                        let ws = AppState::global(app).workspace.lock().clone();
+                        if let Some(ws) = ws {
+                            app.defer(move |cx| {
+                                let _ = ws.update(cx, |_, cx| cx.notify());
+                            });
+                        }
+                    });
+                }
+                if any_changed || fetched_thumbnails > 0 {
                     let _ = settings_entity
                         .update(cx, |settings, cx| settings.sync_drive_now(false, cx));
                 }
@@ -906,13 +935,14 @@ impl Workspace {
     /// 未読件数の再取得（ローカル本の未読状態から）。
     pub fn refresh_unread_count(&mut self, cx: &mut Context<Self>) {
         let db = AppState::global(cx).db_pool.clone();
+        let owner_id = crate::app_state::owner_id(AppState::global(cx)).unwrap_or_default();
         // サイトフィルタに連動する（すべての本 = フィルタなし。サイト選択中はそのサイトのみ）
         let site_filter = self.bookshelf.update(cx, |b, _| b.site_filter());
         // 所有している本（同期済みの本棚アイテム）から算出する。
         // - 非表示の本は除外
         // - ダウンロード済み: 進捗から `ReadingState` で判定（未読 / 読書中 / 読了）
         // - 未ダウンロード: 未読としてカウント
-        let count = bookshelf::list_all(&db)
+        let count = bookshelf::list_all_for_owner(&db, &owner_id)
             .map(|items| {
                 let local = books::list(&db).unwrap_or_default();
                 items

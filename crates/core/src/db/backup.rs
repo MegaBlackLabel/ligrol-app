@@ -2,9 +2,11 @@
 //!
 //! DB ファイル全体（画像 base64 を含み 200MB 級になる）をそのまま
 //! Drive に上げるのは重いため、主要テーブルのテキストデータだけを
-//! JSON にまとめる。画像データ（`thumbnail_data` / `image_data`）と
-//! 環境依存の設定（`drive.*` / `api.last_sync_at` 等）は含めない:
+//! JSON にまとめる。画像データ（`image_data`）と環境依存の設定
+//! （`drive.*` / `api.last_sync_at` 等）は含めない:
 //! サイズを抑え、同期のたびに内容が変わって毎回アップロードされるのを防ぐ。
+//! 例外として `checked_items.thumbnail_data`（256px JPEG の base64）は
+//! Web のチェックリスト表示用に含める（`EXCLUDED_COLUMNS` 参照）。
 
 use serde_json::{Map, Number, Value};
 use sqlx::{Row, TypeInfo, ValueRef};
@@ -43,17 +45,21 @@ const TABLES: &[&str] = &[
 ];
 /// 画像・バイナリ・本文テキストとして除外するカラム名。
 ///
-/// `thumbnail_data` / `image_data` は画像の base64（1 行が数百 KB になり、
-/// 同期のたびに Drive へ上げ直すには重すぎる）。`product_sample_pages` の
-/// `image_data` はこれに当たるが、**`image_url` は残す**ので復元先でも試し読みを
-/// 開ける（試し読みを開く経路は毎回 `/api/image/` から取り直して保存し直す。
-/// `crates/app/src/views/checklist.rs` の `fetch_sample`）。
+/// `image_data` は画像の base64（1 行が数百 KB になり、同期のたびに Drive へ
+/// 上げ直すには重すぎる）。`product_sample_pages` の `image_data` はこれに当たるが、
+/// **`image_url` は残す**ので復元先でも試し読みを開ける（試し読みを開く経路は毎回
+/// `/api/image/` から取り直して保存し直す。`crates/app/src/views/checklist.rs` の
+/// `fetch_sample`）。
+///
+/// `checked_items.thumbnail_data` は**Web の本棚がチェックリストの表紙を出すために
+/// バックアップへ含める**（256px JPEG の base64。Web 側は既に受け取り実装済み）。
+/// 画像そのものではなく表示用に縮小した派生データで、再取得もできる。
 ///
 /// `extracted_text`（`document_images`）は暗号化 pack から取り出したページ本文で、
 /// 平文のまま Drive のバックアップ JSON に載ると、pack を暗号化した意味が失われる。
 /// アプリはこの列を読まない（本文は `document_text` 側にあり、そちらは
 /// バックアップ対象テーブルに含まれない）ため、除外しても復元結果は変わらない。
-const EXCLUDED_COLUMNS: &[&str] = &["thumbnail_data", "image_data", "extracted_text"];
+const EXCLUDED_COLUMNS: &[&str] = &["image_data", "extracted_text"];
 
 /// 比較のときに無視する揮発列（アプリ自身が同期のたびに書き換える時刻）。
 /// 内容が同じでも値が変わるため、そのまま比較すると毎回「差分あり」になる。
@@ -182,25 +188,29 @@ fn owner_matches(filter: &OwnerFilter<'_>, blob: Option<&str>) -> bool {
     crate::owner::matches(filter.key, blob, filter.sub)
 }
 
-/// 現在の owner に属する `checked_items.id`。
-///
-/// `owner_sub` を持たない子テーブル（`product_sample_pages`）の所有者判定に使う。
-/// `checked_items.owner_sub` は毎回 IV が変わる暗号文なので SQL では比較できず、
-/// 復号して id 集合を作る（`books` の所有者を呼び出し側が復号して `book_ids` を
-/// 渡すのと同じ流儀）。`product_sample_pages` は `owner_sub` も `book_id` も
-/// 持たないため、この集合へ `checklist_item_id` が入る行だけを出す。
+/// 現在の owner に属する `checked_items.id`（旧 owner_id 空行の救済付き）。
 async fn owner_checked_item_ids(
     conn: &mut sqlx::SqliteConnection,
     owner: &OwnerFilter<'_>,
 ) -> Result<Vec<String>, sqlx::Error> {
-    let rows = sqlx::query("SELECT id, owner_sub FROM checked_items")
+    let current = owner
+        .sub
+        .map(nartik::derive_owner_id)
+        .unwrap_or_default();
+    let rows = sqlx::query("SELECT id, owner_sub, owner_id FROM checked_items")
         .fetch_all(&mut *conn)
         .await?;
     let mut ids = Vec::new();
     for row in rows {
         let id: String = row.try_get("id")?;
         let blob: Option<String> = row.try_get("owner_sub")?;
-        if owner_matches(owner, blob.as_deref()) {
+        let row_owner: String = row.try_get("owner_id")?;
+        let matches = if row_owner.is_empty() {
+            owner_matches(owner, blob.as_deref())
+        } else {
+            row_owner == current
+        };
+        if matches {
             ids.push(id);
         }
     }
@@ -336,7 +346,9 @@ pub fn user_data_row_count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
             ("books", " WHERE owner_sub IS NOT NULL"),
         ] {
             let sql = format!("SELECT COUNT(*) FROM {table}{where_sql}");
-            let count: i64 = sqlx::query_scalar(dynamic_sql(sql.as_str())).fetch_one(pool).await?;
+            let count: i64 = sqlx::query_scalar(dynamic_sql(sql.as_str()))
+                .fetch_one(pool)
+                .await?;
             total += count;
         }
         Ok(total)
@@ -424,8 +436,8 @@ fn has_user_data_value(table: &str, rows: &[Value]) -> bool {
 fn user_data_columns(table: &str) -> &'static [&'static str] {
     match table {
         // 所有者（`owner::encrypt`: AAD 無し・prefix 無しの生 base64）
-        "books" | "bookshelf_items" | "checked_items" | "book_first_events"
-        | "favorite_tags" | "favorite_entities" => &["owner_sub"],
+        "books" | "bookshelf_items" | "checked_items" | "book_first_events" | "favorite_tags"
+        | "favorite_entities" => &["owner_sub"],
         // 列暗号（`column_crypto`: `enc:v1:`）
         "page_notes" => &["memo"],
         _ => &[],
@@ -441,7 +453,9 @@ fn open_user_data_row(table: &str, row: &mut Map<String, Value>, key: &[u8; 32])
         let Some(value) = row.get_mut(*column) else {
             continue;
         };
-        let Some(stored) = value.as_str() else { continue };
+        let Some(stored) = value.as_str() else {
+            continue;
+        };
         if *column == "owner_sub" {
             if let Some(sub) = crate::owner::decrypt(key, stored) {
                 *value = Value::String(sub);
@@ -451,7 +465,9 @@ fn open_user_data_row(table: &str, row: &mut Map<String, Value>, key: &[u8; 32])
         if !crate::db::column_crypto::is_encrypted(stored) {
             continue;
         }
-        let Some(row_key) = row_key.as_deref() else { continue };
+        let Some(row_key) = row_key.as_deref() else {
+            continue;
+        };
         let aad = crate::db::column_crypto::aad(table, row_key, column);
         if let Some(plain) = crate::db::column_crypto::decrypt(key, &aad, stored) {
             *value = Value::String(plain);
@@ -481,7 +497,9 @@ fn seal_user_data_row(table: &str, row: &mut Map<String, Value>, key: &[u8; 32])
         if crate::db::column_crypto::is_encrypted(text) {
             continue; // 既に暗号文（v2 バックアップ）は触らない
         }
-        let Some(row_key) = row_key.as_deref() else { continue };
+        let Some(row_key) = row_key.as_deref() else {
+            continue;
+        };
         let aad = crate::db::column_crypto::aad(table, row_key, column);
         if let Ok(stored) = crate::db::column_crypto::encrypt(key, &aad, text) {
             *value = Value::String(stored);
@@ -619,25 +637,26 @@ pub fn import_json(
             // 暗号文）は値ごとの `seal_user_data_row` が復号を試して触らないので後方互換。
             // 鍵が要るのは**値が入っているとき**だけにする（暗号文 / 平文の区別は鍵を持ってから
             // 値を復号して行う。鍵リングに触れないテストを壊さないため）。
-            let sealed_rows: Option<Vec<Value>> = if seal_plaintext && has_user_data_value(table, rows) {
-                let key = match user_key {
-                    Some(key) => *key,
-                    None => crate::db::column_crypto::db_key()?,
+            let sealed_rows: Option<Vec<Value>> =
+                if seal_plaintext && has_user_data_value(table, rows) {
+                    let key = match user_key {
+                        Some(key) => *key,
+                        None => crate::db::column_crypto::db_key()?,
+                    };
+                    Some(
+                        rows.iter()
+                            .cloned()
+                            .map(|mut row| {
+                                if let Value::Object(object) = &mut row {
+                                    seal_user_data_row(table, object, &key);
+                                }
+                                row
+                            })
+                            .collect(),
+                    )
+                } else {
+                    None
                 };
-                Some(
-                    rows.iter()
-                        .cloned()
-                        .map(|mut row| {
-                            if let Value::Object(object) = &mut row {
-                                seal_user_data_row(table, object, &key);
-                            }
-                            row
-                        })
-                        .collect(),
-                )
-            } else {
-                None
-            };
             let rows: &[Value] = sealed_rows.as_deref().unwrap_or(rows);
             // 競合判定は自然キーがあればそちらを使う（PK と別の UNIQUE 制約を
             // 持つ表で、もう片方の制約違反により復元が失敗するのを防ぐ）。
@@ -669,8 +688,8 @@ fn conflict_columns(table: &str) -> Option<&'static [&'static str]> {
 fn pk_columns(table: &str) -> Option<&'static [&'static str]> {
     Some(match table {
         "books" => &["id"],
-        "bookshelf_items" => &["site_id", "database_id"],
-        "checked_items" => &["id"],
+        "bookshelf_items" => &["site_id", "database_id", "owner_id"],
+        "checked_items" => &["id", "owner_id"],
         "product_sample_pages" => &["id"],
         "tbf_events" => &["id"],
         "book_contents" => &["content_id"],
@@ -682,7 +701,7 @@ fn pk_columns(table: &str) -> Option<&'static [&'static str]> {
         "favorite_entities" => &["entity_kind", "entity_name"],
         "imported_documents" => &["id"],
         "document_images" => &["id"],
-        "book_first_events" => &["site_id", "database_id"],
+        "book_first_events" => &["site_id", "database_id", "owner_id"],
         "page_notes" => &["id"],
         "zenn_tag_metadata" => &["tag_name"],
         "view_history" => &["id"],
@@ -750,8 +769,20 @@ async fn table_rows(
         && table == "product_sample_pages"
         && let Some(filter) = owner
     {
+        let owner_id = filter
+            .sub
+            .map(nartik::derive_owner_id)
+            .unwrap_or_default();
         let ids = owner_checked_item_ids(&mut *conn, filter).await?;
-        where_sql = " WHERE checklist_item_id IN (SELECT value FROM json_each(?))".into();
+        where_sql = if owner_id.is_empty() {
+            " WHERE owner_id = '' AND checklist_item_id IN (SELECT value FROM json_each(?))"
+                .to_string()
+        } else {
+            format!(
+                " WHERE owner_id = '{owner_id}' OR (owner_id = '' AND \
+                   checklist_item_id IN (SELECT value FROM json_each(?)))"
+            )
+        };
         bind_json = Some(serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into()));
     }
     // 行の並びを PK 順に固定する。物理順（挿入順・索引の選択）に依存すると、
@@ -961,7 +992,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn export_json_contains_tables_without_images() {
+    fn export_json_includes_checklist_thumbnail_data() {
         let pool = crate::db::test_pool();
         // 本とチェックリスト項目を 1 件ずつ入れる
         crate::db::books::insert(
@@ -1049,12 +1080,20 @@ mod tests {
         let books = payload["books"].as_array().unwrap();
         assert_eq!(books.len(), 1);
         assert_eq!(books[0]["title"], "テスト本");
-        // checked_items に thumbnail_data が含まれない（画像は除外）
+        // checked_items の thumbnail_data も Web 表示用に含める
         let items = payload["checked_items"].as_array().unwrap();
         assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]["thumbnail_data"], "aGVsbG8=",
+            "Web のチェックリスト表紙がバックアップから読めること"
+        );
+        // 試し読みの image_data は引き続き除外する
         assert!(
-            items[0].get("thumbnail_data").is_none(),
-            "image columns must be excluded"
+            payload.get("product_sample_pages").is_none()
+                || payload["product_sample_pages"]
+                    .as_array()
+                    .is_none_or(|rows| rows.iter().all(|row| row.get("image_data").is_none())),
+            "image_data must stay excluded"
         );
     }
     #[test]
@@ -1420,7 +1459,10 @@ mod tests {
         // 平文モード: owner_sub が平文で載る（＝別端末の鍵でも読める形）
         let plain = export_json(&src, None, Some(&src_filter), true).unwrap();
         assert!(plain.contains("\"tag_name\":\"tag-a\""));
-        assert!(plain.contains("\"owner_sub\":\"A\""), "平文で載るはず: {plain}");
+        assert!(
+            plain.contains("\"owner_sub\":\"A\""),
+            "平文で載るはず: {plain}"
+        );
 
         // 取り込み先（別の鍵）で取り込み、その端末の鍵で export し直す
         let dst = crate::db::test_pool();
@@ -1437,7 +1479,10 @@ mod tests {
 
         // 暗号文モード（v2 相当）は owner_sub を平文で載せず、マーカーも sealed になる
         let sealed = export_json(&src, None, Some(&src_filter), false).unwrap();
-        assert!(!sealed.contains("\"owner_sub\":\"A\""), "v2 は平文で載せない");
+        assert!(
+            !sealed.contains("\"owner_sub\":\"A\""),
+            "v2 は平文で載せない"
+        );
         assert!(sealed.contains("\"user_data\":\"sealed\""));
     }
 
@@ -1873,6 +1918,10 @@ mod tests {
             ]
         });
         import_json(&pool, &payload.to_string(), None).unwrap();
-        assert!(crate::db::checklist::list_enabled_slugs(&pool).unwrap().is_empty());
+        assert!(
+            crate::db::checklist::list_enabled_slugs(&pool)
+                .unwrap()
+                .is_empty()
+        );
     }
 }
