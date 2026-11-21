@@ -732,14 +732,62 @@ const EVENT_END_DATE: &str = "2026-12-06";
 
 /// チェックリストの項目（`(id, サークル, スペース, タイトル, チェック済み)`）。
 const CHECKLIST: &[(&str, &str, &str, &str, bool)] = &[
-    ("demo-check-1", "こもれび工房", "あ-12", "はじめての設計メモ", true),
-    ("demo-check-2", "星屑ラボ", "い-05", "小さな道具をつくる Rust", true),
-    ("demo-check-3", "しろくま出版", "う-21", "色と余白のレイアウト帳", true),
-    ("demo-check-4", "もりのなか技術班", "え-08", "図解アルゴリズム散歩", true),
-    ("demo-check-5", "ひだまりソフト", "お-03", "小さな Web アプリの作り方", true),
-    ("demo-check-6", "あおぞら技術部", "か-14", "テストの書き方ノート", true),
-    ("demo-check-7", "みかづき書房", "き-07", "手書きで学ぶデータベース", true),
-    ("demo-check-8", "かたつむり開発室", "く-19", "毎日の自動化レシピ", true),
+    (
+        "demo-check-1",
+        "こもれび工房",
+        "あ-12",
+        "はじめての設計メモ",
+        true,
+    ),
+    (
+        "demo-check-2",
+        "星屑ラボ",
+        "い-05",
+        "小さな道具をつくる Rust",
+        true,
+    ),
+    (
+        "demo-check-3",
+        "しろくま出版",
+        "う-21",
+        "色と余白のレイアウト帳",
+        true,
+    ),
+    (
+        "demo-check-4",
+        "もりのなか技術班",
+        "え-08",
+        "図解アルゴリズム散歩",
+        true,
+    ),
+    (
+        "demo-check-5",
+        "ひだまりソフト",
+        "お-03",
+        "小さな Web アプリの作り方",
+        true,
+    ),
+    (
+        "demo-check-6",
+        "あおぞら技術部",
+        "か-14",
+        "テストの書き方ノート",
+        true,
+    ),
+    (
+        "demo-check-7",
+        "みかづき書房",
+        "き-07",
+        "手書きで学ぶデータベース",
+        true,
+    ),
+    (
+        "demo-check-8",
+        "かたつむり開発室",
+        "く-19",
+        "毎日の自動化レシピ",
+        true,
+    ),
 ];
 
 /// お気に入りのサークル / 作者（本棚のチップにハートが付く）。
@@ -819,15 +867,31 @@ fn seed_book(
     // ローカル本の有無で決まる）。タグは本棚（tags_json）とローカル本（book_tags）の両方に
     // 入れる。本棚カードはローカル本があればローカル本のタグを表示するため
     // （`BookshelfView::reload`）。
-    db::bookshelf::upsert(pool, &shelf_item(book))?;
+    db::bookshelf::upsert_for_owner(
+        pool,
+        &shelf_item(book),
+        &nartik::derive_owner_id(DEMO_OWNER_SUB),
+    )?;
     let tags: Vec<String> = book.tags.iter().map(|tag| (*tag).to_string()).collect();
-    db::bookshelf::update_tags(pool, SITE_ID_TECHBOOKFEST, book.database_id, &tags)?;
+    db::bookshelf::update_tags_for_owner(
+        pool,
+        SITE_ID_TECHBOOKFEST,
+        book.database_id,
+        &nartik::derive_owner_id(DEMO_OWNER_SUB),
+        &tags,
+    )?;
     // お気に入りの**本棚側**の印は、ローカル本が無くても立てる（本棚の絞り込みに使う）。
     // upsert は上書きしない（`bookshelf::upsert` の DO UPDATE にも `books::upsert` にも
     // `is_favorite` は入っていない = 同期で消えない扱い）ので、ここで明示的に立てる。
     // true を入れるだけなので 2 回 seed しても同じ結果になる。
     if book.favorite {
-        db::bookshelf::set_favorite(pool, SITE_ID_TECHBOOKFEST, book.database_id, true)?;
+        db::bookshelf::set_favorite_for_owner(
+            pool,
+            SITE_ID_TECHBOOKFEST,
+            book.database_id,
+            &nartik::derive_owner_id(DEMO_OWNER_SUB),
+            true,
+        )?;
     }
 
     // ローカル本と、それに紐づくもの（`books` への外部キーを持つ）は**ダウンロード済みの本だけ**。
@@ -1159,8 +1223,7 @@ fn cover_png_for_seed(book: &DemoBook) -> Option<Vec<u8>> {
     /// 見た目の指紋ごとに 1 度だけ 50 枚を描いて置く場所（プロセス内で共有）。
     static DIR: LazyLock<std::path::PathBuf> = LazyLock::new(|| {
         let fingerprint = hash(&BOOKS.iter().map(cover_svg).collect::<String>());
-        let dir =
-            std::env::temp_dir().join(format!("ligrol-demo-covers-{fingerprint:08x}"));
+        let dir = std::env::temp_dir().join(format!("ligrol-demo-covers-{fingerprint:08x}"));
         let _ = std::fs::create_dir_all(&dir);
         for entry in BOOKS {
             let path = dir.join(format!("{}.png", entry.database_id));
@@ -1881,10 +1944,7 @@ mod tests {
 
     /// 表紙の書き出し先（テストごとに作り直す。テストは並列に走るので名前を分ける）。
     fn thumbnails_dir(tag: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "ligrol-demo-covers-{tag}-{}",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("ligrol-demo-covers-{tag}-{}", std::process::id()))
     }
 
     /// 行数の内訳（seed を 2 回呼んでも増えないことの比較に使う）。
@@ -2111,10 +2171,7 @@ mod tests {
             items.iter().any(|item| item.space_number == "あ-12"),
             "tbf21 の会場マップに載るスペース番号が無い"
         );
-        assert!(
-            items.len() >= 8,
-            "チェックリストの項目が少ない"
-        );
+        assert!(items.len() >= 8, "チェックリストの項目が少ない");
         assert!(
             items.iter().any(|item| item.is_checked != 0),
             "チェック済みの項目が無い（チェックリスト画面が全部未チェックになる）"

@@ -336,7 +336,9 @@ pub fn user_data_row_count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
             ("books", " WHERE owner_sub IS NOT NULL"),
         ] {
             let sql = format!("SELECT COUNT(*) FROM {table}{where_sql}");
-            let count: i64 = sqlx::query_scalar(dynamic_sql(sql.as_str())).fetch_one(pool).await?;
+            let count: i64 = sqlx::query_scalar(dynamic_sql(sql.as_str()))
+                .fetch_one(pool)
+                .await?;
             total += count;
         }
         Ok(total)
@@ -424,8 +426,8 @@ fn has_user_data_value(table: &str, rows: &[Value]) -> bool {
 fn user_data_columns(table: &str) -> &'static [&'static str] {
     match table {
         // 所有者（`owner::encrypt`: AAD 無し・prefix 無しの生 base64）
-        "books" | "bookshelf_items" | "checked_items" | "book_first_events"
-        | "favorite_tags" | "favorite_entities" => &["owner_sub"],
+        "books" | "bookshelf_items" | "checked_items" | "book_first_events" | "favorite_tags"
+        | "favorite_entities" => &["owner_sub"],
         // 列暗号（`column_crypto`: `enc:v1:`）
         "page_notes" => &["memo"],
         _ => &[],
@@ -441,7 +443,9 @@ fn open_user_data_row(table: &str, row: &mut Map<String, Value>, key: &[u8; 32])
         let Some(value) = row.get_mut(*column) else {
             continue;
         };
-        let Some(stored) = value.as_str() else { continue };
+        let Some(stored) = value.as_str() else {
+            continue;
+        };
         if *column == "owner_sub" {
             if let Some(sub) = crate::owner::decrypt(key, stored) {
                 *value = Value::String(sub);
@@ -451,7 +455,9 @@ fn open_user_data_row(table: &str, row: &mut Map<String, Value>, key: &[u8; 32])
         if !crate::db::column_crypto::is_encrypted(stored) {
             continue;
         }
-        let Some(row_key) = row_key.as_deref() else { continue };
+        let Some(row_key) = row_key.as_deref() else {
+            continue;
+        };
         let aad = crate::db::column_crypto::aad(table, row_key, column);
         if let Some(plain) = crate::db::column_crypto::decrypt(key, &aad, stored) {
             *value = Value::String(plain);
@@ -481,7 +487,9 @@ fn seal_user_data_row(table: &str, row: &mut Map<String, Value>, key: &[u8; 32])
         if crate::db::column_crypto::is_encrypted(text) {
             continue; // 既に暗号文（v2 バックアップ）は触らない
         }
-        let Some(row_key) = row_key.as_deref() else { continue };
+        let Some(row_key) = row_key.as_deref() else {
+            continue;
+        };
         let aad = crate::db::column_crypto::aad(table, row_key, column);
         if let Ok(stored) = crate::db::column_crypto::encrypt(key, &aad, text) {
             *value = Value::String(stored);
@@ -619,25 +627,26 @@ pub fn import_json(
             // 暗号文）は値ごとの `seal_user_data_row` が復号を試して触らないので後方互換。
             // 鍵が要るのは**値が入っているとき**だけにする（暗号文 / 平文の区別は鍵を持ってから
             // 値を復号して行う。鍵リングに触れないテストを壊さないため）。
-            let sealed_rows: Option<Vec<Value>> = if seal_plaintext && has_user_data_value(table, rows) {
-                let key = match user_key {
-                    Some(key) => *key,
-                    None => crate::db::column_crypto::db_key()?,
+            let sealed_rows: Option<Vec<Value>> =
+                if seal_plaintext && has_user_data_value(table, rows) {
+                    let key = match user_key {
+                        Some(key) => *key,
+                        None => crate::db::column_crypto::db_key()?,
+                    };
+                    Some(
+                        rows.iter()
+                            .cloned()
+                            .map(|mut row| {
+                                if let Value::Object(object) = &mut row {
+                                    seal_user_data_row(table, object, &key);
+                                }
+                                row
+                            })
+                            .collect(),
+                    )
+                } else {
+                    None
                 };
-                Some(
-                    rows.iter()
-                        .cloned()
-                        .map(|mut row| {
-                            if let Value::Object(object) = &mut row {
-                                seal_user_data_row(table, object, &key);
-                            }
-                            row
-                        })
-                        .collect(),
-                )
-            } else {
-                None
-            };
             let rows: &[Value] = sealed_rows.as_deref().unwrap_or(rows);
             // 競合判定は自然キーがあればそちらを使う（PK と別の UNIQUE 制約を
             // 持つ表で、もう片方の制約違反により復元が失敗するのを防ぐ）。
@@ -669,7 +678,7 @@ fn conflict_columns(table: &str) -> Option<&'static [&'static str]> {
 fn pk_columns(table: &str) -> Option<&'static [&'static str]> {
     Some(match table {
         "books" => &["id"],
-        "bookshelf_items" => &["site_id", "database_id"],
+        "bookshelf_items" => &["site_id", "database_id", "owner_id"],
         "checked_items" => &["id"],
         "product_sample_pages" => &["id"],
         "tbf_events" => &["id"],
@@ -682,7 +691,7 @@ fn pk_columns(table: &str) -> Option<&'static [&'static str]> {
         "favorite_entities" => &["entity_kind", "entity_name"],
         "imported_documents" => &["id"],
         "document_images" => &["id"],
-        "book_first_events" => &["site_id", "database_id"],
+        "book_first_events" => &["site_id", "database_id", "owner_id"],
         "page_notes" => &["id"],
         "zenn_tag_metadata" => &["tag_name"],
         "view_history" => &["id"],
@@ -1420,7 +1429,10 @@ mod tests {
         // 平文モード: owner_sub が平文で載る（＝別端末の鍵でも読める形）
         let plain = export_json(&src, None, Some(&src_filter), true).unwrap();
         assert!(plain.contains("\"tag_name\":\"tag-a\""));
-        assert!(plain.contains("\"owner_sub\":\"A\""), "平文で載るはず: {plain}");
+        assert!(
+            plain.contains("\"owner_sub\":\"A\""),
+            "平文で載るはず: {plain}"
+        );
 
         // 取り込み先（別の鍵）で取り込み、その端末の鍵で export し直す
         let dst = crate::db::test_pool();
@@ -1437,7 +1449,10 @@ mod tests {
 
         // 暗号文モード（v2 相当）は owner_sub を平文で載せず、マーカーも sealed になる
         let sealed = export_json(&src, None, Some(&src_filter), false).unwrap();
-        assert!(!sealed.contains("\"owner_sub\":\"A\""), "v2 は平文で載せない");
+        assert!(
+            !sealed.contains("\"owner_sub\":\"A\""),
+            "v2 は平文で載せない"
+        );
         assert!(sealed.contains("\"user_data\":\"sealed\""));
     }
 
@@ -1873,6 +1888,10 @@ mod tests {
             ]
         });
         import_json(&pool, &payload.to_string(), None).unwrap();
-        assert!(crate::db::checklist::list_enabled_slugs(&pool).unwrap().is_empty());
+        assert!(
+            crate::db::checklist::list_enabled_slugs(&pool)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

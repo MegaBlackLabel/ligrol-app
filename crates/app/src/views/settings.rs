@@ -498,7 +498,9 @@ impl SettingsView {
             .unwrap_or_else(|| WHEEL_DIRECTION_DEFAULT.to_string());
         // 非表示リスト（設定画面から表示解除できるようにする）
         let state = AppState::global(cx);
-        self.hidden_items = db::bookshelf::list_hidden(&state.db_pool).unwrap_or_default();
+        let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+        self.hidden_items =
+            db::bookshelf::list_hidden_for_owner(&state.db_pool, &owner_id).unwrap_or_default();
         // 表紙キャッシュが無いものはバックグラウンドで取得する
         self.fetch_missing_covers(cx);
         // 本の鍵（v3 の PRK）の状態（この端末にあるか / パスフレーズ / 未アップロード）
@@ -842,7 +844,8 @@ impl SettingsView {
         let thumbnails_dir = state.data_dir.join("thumbnails");
         let booth_session = state.booth_session.lock().clone();
         let tbf_client = state.tbf.clone();
-        let targets: Vec<(String, String)> = db::bookshelf::list_all(&db)
+        let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+        let targets: Vec<(String, String)> = db::bookshelf::list_all_for_owner(&db, &owner_id)
             .unwrap_or_default()
             .into_iter()
             .filter(|item| {
@@ -1029,7 +1032,9 @@ impl SettingsView {
             let _ = handle.update(cx, |this, cx| {
                 this.fetch_covers_in_progress = false;
                 let state = AppState::global(cx);
-                this.hidden_items = db::bookshelf::list_hidden(&state.db_pool).unwrap_or_default();
+                let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+                this.hidden_items = db::bookshelf::list_hidden_for_owner(&state.db_pool, &owner_id)
+                    .unwrap_or_default();
                 cx.notify();
             });
         })
@@ -1509,8 +1514,8 @@ impl SettingsView {
             log::info!("sync_drive_now: token ok, drive client ready");
             // 保存済みの id は別アカウントのフォルダを指していることがある（404）。
             // その場合は新しいアカウントの同名フォルダを探す / 作って保存し直す。
-            let folder_id = ensure_sync_folder(&mut drive, folder_id.as_deref())
-                .map_err(|e| e.to_string())?;
+            let folder_id =
+                ensure_sync_folder(&mut drive, folder_id.as_deref()).map_err(|e| e.to_string())?;
             let _ = db::settings::set(&db, "drive.sync.folder_id", &folder_id);
             log::info!("sync_drive_now: folder_id resolved={folder_id}");
             // 利用者が手動で同期した＝Drive 同期は有効。トグルを行を持たない状態
@@ -3185,10 +3190,7 @@ impl Render for SettingsView {
                         .text_sm()
                         .child(div().text_color(muted_fg).child("保護状態"))
                         .child(div().font_weight(FontWeight::MEDIUM).child(
-                            crate::pack_keys::key_status_label(
-                                key_has_local,
-                                key_has_passphrase,
-                            ),
+                            crate::pack_keys::key_status_label(key_has_local, key_has_passphrase),
                         )),
                 )
                 .child(div().text_sm().text_color(muted_fg).child(
@@ -3804,14 +3806,18 @@ impl Render for SettingsView {
                                                                 handle.update(cx, |this, cx| {
                                                                     let state =
                                                                         AppState::global(cx);
-                                                                    let _ = db::bookshelf::set_hidden(
+                                                                    let owner_id = crate::app_state::owner_id(state)
+                                                                        .unwrap_or_default();
+                                                                    let _ = db::bookshelf::set_hidden_for_owner(
                                                                         &state.db_pool,
                                                                         &site_id,
                                                                         &database_id,
+                                                                        &owner_id,
                                                                         false,
                                                                     );
-                                                                    this.hidden_items = db::bookshelf::list_hidden(
+                                                                    this.hidden_items = db::bookshelf::list_hidden_for_owner(
                                                                         &state.db_pool,
+                                                                        &owner_id,
                                                                     )
                                                                     .unwrap_or_default();
                                                                     this.show_toast("非表示を解除しました", cx);

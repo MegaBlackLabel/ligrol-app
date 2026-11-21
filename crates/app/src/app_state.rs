@@ -7,7 +7,6 @@ use std::sync::atomic::AtomicBool;
 
 use gpui_kit::ReadGlobal as _;
 use gpui_kit::{App, AppContext as _, Bounds, Global, Point, Size, Window, WindowBounds, px};
-use parking_lot::Mutex;
 use ligrol_core::booth::BoothSession;
 use ligrol_core::db;
 use ligrol_core::dlsite::client::DlsiteSession;
@@ -17,6 +16,7 @@ use ligrol_core::google::{GoogleClient, GoogleProfile};
 use ligrol_core::secrets::SecretStore;
 use ligrol_core::session_store::{PurgeMarker, SessionVault, StoreSession};
 use ligrol_core::tbf::{TbfClient, TbfSession};
+use parking_lot::Mutex;
 /// The Google OAuth client id (public info; embedded at build time from
 /// `LIGROL_GOOGLE_CLIENT_ID`). GCP プロジェクト `ligrol-app` の
 /// **デスクトップ用**クライアント。`drive.file` の付与はプロジェクト単位なので、
@@ -452,6 +452,14 @@ impl AppState {
         }
 
         let secrets = SecretStore::new();
+        // 既存の owner_sub（暗号文）から owner_id を埋める（複数アカウント対応の移送）。
+        if let Ok(key) = secrets.db_key() {
+            match ligrol_core::db::bookshelf::backfill_owner_ids(&db_pool, &key) {
+                Ok(0) => {}
+                Ok(rows) => log::info!("owner id: 既存 {rows} 行を所有者 ID へ移行しました"),
+                Err(error) => log::warn!("owner id: 移行に失敗（次回起動で再試行）: {error}"),
+            }
+        }
         // BOOTH / FANZA / DLsite / 技術書典のセッションを DB（app_settings）から復元する。
         // セッション Cookie は Windows Credential Manager の上限（2560 UTF-16 文字）を
         // 超えることがあるため DB に置くが、**keyring の鍵で暗号化して**保存する
@@ -717,6 +725,10 @@ impl AppState {
                 log::error!("サンプルデータを投入できない: {error}");
             }
         }
+        // サンプル / テストの固定データも owner_sub から owner_id を埋める。
+        if let Ok(key) = secrets.db_key() {
+            let _ = ligrol_core::db::bookshelf::backfill_owner_ids(&db_pool, &key);
+        }
         // 自動アップデートの状態（サンプルではネットワークへ出さない）。
         let updates = cx.new(|cx| crate::updates::Updates::new(cx, demo));
         cx.set_global(Self {
@@ -827,6 +839,13 @@ pub fn owner_token_from(
 pub fn owner_token(state: &AppState) -> Option<String> {
     let profile = state.google_profile.lock().clone();
     owner_token_from(profile.as_ref(), &state.secrets)
+}
+
+/// 現在の Google アカウントの owner ID（`derive_owner_id(sub)`）。
+/// shelf の owner 分離と表紙キャッシュのキーに使う。ログには出さない。
+pub fn owner_id(state: &AppState) -> Option<String> {
+    let profile = state.google_profile.lock().clone();
+    profile.map(|profile| nartik::derive_owner_id(&profile.sub))
 }
 
 /// メモリ上のプロフィールを更新する（keyring への保存が済んだ後に呼ぶ）。
@@ -1435,11 +1454,7 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("テンポラリを作れる");
         let marker = PurgeMarker::new(&dir);
         marker.mark(GOOGLE_LOGOUT_SLOT).expect("印を付けられる");
-        let failed = || {
-            Err(ligrol_core::secrets::SecretError::Keyring(
-                "locked".into(),
-            ))
-        };
+        let failed = || Err(ligrol_core::secrets::SecretError::Keyring("locked".into()));
 
         // トークンの削除に失敗 → 復元させない・印は残す（次の起動でも再試行）
         assert!(

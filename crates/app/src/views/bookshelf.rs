@@ -2229,7 +2229,9 @@ impl BookshelfView {
     ///   DB から is_hidden を取得して該当カードのフラグだけ更新する）
     pub fn refresh_hidden(&mut self, cx: &Context<Self>) {
         let state = Self::app_state(cx);
-        let items = db::bookshelf::list_all(&state.db_pool).unwrap_or_default();
+        let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+        let items =
+            db::bookshelf::list_all_for_owner(&state.db_pool, &owner_id).unwrap_or_default();
         let hidden: std::collections::HashMap<(String, String), i64> = items
             .iter()
             .map(|item| {
@@ -2326,6 +2328,7 @@ impl BookshelfView {
             let thumbnails_dir = state.data_dir.join("thumbnails");
             // 所有者フィルタ：ログイン中は現在 sub の本、未ログインは未所属(NULL)の本だけ表示。
             let owned = owned_book_ids(state);
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
             // ソート用の閲覧統計（回数 / 累計秒 / 最終閲覧）を 1 クエリでまとめて取る
             let view_stats = db::view_history::view_stats(db).unwrap_or_default();
             let mut entries = Vec::new();
@@ -2361,7 +2364,7 @@ impl BookshelfView {
                     progress: progress_tuple,
                 });
             }
-            let mut shelf_items = bookshelf::list_all(db).unwrap_or_default();
+            let mut shelf_items = bookshelf::list_all_for_owner(db, &owner_id).unwrap_or_default();
             // イベント名の補完（Web の同期は eventName を保存するが、デスクトップの
             // GraphQL 応答で空になることがある。tbf_events のスラグから引く）
             {
@@ -3178,9 +3181,13 @@ impl BookshelfView {
         };
         let state = Self::app_state(cx);
         let db = &state.db_pool;
+        let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
         let mut site_tags = std::collections::HashSet::new();
         // 本棚アイテム（同期で得た `tags_json`）のタグ
-        for item in bookshelf::list_all(db).ok().unwrap_or_default() {
+        for item in bookshelf::list_all_for_owner(db, &owner_id)
+            .ok()
+            .unwrap_or_default()
+        {
             if item.site_id == site {
                 for tag in bookshelf::tags_of(&item) {
                     site_tags.insert(tag);
@@ -3679,6 +3686,8 @@ impl BookshelfView {
         let state = Self::app_state(cx);
         let session = state.booth_session.lock().clone();
         let db = state.db_pool.clone();
+        let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+        let owner = crate::app_state::owner_token(state);
         let (tx, rx) = std::sync::mpsc::channel::<Result<usize, String>>();
         // 同期のネットワーク処理は GPUI のワーカーをブロックしないよう専用スレッドで実行する
         std::thread::spawn(move || {
@@ -3742,7 +3751,7 @@ impl BookshelfView {
                     if item.download_url.is_none() {
                         continue;
                     }
-                    bookshelf::upsert(
+                    bookshelf::upsert_for_owner(
                         &db,
                         &bookshelf::BookshelfItem {
                             site_id: "booth".into(),
@@ -3788,14 +3797,22 @@ impl BookshelfView {
                             age_rating: None,
                             series_name: None,
                         },
+                        &owner_id,
                     )
                     .map_err(|e| e.to_string())?;
                 }
                 // ライブラリに DL URL が無くなった商品は本棚から取り除く
+                let _ = ligrol_core::db::bookshelf::attribute_owner_with_id(
+                    &db,
+                    "booth",
+                    owner.as_deref(),
+                    Some(&owner_id),
+                );
                 let _ = ligrol_core::db::block_on(async {
                     sqlx::query(
-                    "DELETE FROM bookshelf_items WHERE site_id = 'booth'                      AND (download_url IS NULL OR download_url = '')",
+                    "DELETE FROM bookshelf_items WHERE site_id = 'booth'                      AND (download_url IS NULL OR download_url = '') AND owner_id = ?1",
                 )
+                .bind(&owner_id)
                 .execute(&db)
                 .await
                 });
@@ -3803,38 +3820,40 @@ impl BookshelfView {
                 // ダウンロード済み（books に tbf_product_id で紐づく）は残す。
                 let current_ids: Vec<String> =
                     library.iter().map(|i| i.item_id.to_string()).collect();
-                let delete_not_in_library =
-                    |pool: &ligrol_core::db::SqlitePool, ids: &[String]| {
-                        ligrol_core::db::block_on(async {
-                            if ids.is_empty() {
-                                sqlx::query(
-                            "DELETE FROM bookshelf_items WHERE site_id = 'booth'                              AND database_id NOT IN                              (SELECT tbf_product_id FROM books WHERE site_id = 'booth')",
+                let delete_not_in_library = |pool: &ligrol_core::db::SqlitePool, ids: &[String]| {
+                    ligrol_core::db::block_on(async {
+                        if ids.is_empty() {
+                            sqlx::query(
+                            "DELETE FROM bookshelf_items WHERE site_id = 'booth'                              AND owner_id = ?1                              AND database_id NOT IN                              (SELECT tbf_product_id FROM books WHERE site_id = 'booth')",
                         )
+                        .bind(&owner_id)
                         .execute(pool)
                         .await
-                            } else {
-                                let placeholders =
-                                    ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-                                let sql = format!(
-                                    "DELETE FROM bookshelf_items WHERE site_id = 'booth'                              AND database_id NOT IN ({placeholders})                              AND database_id NOT IN                              (SELECT tbf_product_id FROM books WHERE site_id = 'booth')"
-                                );
-                                let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
-                                for id in ids {
-                                    query = query.bind(id);
-                                }
-                                query.execute(pool).await
+                        } else {
+                            let placeholders =
+                                ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                            let sql = format!(
+                                "DELETE FROM bookshelf_items WHERE site_id = 'booth'                              AND owner_id = ?                              AND database_id NOT IN ({placeholders})                              AND database_id NOT IN                              (SELECT tbf_product_id FROM books WHERE site_id = 'booth')"
+                            );
+                            let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
+                            query = query.bind(&owner_id);
+                            for id in ids {
+                                query = query.bind(id);
                             }
-                        })
-                    };
+                            query.execute(pool).await
+                        }
+                    })
+                };
                 let _ = delete_not_in_library(&db, &current_ids);
                 // 商品ページが消えた本（お探しの本は見つかりませんでした）も削除する。
                 // ダウンロード済み（books に紐づく）は残す。
                 if !vanished.is_empty() {
                     let placeholders = vanished.iter().map(|_| "?").collect::<Vec<_>>().join(",");
                     let sql = format!(
-                        "DELETE FROM bookshelf_items WHERE site_id = 'booth'                      AND database_id IN ({placeholders})                      AND database_id NOT IN                      (SELECT tbf_product_id FROM books WHERE site_id = 'booth')"
+                        "DELETE FROM bookshelf_items WHERE site_id = 'booth'                      AND owner_id = ?                      AND database_id IN ({placeholders})                      AND database_id NOT IN                      (SELECT tbf_product_id FROM books WHERE site_id = 'booth')"
                     );
                     let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
+                    query = query.bind(&owner_id);
                     for id in &vanished {
                         query = query.bind(id.to_string());
                     }
@@ -3918,6 +3937,7 @@ impl BookshelfView {
         let cursor = state.sync_cursors.lock().fanza.unwrap_or_default();
         let db = state.db_pool.clone();
         let owner = crate::app_state::owner_token(state);
+        let owner_id = crate::app_state::owner_id(state);
         let (tx, rx) =
             std::sync::mpsc::channel::<Result<ligrol_core::fanza::sync::PurchaseBatch, String>>();
         std::thread::spawn(move || {
@@ -3925,10 +3945,11 @@ impl BookshelfView {
                 let session = session.ok_or_else(|| "FANZA セッションがありません".to_string())?;
                 let mut client =
                     FanzaClient::with_transport(Box::new(UreqTransport::new()), session);
-                ligrol_core::fanza::sync::save_purchases_batch(
+                ligrol_core::fanza::sync::save_purchases_batch_with_owner(
                     &db,
                     &mut client,
                     owner.as_deref(),
+                    owner_id.as_deref(),
                     cursor,
                     ligrol_core::fanza::sync::PURCHASE_PAGES_PER_RUN,
                 )
@@ -4017,14 +4038,16 @@ impl BookshelfView {
             return;
         };
         let db = state.db_pool.clone();
+        let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
         let handle = cx.entity();
         let (tx, rx) = std::sync::mpsc::channel::<ligrol_core::fanza::sync::TagFetchOutcome>();
         // 直列 + 間隔を空けるので、GPUI のワーカーを占有しないよう専用スレッドで実行する
         std::thread::spawn(move || {
             let mut client = FanzaClient::with_transport(Box::new(UreqTransport::new()), session);
-            match ligrol_core::fanza::sync::fetch_pending_tags(
+            match ligrol_core::fanza::sync::fetch_pending_tags_for_owner(
                 &db,
                 &mut client,
+                &owner_id,
                 ligrol_core::fanza::sync::TAG_FETCH_PER_RUN,
                 ligrol_core::fanza::sync::TAG_FETCH_INTERVAL,
             ) {
@@ -4119,6 +4142,7 @@ impl BookshelfView {
         // 未取得かどうかは DB の印（`tags_fetched`）を正とする（サイト内の表示順は保つ）
         let state = Self::app_state(cx);
         let db = state.db_pool.clone();
+        let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
         let mut unfetched: Vec<(String, String)> = Vec::new();
         for site_id in TAG_FETCH_SITES {
             let ids: Vec<String> = displayed
@@ -4127,7 +4151,7 @@ impl BookshelfView {
                 .map(|(_, database_id)| database_id.clone())
                 .collect();
             let pending: std::collections::HashSet<String> =
-                bookshelf::unfetched_among(&db, site_id, &ids)
+                bookshelf::unfetched_among_for_owner(&db, site_id, &owner_id, &ids)
                     .unwrap_or_default()
                     .into_iter()
                     .collect();
@@ -4165,9 +4189,10 @@ impl BookshelfView {
                     Some(session) => {
                         let mut client =
                             FanzaClient::with_transport(Box::new(UreqTransport::new()), session);
-                        match ligrol_core::fanza::sync::fetch_tags_for(
+                        match ligrol_core::fanza::sync::fetch_tags_for_owner(
                             &db,
                             &mut client,
+                            &owner_id,
                             &fanza_ids,
                             ligrol_core::fanza::sync::TAG_FETCH_INTERVAL,
                         ) {
@@ -4191,9 +4216,10 @@ impl BookshelfView {
                     Some(session) => {
                         let mut client =
                             DlsiteClient::with_transport(Box::new(UreqTransport::new()), session);
-                        match ligrol_core::dlsite::sync::fetch_tags_for(
+                        match ligrol_core::dlsite::sync::fetch_tags_for_owner(
                             &db,
                             &mut client,
+                            &owner_id,
                             &dlsite_ids,
                         ) {
                             Ok(outcome) => {
@@ -4273,18 +4299,19 @@ impl BookshelfView {
         let cursor = state.sync_cursors.lock().dlsite.unwrap_or_default();
         let db = state.db_pool.clone();
         let owner = crate::app_state::owner_token(state);
-        let (tx, rx) = std::sync::mpsc::channel::<
-            Result<ligrol_core::dlsite::sync::PurchaseBatch, String>,
-        >();
+        let owner_id = crate::app_state::owner_id(state);
+        let (tx, rx) =
+            std::sync::mpsc::channel::<Result<ligrol_core::dlsite::sync::PurchaseBatch, String>>();
         std::thread::spawn(move || {
             let result = (|| -> Result<ligrol_core::dlsite::sync::PurchaseBatch, String> {
                 let session = session.ok_or_else(|| "DLsite セッションがありません".to_string())?;
                 let mut client =
                     DlsiteClient::with_transport(Box::new(UreqTransport::new()), session);
-                ligrol_core::dlsite::sync::save_purchases_batch(
+                ligrol_core::dlsite::sync::save_purchases_batch_with_owner(
                     &db,
                     &mut client,
                     owner.as_deref(),
+                    owner_id.as_deref(),
                     cursor,
                     ligrol_core::dlsite::sync::PURCHASE_PAGES_PER_RUN,
                     ligrol_core::dlsite::sync::PAGE_INTERVAL,
@@ -4383,18 +4410,19 @@ impl BookshelfView {
         let cursor = state.sync_cursors.lock().fantia.unwrap_or_default();
         let db = state.db_pool.clone();
         let owner = crate::app_state::owner_token(state);
-        let (tx, rx) = std::sync::mpsc::channel::<
-            Result<ligrol_core::fantia::sync::PurchaseBatch, String>,
-        >();
+        let owner_id = crate::app_state::owner_id(state);
+        let (tx, rx) =
+            std::sync::mpsc::channel::<Result<ligrol_core::fantia::sync::PurchaseBatch, String>>();
         std::thread::spawn(move || {
             let result = (|| -> Result<ligrol_core::fantia::sync::PurchaseBatch, String> {
                 let session = session.ok_or_else(|| "Fantia セッションがありません".to_string())?;
                 let mut client =
                     FantiaClient::with_transport(Box::new(UreqTransport::new()), session);
-                ligrol_core::fantia::sync::save_purchases_batch(
+                ligrol_core::fantia::sync::save_purchases_batch_with_owner(
                     &db,
                     &mut client,
                     owner.as_deref(),
+                    owner_id.as_deref(),
                     cursor,
                     ligrol_core::fantia::sync::PURCHASE_PAGES_PER_RUN,
                 )
@@ -4482,6 +4510,7 @@ impl BookshelfView {
         let tbf_client = state.tbf.clone();
         let db = state.db_pool.clone();
         let owner = crate::app_state::owner_token(state);
+        let owner_id = crate::app_state::owner_id(state);
         let (tx, rx) = std::sync::mpsc::channel::<Result<usize, String>>();
         // 同期のネットワーク処理は GPUI のワーカーをブロックしないよう専用スレッドで実行する
         std::thread::spawn(move || {
@@ -4489,9 +4518,14 @@ impl BookshelfView {
                 let mut client = tbf_client.lock();
                 let items = client.bookshelf().map_err(|e| e.to_string())?;
 
-                tbf::sync::save_bookshelf(&db, &items, owner.as_deref())
-                    .map(|_| items.len())
-                    .map_err(|e| e.to_string())
+                tbf::sync::save_bookshelf_with_owner(
+                    &db,
+                    &items,
+                    owner.as_deref(),
+                    owner_id.as_deref(),
+                )
+                .map(|_| items.len())
+                .map_err(|e| e.to_string())
             })();
             let _ = tx.send(result);
         });
@@ -4648,6 +4682,10 @@ impl BookshelfView {
         // 未ログインは `start_download` の入口で止めている。
         let google_profile = state.google_profile.lock().clone();
         let google_sub = google_profile.as_ref().map(|p| p.sub.clone());
+        let owner_id = google_sub
+            .as_deref()
+            .map(nartik::derive_owner_id)
+            .unwrap_or_default();
         let db_key = state.secrets.db_key().ok();
         // 鍵の解決に要るもの（背景スレッドへ move するので `AppState` は持っていかない）
         let key_context = crate::pack_keys::KeyContext::from_state(state);
@@ -4742,10 +4780,11 @@ impl BookshelfView {
                     } else {
                         ligrol_core::drm::DrmStatus::NoDrm
                     };
-                    if let Err(error) = ligrol_core::db::bookshelf::set_drm_status(
+                    if let Err(error) = ligrol_core::db::bookshelf::set_drm_status_for_owner(
                         &db,
                         "fanza",
                         &product_id,
+                        &owner_id,
                         status,
                     ) {
                         log::warn!("fanza: DRM 判定（{}）の記録に失敗: {error}", status.label());
@@ -4763,9 +4802,7 @@ impl BookshelfView {
                     // 上限を超える本は**転送の前に**断る（落としても取り込めない）
                     reject_declared_too_large(declared_size)?;
                     if !large_confirmed
-                        && ligrol_core::store_size::needs_large_download_confirmation(
-                            declared_size,
-                        )
+                        && ligrol_core::store_size::needs_large_download_confirmation(declared_size)
                     {
                         return Err(ImportFailure::TooLarge {
                             size: declared_size.unwrap_or_default(),
@@ -5027,6 +5064,7 @@ impl BookshelfView {
                         &db,
                         &site_id,
                         &product_id,
+                        &owner_id,
                         &imported.book.id,
                         &item,
                         site_author.as_deref(),
@@ -5041,6 +5079,7 @@ impl BookshelfView {
                         &db,
                         &site_id,
                         &product_id,
+                        &owner_id,
                         &imported.book.id,
                         &item,
                         &genre_tags,
@@ -5137,6 +5176,7 @@ impl BookshelfView {
                             &db,
                             &site_id,
                             &product_id,
+                            &owner_id,
                             &imported.book.id,
                             &item,
                             site_author.as_deref(),
@@ -5146,6 +5186,7 @@ impl BookshelfView {
                             &db,
                             &site_id,
                             &product_id,
+                            &owner_id,
                             &imported.book.id,
                             &item,
                             &genre_tags,
@@ -5325,7 +5366,8 @@ impl BookshelfView {
         let favorites: Vec<bookshelf::BookshelfItem> = {
             let state = Self::app_state(cx);
             let db = &state.db_pool;
-            bookshelf::list_favorites(db).unwrap_or_default()
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+            bookshelf::list_favorites_for_owner(db, &owner_id).unwrap_or_default()
         };
         if favorites.is_empty() {
             return;
@@ -5399,10 +5441,12 @@ impl BookshelfView {
         {
             let state = Self::app_state(cx);
             let db = &state.db_pool;
-            let _ = bookshelf::set_favorite(
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+            let _ = bookshelf::set_favorite_for_owner(
                 db,
                 &card.shelf.site_id,
                 &card.shelf.database_id,
+                &owner_id,
                 new_state,
             );
             if let Some(local) = &card.local {
@@ -5430,8 +5474,14 @@ impl BookshelfView {
         {
             let state = Self::app_state(cx);
             let db = &state.db_pool;
-            let _ =
-                bookshelf::set_hidden(db, &card.shelf.site_id, &card.shelf.database_id, new_state);
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+            let _ = bookshelf::set_hidden_for_owner(
+                db,
+                &card.shelf.site_id,
+                &card.shelf.database_id,
+                &owner_id,
+                new_state,
+            );
             if let Some(local) = &card.local {
                 let _ = books::set_hidden(db, &local.book.id, new_state);
             }
@@ -5522,10 +5572,8 @@ impl BookshelfView {
                 Box::new(ligrol_core::tbf::UreqTransport::new()),
                 token,
             );
-            ligrol_core::drive::sync::delete_pack_from_drive(
-                &db, &mut drive, &folder_id, &pack_id,
-            )
-            .map_err(|error| error.to_string())
+            ligrol_core::drive::sync::delete_pack_from_drive(&db, &mut drive, &folder_id, &pack_id)
+                .map_err(|error| error.to_string())
         });
         cx.spawn(async move |_window, cx| {
             let result = task.await;
@@ -5873,6 +5921,7 @@ impl BookshelfView {
         let (tags, suggestions) = {
             let state = Self::app_state(cx);
             let db = &state.db_pool;
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
             let tags = if let Some(local_id) = Self::resolve_local_book_id(db, book_id) {
                 // 取り込み時に生成したタグ（source = generated）も編集画面に出す。
                 // ここで manual 系だけに絞ると、編集せず保存しただけで生成タグが
@@ -5883,7 +5932,7 @@ impl BookshelfView {
                     .map(|tag| tag.tag_name)
                     .collect::<Vec<_>>()
             } else {
-                bookshelf::list_all(db)
+                bookshelf::list_all_for_owner(db, &owner_id)
                     .unwrap_or_default()
                     .iter()
                     .find(|item| item.database_id == book_id)
@@ -5902,7 +5951,7 @@ impl BookshelfView {
                         .flatten()
                         .and_then(|b| b.site_id)
                 } else {
-                    bookshelf::list_all(db)
+                    bookshelf::list_all_for_owner(db, &owner_id)
                         .ok()
                         .unwrap_or_default()
                         .into_iter()
@@ -5912,7 +5961,10 @@ impl BookshelfView {
             let allowed: Option<std::collections::HashSet<String>> =
                 book_site.as_deref().map(|site| {
                     let mut set = std::collections::HashSet::new();
-                    for item in bookshelf::list_all(db).ok().unwrap_or_default() {
+                    for item in bookshelf::list_all_for_owner(db, &owner_id)
+                        .ok()
+                        .unwrap_or_default()
+                    {
                         if item.site_id == site {
                             for t in bookshelf::tags_of(&item) {
                                 set.insert(t);
@@ -5940,13 +5992,14 @@ impl BookshelfView {
         self.editing_site_id = {
             let state = Self::app_state(cx);
             let db = &state.db_pool;
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
             if let Some(local_id) = Self::resolve_local_book_id(db, book_id) {
                 books::get(db, &local_id)
                     .ok()
                     .flatten()
                     .and_then(|b| b.site_id)
             } else {
-                bookshelf::list_all(db)
+                bookshelf::list_all_for_owner(db, &owner_id)
                     .ok()
                     .unwrap_or_default()
                     .iter()
@@ -6018,6 +6071,7 @@ impl BookshelfView {
         {
             let state = Self::app_state(cx);
             let db = &state.db_pool;
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
             if let Some(local_id) = Self::resolve_local_book_id(db, &book_id) {
                 let tag_pairs: Vec<(&str, &str)> =
                     tags.iter().map(|tag| (tag.as_str(), "manual")).collect();
@@ -6032,7 +6086,8 @@ impl BookshelfView {
                     Some("fanza") | Some("dlsite")
                 ) {
                     let site = self.editing_site_id.as_deref().unwrap_or("fanza");
-                    let shelf_res = bookshelf::update_tags(db, site, &book_id, &tags);
+                    let shelf_res =
+                        bookshelf::update_tags_for_owner(db, site, &book_id, &owner_id, &tags);
                     log::info!(
                         "save_tag_edit: {site} shelf update_tags book_id={book_id} -> {shelf_res:?}"
                     );
@@ -6051,7 +6106,7 @@ impl BookshelfView {
                     .editing_site_id
                     .as_deref()
                     .unwrap_or(tbf::SITE_ID_TECHBOOKFEST);
-                let _ = bookshelf::update_tags(db, site, &book_id, &tags);
+                let _ = bookshelf::update_tags_for_owner(db, site, &book_id, &owner_id, &tags);
             }
         }
         self.editing_book_id = None;
@@ -6187,8 +6242,12 @@ impl BookshelfView {
         else {
             return;
         };
-        let db = &Self::app_state(cx).db_pool;
-        if let Err(error) = bookshelf::set_hidden(db, &site_id, database_id, true) {
+        let state = Self::app_state(cx);
+        let db = &state.db_pool;
+        let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+        if let Err(error) =
+            bookshelf::set_hidden_for_owner(db, &site_id, database_id, &owner_id, true)
+        {
             log::warn!("取り込めない作品を非表示にできません: {site_id}/{database_id}: {error}");
             return;
         }
@@ -10039,6 +10098,7 @@ fn apply_site_metadata(
     db: &db::SqlitePool,
     site_id: &str,
     product_id: &str,
+    owner_id: &str,
     book_id: &str,
     item: &bookshelf::BookshelfItem,
     site_author: Option<&str>,
@@ -10065,7 +10125,7 @@ fn apply_site_metadata(
     );
     // カードの「作者:」絞り込み用に本棚アイテムへも書く
     if let Some(author) = site_author {
-        let _ = bookshelf::update_author(db, site_id, product_id, author);
+        let _ = bookshelf::update_author_for_owner(db, site_id, product_id, owner_id, author);
     }
 }
 
@@ -10079,6 +10139,7 @@ fn apply_site_tags(
     db: &db::SqlitePool,
     site_id: &str,
     product_id: &str,
+    owner_id: &str,
     book_id: &str,
     item: &bookshelf::BookshelfItem,
     genre_tags: &[String],
@@ -10089,7 +10150,7 @@ fn apply_site_tags(
             .map(|tag| (tag.as_str(), "fanza_genre"))
             .collect();
         let _ = db::tags::set_for_book(db, book_id, &pairs);
-        let _ = bookshelf::update_tags(db, "fanza", product_id, genre_tags);
+        let _ = bookshelf::update_tags_for_owner(db, "fanza", product_id, owner_id, genre_tags);
     }
     if site_id == "dlsite"
         && let Some(tags_json) = &item.tags_json
@@ -10102,7 +10163,7 @@ fn apply_site_tags(
             .collect();
         let _ = db::tags::set_for_book(db, book_id, &pairs);
         // 「取得済み」の印も立てる（表示中のタグ取得が同じ作品を叩き直さないように）
-        let _ = bookshelf::update_tags(db, "dlsite", product_id, &tags);
+        let _ = bookshelf::update_tags_for_owner(db, "dlsite", product_id, owner_id, &tags);
     }
 }
 
@@ -10754,8 +10815,10 @@ mod tests {
         release_date: Option<&str>,
     ) {
         cx.update(|cx| {
-            let db = &AppState::global(cx).db_pool;
-            bookshelf::upsert(
+            let state = AppState::global(cx);
+            let db = &state.db_pool;
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+            bookshelf::upsert_for_owner(
                 db,
                 &bookshelf::BookshelfItem {
                     site_id: site_id.into(),
@@ -10795,6 +10858,7 @@ mod tests {
                     age_rating: None,
                     series_name: None,
                 },
+                &owner_id,
             )
             .unwrap();
         });
@@ -11326,8 +11390,10 @@ mod tests {
         circle: &str,
     ) {
         cx.update(|cx| {
-            let db = &AppState::global(cx).db_pool;
-            bookshelf::upsert(
+            let state = AppState::global(cx);
+            let db = &state.db_pool;
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+            bookshelf::upsert_for_owner(
                 db,
                 &bookshelf::BookshelfItem {
                     site_id: site_id.into(),
@@ -11367,6 +11433,7 @@ mod tests {
                     age_rating: None,
                     series_name: None,
                 },
+                &owner_id,
             )
             .unwrap();
         });
@@ -11384,7 +11451,15 @@ mod tests {
             let db = &AppState::global(cx).db_pool;
             let item = bookshelf::list(db, "booth").unwrap().remove(0);
             // 作者名が取れたとき: books にも本棚アイテムにも入る
-            apply_site_metadata(db, "booth", "7825209", "book-1", &item, Some("YORIMIYA"));
+            apply_site_metadata(
+                db,
+                "booth",
+                "7825209",
+                "",
+                "book-1",
+                &item,
+                Some("YORIMIYA"),
+            );
             assert_eq!(
                 books::get(db, "book-1").unwrap().unwrap().author,
                 "YORIMIYA",
@@ -11396,14 +11471,14 @@ mod tests {
                 "本棚カードの author も更新されること"
             );
             // 作者名が取れなかったとき: 既存の author を消さない
-            apply_site_metadata(db, "booth", "7825209", "book-1", &item, None);
+            apply_site_metadata(db, "booth", "7825209", "", "book-1", &item, None);
             assert_eq!(
                 books::get(db, "book-1").unwrap().unwrap().author,
                 "YORIMIYA",
                 "作者が取れなくても既存を消さない"
             );
             // 対象外サイト（技術書典）は何もしない
-            apply_site_metadata(db, "techbookfest", "db-1", "book-1", &item, Some("X"));
+            apply_site_metadata(db, "techbookfest", "db-1", "", "book-1", &item, Some("X"));
             assert_eq!(
                 books::get(db, "book-1").unwrap().unwrap().author,
                 "YORIMIYA"
@@ -11421,7 +11496,7 @@ mod tests {
             })
             .unwrap();
             let fantia_item = bookshelf::list(db, "fantia").unwrap().remove(0);
-            apply_site_metadata(db, "fantia", "111111", "book-1", &fantia_item, None);
+            apply_site_metadata(db, "fantia", "111111", "", "book-1", &fantia_item, None);
             let book = books::get(db, "book-1").unwrap().unwrap();
             assert_eq!(book.title, "Fantia の本", "Fantia のタイトルが入ること");
             assert_eq!(
@@ -11454,6 +11529,7 @@ mod tests {
                 db,
                 "fanza",
                 "d_1",
+                "",
                 "book-1",
                 &item,
                 &["拘束".to_string(), "触手".to_string()],
@@ -11477,17 +11553,25 @@ mod tests {
             );
 
             // タグが取れなかったときは何もしない（既存を消さない）
-            apply_site_tags(db, "fanza", "d_1", "book-1", &item, &[]);
+            apply_site_tags(db, "fanza", "d_1", "", "book-1", &item, &[]);
             assert_eq!(db::tags::list_for_book(db, "book-1").unwrap().len(), 2);
 
             // 取得元が無いサイト（BOOTH）は何もしない
-            apply_site_tags(db, "booth", "b_1", "book-1", &item, &["タグ".to_string()]);
+            apply_site_tags(
+                db,
+                "booth",
+                "b_1",
+                "",
+                "book-1",
+                &item,
+                &["タグ".to_string()],
+            );
             assert_eq!(db::tags::list_for_book(db, "book-1").unwrap().len(), 2);
 
             // DLsite: 同期で保存したカスタムジャンルが book_tags に入る
             let mut dlsite_item = bookshelf::list(db, "dlsite").unwrap().remove(0);
             dlsite_item.tags_json = Some(r#"["タグA"]"#.to_string());
-            apply_site_tags(db, "dlsite", "RJ1", "book-1", &dlsite_item, &[]);
+            apply_site_tags(db, "dlsite", "RJ1", "", "book-1", &dlsite_item, &[]);
             let tags: Vec<String> = db::tags::list_for_book(db, "book-1")
                 .unwrap()
                 .into_iter()
@@ -11617,8 +11701,8 @@ mod tests {
     async fn redownload_keeps_cover_and_queues_while_busy(cx: &mut TestAppContext) {
         cx.update(gpui_kit::component::init);
         cx.update(AppState::init_test);
-        seed_shelf_item(cx, "db-1", "本1", "サークルA", None);
         login_google_for_import(cx);
+        seed_shelf_item(cx, "db-1", "本1", "サークルA", None);
         let view = cx.new(BookshelfView::new);
         cx.update(|cx| {
             view.update(cx, |this, cx| {
@@ -11892,7 +11976,8 @@ mod tests {
         cx.update(|cx| {
             let state = AppState::global(cx);
             let db = &state.db_pool;
-            bookshelf::upsert(
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+            bookshelf::upsert_for_owner(
                 db,
                 &bookshelf::BookshelfItem {
                     site_id: "techbookfest".into(),
@@ -11932,6 +12017,7 @@ mod tests {
                     age_rating: None,
                     series_name: None,
                 },
+                &owner_id,
             )
             .unwrap();
         });
@@ -12098,8 +12184,8 @@ mod tests {
     async fn download_start_failure_notifies_with_error(cx: &mut TestAppContext) {
         cx.update(gpui_kit::component::init);
         cx.update(AppState::init_test);
-        seed_sort_item(cx, "fanza", "db-1", "本1", None, None);
         login_google_for_import(cx);
+        seed_sort_item(cx, "fanza", "db-1", "本1", None, None);
         let view = cx.new(BookshelfView::new);
         view.update(cx, |this, cx| {
             // 同期中は開始できない
@@ -12186,17 +12272,25 @@ mod tests {
     async fn auto_download_limits_concurrency(cx: &mut TestAppContext) {
         cx.update(gpui_kit::component::init);
         cx.update(AppState::init_test);
+        login_google_for_import(cx);
         // 未ダウンロードのお気に入りを 5 冊用意する
         for index in 0..5 {
             let database_id = format!("db-{index}");
             seed_sort_item(cx, "fanza", &database_id, &format!("本{index}"), None, None);
             cx.update(|cx| {
-                let db = &AppState::global(cx).db_pool;
-                bookshelf::set_favorite(db, "fanza", &database_id, true).unwrap();
+                let state = AppState::global(cx);
+                let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+                bookshelf::set_favorite_for_owner(
+                    &state.db_pool,
+                    "fanza",
+                    &database_id,
+                    &owner_id,
+                    true,
+                )
+                .unwrap();
             });
         }
         let view = cx.new(BookshelfView::new);
-        login_google_for_import(cx);
         view.update(cx, |this, cx| this.auto_download_favorites(cx));
         let (running, queued) = view.read_with(cx, |this, _| {
             (this.auto_download_running, this.auto_download_queue.len())
@@ -12306,16 +12400,24 @@ mod tests {
     async fn auto_download_does_not_queue_the_same_book_twice(cx: &mut TestAppContext) {
         cx.update(gpui_kit::component::init);
         cx.update(AppState::init_test);
+        login_google_for_import(cx);
         for index in 0..3 {
             let database_id = format!("db-{index}");
             seed_sort_item(cx, "fanza", &database_id, &format!("本{index}"), None, None);
             cx.update(|cx| {
-                let db = &AppState::global(cx).db_pool;
-                bookshelf::set_favorite(db, "fanza", &database_id, true).unwrap();
+                let state = AppState::global(cx);
+                let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+                bookshelf::set_favorite_for_owner(
+                    &state.db_pool,
+                    "fanza",
+                    &database_id,
+                    &owner_id,
+                    true,
+                )
+                .unwrap();
             });
         }
         let view = cx.new(BookshelfView::new);
-        login_google_for_import(cx);
         view.update(cx, |this, cx| this.auto_download_favorites(cx));
         view.update(cx, |this, cx| this.auto_download_favorites(cx));
         let (running, queued) = view.read_with(cx, |this, _| {
@@ -12339,7 +12441,8 @@ mod tests {
         cx.update(|cx| {
             let state = AppState::global(cx);
             let db = &state.db_pool;
-            bookshelf::upsert(
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+            bookshelf::upsert_for_owner(
                 db,
                 &bookshelf::BookshelfItem {
                     site_id: "booth".into(),
@@ -12379,6 +12482,7 @@ mod tests {
                     age_rating: None,
                     series_name: None,
                 },
+                &owner_id,
             )
             .unwrap();
         });
@@ -12394,7 +12498,8 @@ mod tests {
         cx.update(|cx| {
             let state = AppState::global(cx);
             let db = &state.db_pool;
-            bookshelf::upsert(
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+            bookshelf::upsert_for_owner(
                 db,
                 &bookshelf::BookshelfItem {
                     site_id: "techbookfest".into(),
@@ -12434,6 +12539,7 @@ mod tests {
                     age_rating: None,
                     series_name: None,
                 },
+                &owner_id,
             )
             .unwrap();
         });
@@ -13653,10 +13759,10 @@ mod tests {
     async fn related_thumbnail_click_asks_before_downloading(cx: &mut TestAppContext) {
         cx.update(gpui_kit::component::init);
         cx.update(AppState::init_test);
-        seed_shelf_item(cx, "db-1", "本1", "サークルA", None);
-        seed_shelf_item(cx, "db-2", "本2", "サークルA", None);
         // 取り込み（ダウンロード）は Google ログインが前提（F03。未ログインは確認の前に案内）
         login_google_for_import(cx);
+        seed_shelf_item(cx, "db-1", "本1", "サークルA", None);
+        seed_shelf_item(cx, "db-2", "本2", "サークルA", None);
         let view = cx.new(BookshelfView::new);
         cx.update(|cx| {
             view.update(cx, |this, cx| {
@@ -13933,8 +14039,14 @@ mod tests {
         options: &[ligrol_core::booth::DownloadOption],
     ) {
         cx.update(|cx| {
-            let db = &AppState::global(cx).db_pool;
-            bookshelf::upsert(db, &booth_item_with_options(database_id, title, options)).unwrap();
+            let state = AppState::global(cx);
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+            bookshelf::upsert_for_owner(
+                &state.db_pool,
+                &booth_item_with_options(database_id, title, options),
+                &owner_id,
+            )
+            .unwrap();
         });
     }
 
@@ -14428,8 +14540,8 @@ mod tests {
     async fn undownloaded_book_downloads_when_logged_in(cx: &mut TestAppContext) {
         cx.update(gpui_kit::component::init);
         cx.update(AppState::init_test);
-        seed_shelf_item(cx, "db-1", "本1", "サークルA", None);
         login_google_for_import(cx);
+        seed_shelf_item(cx, "db-1", "本1", "サークルA", None);
         let view = cx.new(BookshelfView::new);
 
         cx.update(|cx| {
@@ -15576,9 +15688,11 @@ mod tests {
         cx.update(AppState::init_test);
         // seed_shelf_item は author 空のため、author を直接 upsert して seeded する
         cx.update(|cx| {
-            let db = &AppState::global(cx).db_pool;
+            let state = AppState::global(cx);
+            let db = &state.db_pool;
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
             for (id, title, author) in [("db-1", "本A", "田中"), ("db-2", "本B", "佐藤")] {
-                bookshelf::upsert(
+                bookshelf::upsert_for_owner(
                     db,
                     &bookshelf::BookshelfItem {
                         site_id: "techbookfest".into(),
@@ -15618,6 +15732,7 @@ mod tests {
                         age_rating: None,
                         series_name: None,
                     },
+                    &owner_id,
                 )
                 .unwrap();
             }
@@ -16690,8 +16805,10 @@ mod tests {
         });
         // event_name なし・caused_at が開催期間内の本
         cx.update(|cx| {
-            let db = &AppState::global(cx).db_pool;
-            bookshelf::upsert(
+            let state = AppState::global(cx);
+            let db = &state.db_pool;
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+            bookshelf::upsert_for_owner(
                 db,
                 &bookshelf::BookshelfItem {
                     site_id: "techbookfest".into(),
@@ -16731,6 +16848,7 @@ mod tests {
                     age_rating: None,
                     series_name: None,
                 },
+                &owner_id,
             )
             .unwrap();
         });
@@ -16822,8 +16940,10 @@ mod tests {
         });
         // event_name なし・event_slug ありの本棚アイテム
         cx.update(|cx| {
-            let db = &AppState::global(cx).db_pool;
-            bookshelf::upsert(
+            let state = AppState::global(cx);
+            let db = &state.db_pool;
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
+            bookshelf::upsert_for_owner(
                 db,
                 &bookshelf::BookshelfItem {
                     site_id: "techbookfest".into(),
@@ -16863,6 +16983,7 @@ mod tests {
                     age_rating: None,
                     series_name: None,
                 },
+                &owner_id,
             )
             .unwrap();
         });
@@ -18457,9 +18578,9 @@ mod tests {
     ) {
         cx.update(gpui_kit::component::init);
         cx.update(AppState::init_test);
-        seed_shelf_item(cx, "db-3", "未取得の本", "サークル", None);
         // 取り込み（ダウンロード）は Google ログインが前提（F03。未ログインでは始まらない）
         login_google_for_import(cx);
+        seed_shelf_item(cx, "db-3", "未取得の本", "サークル", None);
         let view = cx.new(BookshelfView::new);
 
         let window = cx.open_window(
@@ -19102,10 +19223,7 @@ mod tests {
     #[test]
     fn demo_download_reports_progress_and_promotes_the_book() {
         let pool = ligrol_core::db::test_pool();
-        let dir = std::env::temp_dir().join(format!(
-            "ligrol-demo-download-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("ligrol-demo-download-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         crate::demo::seed(&pool, &dir).expect("サンプルを投入できる");
         let sample = crate::demo::book("demo-13").expect("サンプルを引ける");

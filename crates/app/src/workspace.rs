@@ -666,12 +666,13 @@ impl Workspace {
                 let tbf_client_for_poll = tbf_client.clone();
                 let tbf_logged_in_for_poll = tbf_logged_in.clone();
                 let task = spawn_checklist_poll_work(cx.background_executor(), move || {
-                    let interval_min = db::settings::get(&db_for_poll, "checklist.poll.interval_min")
-                        .ok()
-                        .flatten()
-                        .and_then(|v| v.parse::<i64>().ok())
-                        .map(|n| n.max(1))
-                        .unwrap_or(5);
+                    let interval_min =
+                        db::settings::get(&db_for_poll, "checklist.poll.interval_min")
+                            .ok()
+                            .flatten()
+                            .and_then(|v| v.parse::<i64>().ok())
+                            .map(|n| n.max(1))
+                            .unwrap_or(5);
                     // 未ログインならスキップ（次の周期へ）。tbf ログイン必須。
                     if !*tbf_logged_in_for_poll.lock() {
                         return (interval_min, false, false);
@@ -906,13 +907,14 @@ impl Workspace {
     /// 未読件数の再取得（ローカル本の未読状態から）。
     pub fn refresh_unread_count(&mut self, cx: &mut Context<Self>) {
         let db = AppState::global(cx).db_pool.clone();
+        let owner_id = crate::app_state::owner_id(AppState::global(cx)).unwrap_or_default();
         // サイトフィルタに連動する（すべての本 = フィルタなし。サイト選択中はそのサイトのみ）
         let site_filter = self.bookshelf.update(cx, |b, _| b.site_filter());
         // 所有している本（同期済みの本棚アイテム）から算出する。
         // - 非表示の本は除外
         // - ダウンロード済み: 進捗から `ReadingState` で判定（未読 / 読書中 / 読了）
         // - 未ダウンロード: 未読としてカウント
-        let count = bookshelf::list_all(&db)
+        let count = bookshelf::list_all_for_owner(&db, &owner_id)
             .map(|items| {
                 let local = books::list(&db).unwrap_or_default();
                 items

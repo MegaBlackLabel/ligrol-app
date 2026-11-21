@@ -95,10 +95,23 @@ pub const PAGE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10
 /// ユーザーの操作を挟んで少しずつ進めるための分割版（続きは `next` を次の呼び出しに渡す）。
 /// 画像系（comic / cg）だけを upsert する（voice / game / novel / video は保存しない）。
 /// `owner` は暗号化済み sub（ログイン中のみ `Some`）。
+/// 既存 API（テスト・呼び出し互換）。所有者 ID は空で保存する。
 pub fn save_purchases_batch(
     pool: &SqlitePool,
     client: &mut DlsiteClient,
     owner: Option<&str>,
+    cursor: PurchaseCursor,
+    pages: usize,
+    page_interval: std::time::Duration,
+) -> Result<PurchaseBatch, DlsiteError> {
+    save_purchases_batch_with_owner(pool, client, owner, None, cursor, pages, page_interval)
+}
+
+pub fn save_purchases_batch_with_owner(
+    pool: &SqlitePool,
+    client: &mut DlsiteClient,
+    owner: Option<&str>,
+    owner_id: Option<&str>,
     cursor: PurchaseCursor,
     pages: usize,
     page_interval: std::time::Duration,
@@ -145,13 +158,13 @@ pub fn save_purchases_batch(
                 continue;
             }
             let meta = metas.get(&p.content_id);
-            if save_purchase(pool, p, meta)? {
+            if save_purchase(pool, p, meta, owner_id)? {
                 saved += 1;
             }
         }
         cursor.store_index += 1;
     }
-    bookshelf::attribute_owner(pool, SITE_ID_DLSITE, owner)?;
+    bookshelf::attribute_owner_with_id(pool, SITE_ID_DLSITE, owner, owner_id)?;
     let pages_left = cursor.pages_left();
     // 全ストアを取り切った / 1 ストアの上限（`MAX_PAGES_PER_STORE`）に達したら続きを出さない
     // （上限で止まったまま「続き」を出し続けると、押しても何も進まなくなる）。
@@ -180,6 +193,7 @@ fn save_purchase(
     pool: &SqlitePool,
     p: DlsitePurchase,
     meta: Option<&DlsiteWorkMeta>,
+    owner_id: Option<&str>,
 ) -> Result<bool, DlsiteError> {
     let site_id = meta
         .map(|m| m.site_id.as_str())
@@ -251,7 +265,7 @@ fn save_purchase(
         age_rating: cfg.age.map(String::from),
         series_name: meta.and_then(|m| m.title_name.clone()),
     };
-    bookshelf::upsert(pool, &item)?;
+    bookshelf::upsert_for_owner(pool, &item, owner_id.unwrap_or(""))?;
     Ok(true)
 }
 
@@ -280,6 +294,16 @@ pub fn fetch_tags_for(
     client: &mut DlsiteClient,
     database_ids: &[String],
 ) -> Result<TagFetchOutcome, DlsiteError> {
+    fetch_tags_for_owner(pool, client, "", database_ids)
+}
+
+/// 現在の所有者の明示した作品だけタグを取得する。
+pub fn fetch_tags_for_owner(
+    pool: &SqlitePool,
+    client: &mut DlsiteClient,
+    owner_id: &str,
+    database_ids: &[String],
+) -> Result<TagFetchOutcome, DlsiteError> {
     if database_ids.is_empty() {
         return Ok(TagFetchOutcome::default());
     }
@@ -293,10 +317,11 @@ pub fn fetch_tags_for(
                 match metas.get(database_id.as_str()) {
                     Some(meta) => {
                         // タグが 0 件でも「取得済み」にする（毎回同じ作品を叩かない）
-                        bookshelf::update_tags(
+                        bookshelf::update_tags_for_owner(
                             pool,
                             SITE_ID_DLSITE,
                             database_id,
+                            owner_id,
                             &meta.custom_genres,
                         )?;
                         outcome.fetched += 1;
@@ -939,10 +964,7 @@ mod tests {
         let outcome = fetch_tags_for(&pool, &mut client, &["RJ00000001".to_string()]).unwrap();
 
         assert_eq!(outcome.fetched, 1);
-        assert_eq!(
-            tags_of(&pool, "RJ00000001"),
-            (Some("[]".to_string()), 1)
-        );
+        assert_eq!(tags_of(&pool, "RJ00000001"), (Some("[]".to_string()), 1));
     }
 
     /// 応答に無い作品（削除済み等）は印を立てず次回に回す。
@@ -971,7 +993,11 @@ mod tests {
         assert_eq!(outcome.fetched, 0);
         assert_eq!(outcome.skipped, 2);
         assert_eq!(outcome.remaining, 2);
-        assert_eq!(tags_of(&pool, &ids[0]), (None, 0), "失敗なのに印を立てている");
+        assert_eq!(
+            tags_of(&pool, &ids[0]),
+            (None, 0),
+            "失敗なのに印を立てている"
+        );
     }
 
     /// セッション切れ（401）は叩き続けずに打ち切る。

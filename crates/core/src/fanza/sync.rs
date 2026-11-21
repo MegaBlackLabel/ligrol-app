@@ -82,10 +82,22 @@ pub struct PurchaseBatch {
 /// ユーザーの操作を挟んで少しずつ進めるための分割版（続きは `next` を次の呼び出しに渡す）。
 /// 画像系（comic / cg）だけを upsert する（voice / game / video は保存しない）。
 /// `owner` は暗号化済み sub（ログイン中のみ `Some`）。
+/// 既存 API（テスト・呼び出し互換）。所有者 ID は空で保存する。
 pub fn save_purchases_batch(
     pool: &SqlitePool,
     client: &mut FanzaClient,
     owner: Option<&str>,
+    cursor: PurchaseCursor,
+    pages: usize,
+) -> Result<PurchaseBatch, FanzaError> {
+    save_purchases_batch_with_owner(pool, client, owner, None, cursor, pages)
+}
+
+pub fn save_purchases_batch_with_owner(
+    pool: &SqlitePool,
+    client: &mut FanzaClient,
+    owner: Option<&str>,
+    owner_id: Option<&str>,
     cursor: PurchaseCursor,
     pages: usize,
 ) -> Result<PurchaseBatch, FanzaError> {
@@ -104,7 +116,7 @@ pub fn save_purchases_batch(
         total_items = purchases.total;
         has_next = purchases.has_next;
         for p in purchases.items {
-            if save_purchase(pool, p)? {
+            if save_purchase(pool, p, owner_id)? {
                 saved += 1;
             }
         }
@@ -115,7 +127,7 @@ pub fn save_purchases_batch(
         }
         page += 1;
     }
-    bookshelf::attribute_owner(pool, SITE_ID_FANZA, owner)?;
+    bookshelf::attribute_owner_with_id(pool, SITE_ID_FANZA, owner, owner_id)?;
     Ok(finish_batch(
         pages,
         last_fetched,
@@ -155,7 +167,11 @@ fn finish_batch(
 }
 
 /// 購入 1 件を本棚へ upsert する（画像系以外は保存しない）。保存したら `true`。
-fn save_purchase(pool: &SqlitePool, p: FanzaPurchase) -> Result<bool, FanzaError> {
+fn save_purchase(
+    pool: &SqlitePool,
+    p: FanzaPurchase,
+    owner_id: Option<&str>,
+) -> Result<bool, FanzaError> {
     let meta = classify(&p.image_src, &p.genre);
     if !is_viewable_included(&meta) {
         return Ok(false);
@@ -203,7 +219,7 @@ fn save_purchase(pool: &SqlitePool, p: FanzaPurchase) -> Result<bool, FanzaError
         age_rating: None,
         series_name: None,
     };
-    bookshelf::upsert(pool, &item)?;
+    bookshelf::upsert_for_owner(pool, &item, owner_id.unwrap_or(""))?;
     Ok(true)
 }
 
@@ -240,7 +256,18 @@ pub fn fetch_pending_tags(
     limit: usize,
     interval: std::time::Duration,
 ) -> Result<TagFetchOutcome, FanzaError> {
-    let ids = bookshelf::pending_tag_fetch(pool, SITE_ID_FANZA, limit)?;
+    fetch_pending_tags_for_owner(pool, client, "", limit, interval)
+}
+
+/// 現在の所有者の未取得タグだけを取得する。
+pub fn fetch_pending_tags_for_owner(
+    pool: &SqlitePool,
+    client: &mut FanzaClient,
+    owner_id: &str,
+    limit: usize,
+    interval: std::time::Duration,
+) -> Result<TagFetchOutcome, FanzaError> {
+    let ids = bookshelf::pending_tag_fetch_for_owner(pool, SITE_ID_FANZA, owner_id, limit)?;
     let mut outcome = TagFetchOutcome::default();
     for (index, database_id) in ids.iter().enumerate() {
         if index > 0 && !interval.is_zero() {
@@ -249,7 +276,13 @@ pub fn fetch_pending_tags(
         match client.product_page(database_id) {
             Ok(page) => {
                 // タグが 0 件でも「取得済み」にする（毎回同じ作品を叩かない）
-                bookshelf::store_fetched_tags(pool, SITE_ID_FANZA, database_id, &page.genre_tags)?;
+                bookshelf::store_fetched_tags_for_owner(
+                    pool,
+                    SITE_ID_FANZA,
+                    database_id,
+                    owner_id,
+                    &page.genre_tags,
+                )?;
                 outcome.fetched += 1;
             }
             Err(error @ (FanzaError::Unauthorized(_) | FanzaError::SessionExpired)) => {
@@ -264,7 +297,8 @@ pub fn fetch_pending_tags(
         }
     }
     // 通知に出す残り件数（この実行で取得済みにしたぶんは減っている）
-    outcome.remaining = bookshelf::pending_tag_fetch_count(pool, SITE_ID_FANZA)? as usize;
+    outcome.remaining =
+        bookshelf::pending_tag_fetch_count_for_owner(pool, SITE_ID_FANZA, owner_id)? as usize;
     Ok(outcome)
 }
 
@@ -280,6 +314,17 @@ pub fn fetch_tags_for(
     database_ids: &[String],
     interval: std::time::Duration,
 ) -> Result<TagFetchOutcome, FanzaError> {
+    fetch_tags_for_owner(pool, client, "", database_ids, interval)
+}
+
+/// 現在の所有者の明示した作品だけタグを取得する。
+pub fn fetch_tags_for_owner(
+    pool: &SqlitePool,
+    client: &mut FanzaClient,
+    owner_id: &str,
+    database_ids: &[String],
+    interval: std::time::Duration,
+) -> Result<TagFetchOutcome, FanzaError> {
     let mut outcome = TagFetchOutcome::default();
     for (index, database_id) in database_ids.iter().enumerate() {
         if index > 0 && !interval.is_zero() {
@@ -288,7 +333,13 @@ pub fn fetch_tags_for(
         match client.product_page(database_id) {
             Ok(page) => {
                 // タグが 0 件でも「取得済み」にする（毎回同じ作品を叩かない）
-                bookshelf::store_fetched_tags(pool, SITE_ID_FANZA, database_id, &page.genre_tags)?;
+                bookshelf::store_fetched_tags_for_owner(
+                    pool,
+                    SITE_ID_FANZA,
+                    database_id,
+                    owner_id,
+                    &page.genre_tags,
+                )?;
                 outcome.fetched += 1;
             }
             Err(error @ (FanzaError::Unauthorized(_) | FanzaError::SessionExpired)) => {
@@ -713,7 +764,10 @@ mod tests {
         assert_eq!(outcome.skipped, 1);
         let (tags, fetched) = tags_of(&pool, "d_1");
         assert_eq!(tags, None, "作品ページでない HTML のタグを保存している");
-        assert_eq!(fetched, 0, "作品ページでない HTML で取得済みの印を立てている");
+        assert_eq!(
+            fetched, 0,
+            "作品ページでない HTML で取得済みの印を立てている"
+        );
         assert_eq!(
             bookshelf::pending_tag_fetch(&pool, SITE_ID_FANZA, 10).unwrap(),
             vec!["d_1".to_string()],
@@ -961,7 +1015,9 @@ mod tests {
         assert_eq!(outcome.remaining, 2);
         assert_eq!(tags_of(&pool, "d_1"), (None, 0), "失敗なのに印を立てている");
         assert_eq!(
-            bookshelf::unfetched_among(&pool, SITE_ID_FANZA, &ids).unwrap().len(),
+            bookshelf::unfetched_among(&pool, SITE_ID_FANZA, &ids)
+                .unwrap()
+                .len(),
             2,
             "失敗した作品が次回の対象から外れている"
         );

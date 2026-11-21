@@ -10,7 +10,7 @@
 //! 所有者フィルタは親を復号して求めたキー集合（[`OwnedKeys`]）で行う
 //! （`db::backup` の `OWNER_SCOPED_TABLES` と同じ流儀）。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use sqlx::Row;
 
@@ -26,6 +26,8 @@ pub const KIND_CHECKLIST: &str = "checklist";
 pub struct ThumbEntry {
     /// [`KIND_SHELF`] / [`KIND_CHECKLIST`]。
     pub kind: String,
+    /// 所有者 ID（未所属・旧データは空）。
+    pub owner_id: String,
     /// 本棚 = `{site_id}:{database_id}` / チェックリスト = 項目 id。
     pub key: String,
     /// `image/webp`（本棚）/ `image/jpeg`（チェックリスト）。
@@ -45,31 +47,33 @@ pub struct ThumbEntry {
 /// 現在の sub に帰属するキー集合（[`owned_keys`] の結果）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OwnedKeys {
-    /// 本棚（`{site_id}:{database_id}`）。
-    pub shelf: HashSet<String>,
+    /// 本棚（`{site_id}:{database_id}` → owner_id）。
+    pub shelf: HashMap<String, String>,
     /// チェックリスト（`checked_items.id`）。
     pub checklist: HashSet<String>,
+    /// 現在の所有者 ID（未ログイン・旧データは空）。
+    pub owner_id: String,
 }
 
 impl OwnedKeys {
     /// このキーを Drive へ上げてよいか。
     pub fn contains(&self, kind: &str, key: &str) -> bool {
         match kind {
-            KIND_SHELF => self.shelf.contains(key),
+            KIND_SHELF => self.shelf.contains_key(key),
             KIND_CHECKLIST => self.checklist.contains(key),
             _ => false,
         }
     }
 
-    /// 所有する全キー `(kind, key)`。
-    pub fn iter(&self) -> impl Iterator<Item = (&'static str, &str)> {
+    /// 所有する全キー `(kind, key, owner_id)`。
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, &str, &str)> {
         self.shelf
             .iter()
-            .map(|key| (KIND_SHELF, key.as_str()))
+            .map(|(key, owner)| (KIND_SHELF, key.as_str(), owner.as_str()))
             .chain(
                 self.checklist
                     .iter()
-                    .map(|key| (KIND_CHECKLIST, key.as_str())),
+                    .map(|key| (KIND_CHECKLIST, key.as_str(), self.owner_id.as_str())),
             )
     }
 }
@@ -92,18 +96,30 @@ pub fn owned_keys(
     key: &[u8; 32],
     sub: Option<&str>,
 ) -> Result<OwnedKeys, sqlx::Error> {
+    let current_owner_id = sub.map(nartik::derive_owner_id).unwrap_or_default();
     let shelf_rows = block_on(async {
-        sqlx::query("SELECT site_id, database_id, owner_sub FROM bookshelf_items")
+        sqlx::query("SELECT site_id, database_id, owner_sub, owner_id FROM bookshelf_items")
             .fetch_all(pool)
             .await
     })?;
-    let mut shelf = HashSet::new();
+    let mut shelf = HashMap::new();
     for row in shelf_rows {
         let site_id: String = row.try_get("site_id")?;
         let database_id: String = row.try_get("database_id")?;
         let blob: Option<String> = row.try_get("owner_sub")?;
-        if crate::owner::matches(key, blob.as_deref(), sub) {
-            shelf.insert(shelf_key(&site_id, &database_id));
+        let row_owner: String = row.try_get("owner_id")?;
+        let matches = if row_owner.is_empty() {
+            crate::owner::matches(key, blob.as_deref(), sub)
+        } else {
+            row_owner == current_owner_id
+        };
+        if matches {
+            let owner_id = if row_owner.is_empty() {
+                current_owner_id.clone()
+            } else {
+                row_owner
+            };
+            shelf.insert(shelf_key(&site_id, &database_id), owner_id);
         }
     }
 
@@ -121,7 +137,11 @@ pub fn owned_keys(
         }
     }
 
-    Ok(OwnedKeys { shelf, checklist })
+    Ok(OwnedKeys {
+        shelf,
+        checklist,
+        owner_id: current_owner_id,
+    })
 }
 
 /// 所有するキーの [`ThumbEntry`]（バイト列込み）。
@@ -134,8 +154,8 @@ pub fn entries_for_owner(
 ) -> Result<Vec<ThumbEntry>, sqlx::Error> {
     let rows = block_on(async {
         sqlx::query(
-            "SELECT kind, item_key, mime, width, height, sha256, bytes, source_mtime, \
-             source_size FROM thumbnail_share ORDER BY kind, item_key",
+            "SELECT kind, item_key, owner_id, mime, width, height, sha256, bytes, source_mtime, \
+             source_size FROM thumbnail_share ORDER BY kind, item_key, owner_id",
         )
         .fetch_all(pool)
         .await
@@ -144,11 +164,24 @@ pub fn entries_for_owner(
     for row in rows {
         let kind: String = row.try_get("kind")?;
         let key: String = row.try_get("item_key")?;
-        if !owned.contains(&kind, &key) {
+        let owner_id: String = row.try_get("owner_id")?;
+        let owned_by_current = match kind.as_str() {
+            KIND_SHELF => {
+                owned.shelf.contains_key(&key)
+                    && (owner_id.is_empty() || owned.shelf.get(&key) == Some(&owner_id))
+            }
+            KIND_CHECKLIST => {
+                owned.checklist.contains(&key)
+                    && (owner_id.is_empty() || owner_id == owned.owner_id)
+            }
+            _ => false,
+        };
+        if !owned_by_current {
             continue;
         }
         out.push(ThumbEntry {
             kind,
+            owner_id,
             key,
             mime: row.try_get("mime")?,
             width: row.try_get::<i64, _>("width")?.max(0) as u32,
@@ -167,10 +200,10 @@ pub fn upsert(pool: &SqlitePool, entry: &ThumbEntry) -> Result<(), sqlx::Error> 
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     block_on(async {
         sqlx::query(
-            "INSERT INTO thumbnail_share (kind, item_key, mime, width, height, sha256, bytes, \
+            "INSERT INTO thumbnail_share (kind, item_key, owner_id, mime, width, height, sha256, bytes, \
              source_mtime, source_size, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
-             ON CONFLICT(kind, item_key) DO UPDATE SET \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+             ON CONFLICT(kind, item_key, owner_id) DO UPDATE SET \
                mime = excluded.mime, width = excluded.width, height = excluded.height, \
                sha256 = excluded.sha256, bytes = excluded.bytes, \
                source_mtime = excluded.source_mtime, source_size = excluded.source_size, \
@@ -178,6 +211,7 @@ pub fn upsert(pool: &SqlitePool, entry: &ThumbEntry) -> Result<(), sqlx::Error> 
         )
         .bind(&entry.kind)
         .bind(&entry.key)
+        .bind(&entry.owner_id)
         .bind(&entry.mime)
         .bind(i64::from(entry.width))
         .bind(i64::from(entry.height))
@@ -196,8 +230,9 @@ pub fn upsert(pool: &SqlitePool, entry: &ThumbEntry) -> Result<(), sqlx::Error> 
 pub fn get(pool: &SqlitePool, kind: &str, key: &str) -> Result<Option<ThumbEntry>, sqlx::Error> {
     let row = block_on(async {
         sqlx::query(
-            "SELECT kind, item_key, mime, width, height, sha256, bytes, source_mtime, \
-             source_size FROM thumbnail_share WHERE kind = ?1 AND item_key = ?2",
+            "SELECT kind, item_key, owner_id, mime, width, height, sha256, bytes, source_mtime, \
+             source_size FROM thumbnail_share WHERE kind = ?1 AND item_key = ?2 \
+             ORDER BY owner_id LIMIT 1",
         )
         .bind(kind)
         .bind(key)
@@ -209,6 +244,7 @@ pub fn get(pool: &SqlitePool, kind: &str, key: &str) -> Result<Option<ThumbEntry
     };
     Ok(Some(ThumbEntry {
         kind: row.try_get("kind")?,
+        owner_id: row.try_get("owner_id")?,
         key: row.try_get("item_key")?,
         mime: row.try_get("mime")?,
         width: row.try_get::<i64, _>("width")?.max(0) as u32,
@@ -230,6 +266,7 @@ mod tests {
     fn shelf_entry(database_id: &str, bytes: &[u8]) -> ThumbEntry {
         ThumbEntry {
             kind: KIND_SHELF.to_string(),
+            owner_id: String::new(),
             key: shelf_key("dlsite", database_id),
             mime: "image/webp".to_string(),
             width: 256,
@@ -244,6 +281,7 @@ mod tests {
     fn checklist_entry(id: &str, bytes: &[u8]) -> ThumbEntry {
         ThumbEntry {
             kind: KIND_CHECKLIST.to_string(),
+            owner_id: String::new(),
             key: id.to_string(),
             mime: "image/jpeg".to_string(),
             width: 256,
@@ -346,18 +384,11 @@ mod tests {
         upsert(&pool, &checklist_entry("check-b", b"check")).unwrap();
 
         let owned = owned_keys(&pool, &KEY, Some("A")).unwrap();
-        assert_eq!(
-            owned.shelf,
-            ["dlsite:RJ-a".to_string()]
-                .into_iter()
-                .collect::<HashSet<_>>(),
-            "他アカウントの本棚が混ざっている"
-        );
+        assert_eq!(owned.shelf.len(), 1, "他アカウントの本棚が混ざっている");
+        assert!(owned.shelf.contains_key("dlsite:RJ-a"));
         assert_eq!(
             owned.checklist,
-            ["check-a".to_string()]
-                .into_iter()
-                .collect::<HashSet<_>>(),
+            ["check-a".to_string()].into_iter().collect::<HashSet<_>>(),
             "他アカウントのチェックリストが混ざっている"
         );
 
@@ -383,12 +414,11 @@ mod tests {
 
         let owned = owned_keys(&pool, &KEY, None).unwrap();
         assert_eq!(
-            owned.shelf,
-            ["dlsite:RJ-none".to_string()]
-                .into_iter()
-                .collect::<HashSet<_>>(),
+            owned.shelf.len(),
+            1,
             "未ログインでは未所属の行だけ（復号できない行は含めない）"
         );
+        assert!(owned.shelf.contains_key("dlsite:RJ-none"));
         assert_eq!(entries_for_owner(&pool, &owned).unwrap().len(), 1);
     }
 

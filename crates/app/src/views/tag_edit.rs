@@ -68,6 +68,7 @@ impl TagEditDialog {
             let (existing, suggestions) = {
                 let state = AppState::global(cx);
                 let db = &state.db_pool;
+                let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
                 let tags = if let Some(book_id) = self.resolve_local_book_id(db) {
                     // generated（取り込み時の自動タグ）も表示する。保存時に
                     // manual へ置き換わるが、編集画面に出さないと保存で消える。
@@ -77,7 +78,7 @@ impl TagEditDialog {
                         .map(|tag| tag.tag_name)
                         .collect::<Vec<_>>()
                 } else {
-                    bookshelf::list(db, tbf::SITE_ID_TECHBOOKFEST)
+                    bookshelf::list_for_owner(db, tbf::SITE_ID_TECHBOOKFEST, &owner_id)
                         .unwrap_or_default()
                         .iter()
                         .find(|item| item.database_id == self.book_id)
@@ -136,12 +137,19 @@ impl TagEditDialog {
         {
             let state = AppState::global(cx);
             let db = &state.db_pool;
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
             if let Some(book_id) = self.resolve_local_book_id(db) {
                 let tag_pairs: Vec<(&str, &str)> =
                     tags.iter().map(|tag| (tag.as_str(), "manual")).collect();
                 let _ = db::tags::set_for_book(db, &book_id, &tag_pairs);
             } else {
-                let _ = bookshelf::update_tags(db, tbf::SITE_ID_TECHBOOKFEST, &self.book_id, &tags);
+                let _ = bookshelf::update_tags_for_owner(
+                    db,
+                    tbf::SITE_ID_TECHBOOKFEST,
+                    &self.book_id,
+                    &owner_id,
+                    &tags,
+                );
             }
         }
     }

@@ -72,10 +72,20 @@ fn ensure_event(
 ///
 /// `owner` は暗号化済み sub（ログイン中のみ `Some`）。書き込んだ行に所有者を
 /// 付ける（Drive バックアップを現在のアカウントに絞るため）。
+/// 既存 API（テスト・呼び出し互換）。所有者 ID は空で保存する。
 pub fn save_bookshelf(
     pool: &SqlitePool,
     items: &[TbfShelfItem],
     owner: Option<&str>,
+) -> Result<usize, sqlx::Error> {
+    save_bookshelf_with_owner(pool, items, owner, None)
+}
+
+pub fn save_bookshelf_with_owner(
+    pool: &SqlitePool,
+    items: &[TbfShelfItem],
+    owner: Option<&str>,
+    owner_id: Option<&str>,
 ) -> Result<usize, sqlx::Error> {
     let timestamp = now();
     for item in items {
@@ -86,7 +96,7 @@ pub fn save_bookshelf(
             .tags
             .as_ref()
             .and_then(|tags| serde_json::to_string(tags).ok());
-        bookshelf::upsert(
+        bookshelf::upsert_for_owner(
             pool,
             &bookshelf::BookshelfItem {
                 site_id: SITE_ID_TECHBOOKFEST.into(),
@@ -132,9 +142,10 @@ pub fn save_bookshelf(
                 age_rating: None,
                 series_name: None,
             },
+            owner_id.unwrap_or(""),
         )?;
     }
-    bookshelf::attribute_owner(pool, SITE_ID_TECHBOOKFEST, owner)?;
+    bookshelf::attribute_owner_with_id(pool, SITE_ID_TECHBOOKFEST, owner, owner_id)?;
     Ok(items.len())
 }
 
