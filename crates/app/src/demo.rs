@@ -1026,8 +1026,9 @@ fn event() -> TbfEvent {
 
 /// チェックリストの項目（`checked_items`）。
 fn seed_checklist(pool: &SqlitePool, owner: Option<&str>) -> anyhow::Result<()> {
+    let owner_id = nartik::derive_owner_id(DEMO_OWNER_SUB);
     for (index, (id, circle, space, title, checked)) in CHECKLIST.iter().enumerate() {
-        db::checklist::upsert_item(
+        db::checklist::upsert_item_for_owner(
             pool,
             &CheckedItem {
                 id: (*id).to_string(),
@@ -1048,9 +1049,10 @@ fn seed_checklist(pool: &SqlitePool, owner: Option<&str>) -> anyhow::Result<()> 
                 sample_fetch_attempted_at: None,
                 created_at: PURCHASED_AT.to_string(),
             },
+            &owner_id,
         )?;
     }
-    db::checklist::attribute_owner(pool, EVENT_ID, owner)?;
+    db::checklist::attribute_owner_with_id(pool, EVENT_ID, owner, Some(&owner_id))?;
     Ok(())
 }
 
@@ -1984,9 +1986,14 @@ mod tests {
             .sum();
         let history = db::view_history::list_daily(pool).unwrap().len();
         let events = db::checklist::list_events(pool).unwrap();
+        let demo_owner = nartik::derive_owner_id(DEMO_OWNER_SUB);
         let checklist: usize = events
             .iter()
-            .map(|event| db::checklist::list_items(pool, &event.id).unwrap().len())
+            .map(|event| {
+                db::checklist::list_items_for_owner(pool, &event.id, &demo_owner)
+                    .unwrap()
+                    .len()
+            })
             .sum();
         let circles = db::favorites::list_favorites(pool, db::favorites::EntityKind::Circle)
             .unwrap()
@@ -2161,7 +2168,12 @@ mod tests {
         let events = db::checklist::list_events(&pool).unwrap();
         assert_eq!(events.len(), 1, "イベントの数が違う");
         assert_eq!(events[0].site_id, SITE_ID_TECHBOOKFEST);
-        let items = db::checklist::list_items(&pool, &events[0].id).unwrap();
+        let items = db::checklist::list_items_for_owner(
+            &pool,
+            &events[0].id,
+            &nartik::derive_owner_id(DEMO_OWNER_SUB),
+        )
+        .unwrap();
         assert_eq!(
             events[0].slug.as_deref(),
             Some("tbf21"),

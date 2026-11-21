@@ -239,6 +239,149 @@ async fn migrate_owner_aware_shelf(conn: &mut sqlx::SqliteConnection) -> Result<
     result
 }
 
+/// 既存の `checked_items` / `product_sample_pages` を owner 込みの PK へ作り替える。
+///
+/// 技術書典の項目 ID はアカウント間で同じため、`id` 単独の PK では 2 アカウント目が
+/// 同じ項目を持てない。`checked_items` は `(id, owner_id)`、試し読みは
+/// `(checklist_item_id, owner_id)` の複合 FK にする。
+async fn migrate_owner_aware_checklist(
+    conn: &mut sqlx::SqliteConnection,
+) -> Result<(), sqlx::Error> {
+    let has_item_owner = has_column(&mut *conn, "checked_items", "owner_id").await?;
+    let has_sample_owner = has_column(&mut *conn, "product_sample_pages", "owner_id").await?;
+    if has_item_owner && has_sample_owner {
+        return Ok(());
+    }
+
+    let fk_enabled: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+        .fetch_one(&mut *conn)
+        .await?;
+    if fk_enabled != 0 {
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await?;
+    }
+
+    let result = async {
+        let mut tx = conn.begin().await?;
+        if !has_item_owner {
+            sqlx::query("ALTER TABLE checked_items RENAME TO checked_items_old")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                "CREATE TABLE checked_items (
+                  id TEXT NOT NULL,
+                  event_id TEXT NOT NULL REFERENCES tbf_events(id),
+                  circle_name TEXT NOT NULL,
+                  space_number TEXT NOT NULL DEFAULT '',
+                  memo TEXT NOT NULL DEFAULT '',
+                  is_checked INTEGER NOT NULL DEFAULT 0,
+                  sort_order INTEGER NOT NULL DEFAULT 0,
+                  tbf_circle_id TEXT,
+                  product_id TEXT,
+                  product_title TEXT NOT NULL DEFAULT '',
+                  thumbnail_url TEXT,
+                  thumbnail_data TEXT,
+                  price INTEGER,
+                  is_purchased INTEGER NOT NULL DEFAULT 0,
+                  sample_fetch_attempted_at TEXT,
+                  createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  first_appearance_event_name TEXT,
+                  owner_sub TEXT,
+                  owner_id TEXT NOT NULL DEFAULT '',
+                  PRIMARY KEY (id, owner_id)
+                )",
+            )
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO checked_items (
+                  id, event_id, circle_name, space_number, memo, is_checked, sort_order,
+                  tbf_circle_id, product_id, product_title, thumbnail_url, thumbnail_data,
+                  price, is_purchased, sample_fetch_attempted_at, createdAt,
+                  first_appearance_event_name, owner_sub
+                ) SELECT
+                  id, event_id, circle_name, space_number, memo, is_checked, sort_order,
+                  tbf_circle_id, product_id, product_title, thumbnail_url, thumbnail_data,
+                  price, is_purchased, sample_fetch_attempted_at, createdAt,
+                  first_appearance_event_name, owner_sub
+                FROM checked_items_old",
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        if !has_sample_owner {
+            sqlx::query("ALTER TABLE product_sample_pages RENAME TO product_sample_pages_old")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                "CREATE TABLE product_sample_pages (
+                  id TEXT PRIMARY KEY,
+                  checklist_item_id TEXT NOT NULL,
+                  owner_id TEXT NOT NULL DEFAULT '',
+                  product_id TEXT,
+                  page_number INTEGER NOT NULL,
+                  image_url TEXT,
+                  image_data TEXT,
+                  mime_type TEXT NOT NULL DEFAULT 'image/jpeg',
+                  width INTEGER,
+                  height INTEGER,
+                  file_size INTEGER,
+                  pack_id TEXT,
+                  pack_entry_path TEXT,
+                  fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                  FOREIGN KEY (checklist_item_id, owner_id)
+                    REFERENCES checked_items(id, owner_id)
+                )",
+            )
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO product_sample_pages (
+                  id, checklist_item_id, owner_id, product_id, page_number, image_url,
+                  image_data, mime_type, width, height, file_size, pack_id, pack_entry_path,
+                  fetched_at, created_at
+                ) SELECT
+                  p.id, p.checklist_item_id, COALESCE(c.owner_id, ''),
+                  p.product_id, p.page_number, p.image_url, p.image_data, p.mime_type,
+                  p.width, p.height, p.file_size, p.pack_id, p.pack_entry_path,
+                  p.fetched_at, p.created_at
+                FROM product_sample_pages_old p
+                LEFT JOIN checked_items c ON c.id = p.checklist_item_id",
+            )
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("DROP TABLE product_sample_pages_old")
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        if !has_item_owner {
+            sqlx::query("DROP TABLE checked_items_old")
+                .execute(&mut *tx)
+                .await?;
+        }
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS checked_items_owner_id_idx \
+             ON checked_items(owner_id, event_id)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok::<(), sqlx::Error>(())
+    }
+    .await;
+
+    if fk_enabled != 0 {
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&mut *conn)
+            .await?;
+    }
+    result
+}
+
 async fn ensure_column(
     conn: &mut sqlx::SqliteConnection,
     table: &str,
@@ -654,6 +797,15 @@ pub fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS bookshelf_items_owner_id_idx \
              ON bookshelf_items(owner_id)",
+        )
+        .execute(&mut *conn)
+        .await?;
+        // 複数アカウント対応: 技術書典のチェックリストも owner ごとに持てるよう、
+        // `checked_items` の PK と試し読みの FK を作り替える。
+        migrate_owner_aware_checklist(&mut conn).await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS checked_items_owner_id_idx \
+             ON checked_items(owner_id, event_id)",
         )
         .execute(&mut *conn)
         .await?;

@@ -757,7 +757,7 @@ Web は OS keyring を持たないので、`ligrol-keys.json`（同じフォル�
 | kind | entry のキー | 結合先 |
 |---|---|---|
 | `shelf` | `site_id` + `database_id` | `bookshelf_items` の論理キー（owner で絞ったバックアップ内では `site_id` + `database_id` が一意。DB の PK は `owner_id` を含む 3 列） |
-| `checklist` | `item_id` | `checked_items.id` |
+| `checklist` | `item_id` | `checked_items.id`（owner は封筒側） |
 
 形の例（`data` は実際には base64 の画像。ここでは省略）:
 

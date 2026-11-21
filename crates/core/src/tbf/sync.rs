@@ -214,15 +214,26 @@ pub fn save_checklist(
     entries: &[TbfChecklistEntry],
     owner: Option<&str>,
 ) -> Result<usize, sqlx::Error> {
+    save_checklist_with_owner(pool, event_slug, entries, owner, None)
+}
+
+pub fn save_checklist_with_owner(
+    pool: &SqlitePool,
+    event_slug: &str,
+    entries: &[TbfChecklistEntry],
+    owner: Option<&str>,
+    owner_id: Option<&str>,
+) -> Result<usize, sqlx::Error> {
+    let owner_id = owner_id.unwrap_or("");
     ensure_event(pool, event_slug, None)?;
     let timestamp = now();
     // このイベントの同期に含まれない既存行を削除する（イベントごとの
     // チェックリストを完全な状態にする。Web の markMissingRowsInactive 相当。
-    // 試し読みページは FK で紐付くため一緒に消す）。
-    for existing in crate::db::checklist::list_items(pool, event_slug)? {
+    // 試し読みページは FK で紐付くため一緒に消す）。**現在の owner の行だけ**。
+    for existing in crate::db::checklist::list_items_for_owner(pool, event_slug, owner_id)? {
         if !entries.iter().any(|entry| entry.id == existing.id) {
-            let _ = crate::db::samples::delete_for_item(pool, &existing.id);
-            let _ = crate::db::checklist::delete_item(pool, &existing.id);
+            let _ = crate::db::samples::delete_for_item_for_owner(pool, &existing.id, owner_id);
+            let _ = crate::db::checklist::delete_item_for_owner(pool, &existing.id, owner_id);
         }
     }
     for (index, entry) in entries.iter().enumerate() {
@@ -230,7 +241,7 @@ pub fn save_checklist(
             Some(product_id) => format!("product:{product_id} {}", entry.product_title),
             None => String::new(),
         };
-        checklist::upsert_item(
+        checklist::upsert_item_for_owner(
             pool,
             &checklist::CheckedItem {
                 id: entry.id.clone(),
@@ -254,9 +265,10 @@ pub fn save_checklist(
                     .clone()
                     .unwrap_or_else(|| timestamp.clone()),
             },
+            owner_id,
         )?;
     }
-    checklist::attribute_owner(pool, event_slug, owner)?;
+    checklist::attribute_owner_with_id(pool, event_slug, owner, Some(owner_id))?;
     Ok(entries.len())
 }
 
@@ -302,14 +314,27 @@ pub fn refresh_checklist(
     event_slug: &str,
     owner: Option<&str>,
 ) -> Result<SyncPollOutcome, String> {
+    refresh_checklist_with_owner(db, client, event_slug, owner, None)
+}
+
+pub fn refresh_checklist_with_owner(
+    db: &SqlitePool,
+    client: &mut TbfClient,
+    event_slug: &str,
+    owner: Option<&str>,
+    owner_id: Option<&str>,
+) -> Result<SyncPollOutcome, String> {
+    let owner_id = owner_id.unwrap_or("");
     let before_events = checklist::list_events(db).map_err(|e| e.to_string())?;
-    let before_items = checklist::list_items(db, event_slug).map_err(|e| e.to_string())?;
+    let before_items =
+        checklist::list_items_for_owner(db, event_slug, owner_id).map_err(|e| e.to_string())?;
 
     let events = client.events().map_err(|e| e.to_string())?;
     let entries = client.checklist(event_slug).map_err(|e| e.to_string())?;
 
     save_events(db, &events).map_err(|e| e.to_string())?;
-    save_checklist(db, event_slug, &entries, owner).map_err(|e| e.to_string())?;
+    save_checklist_with_owner(db, event_slug, &entries, owner, Some(owner_id))
+        .map_err(|e| e.to_string())?;
 
     let _ = crate::db::settings::set(
         db,
@@ -318,7 +343,8 @@ pub fn refresh_checklist(
     );
 
     let after_events = checklist::list_events(db).map_err(|e| e.to_string())?;
-    let after_items = checklist::list_items(db, event_slug).map_err(|e| e.to_string())?;
+    let after_items =
+        checklist::list_items_for_owner(db, event_slug, owner_id).map_err(|e| e.to_string())?;
 
     let changed = event_signature(&before_events) != event_signature(&after_events)
         || item_signature(&before_items) != item_signature(&after_items);

@@ -188,25 +188,29 @@ fn owner_matches(filter: &OwnerFilter<'_>, blob: Option<&str>) -> bool {
     crate::owner::matches(filter.key, blob, filter.sub)
 }
 
-/// 現在の owner に属する `checked_items.id`。
-///
-/// `owner_sub` を持たない子テーブル（`product_sample_pages`）の所有者判定に使う。
-/// `checked_items.owner_sub` は毎回 IV が変わる暗号文なので SQL では比較できず、
-/// 復号して id 集合を作る（`books` の所有者を呼び出し側が復号して `book_ids` を
-/// 渡すのと同じ流儀）。`product_sample_pages` は `owner_sub` も `book_id` も
-/// 持たないため、この集合へ `checklist_item_id` が入る行だけを出す。
+/// 現在の owner に属する `checked_items.id`（旧 owner_id 空行の救済付き）。
 async fn owner_checked_item_ids(
     conn: &mut sqlx::SqliteConnection,
     owner: &OwnerFilter<'_>,
 ) -> Result<Vec<String>, sqlx::Error> {
-    let rows = sqlx::query("SELECT id, owner_sub FROM checked_items")
+    let current = owner
+        .sub
+        .map(nartik::derive_owner_id)
+        .unwrap_or_default();
+    let rows = sqlx::query("SELECT id, owner_sub, owner_id FROM checked_items")
         .fetch_all(&mut *conn)
         .await?;
     let mut ids = Vec::new();
     for row in rows {
         let id: String = row.try_get("id")?;
         let blob: Option<String> = row.try_get("owner_sub")?;
-        if owner_matches(owner, blob.as_deref()) {
+        let row_owner: String = row.try_get("owner_id")?;
+        let matches = if row_owner.is_empty() {
+            owner_matches(owner, blob.as_deref())
+        } else {
+            row_owner == current
+        };
+        if matches {
             ids.push(id);
         }
     }
@@ -685,7 +689,7 @@ fn pk_columns(table: &str) -> Option<&'static [&'static str]> {
     Some(match table {
         "books" => &["id"],
         "bookshelf_items" => &["site_id", "database_id", "owner_id"],
-        "checked_items" => &["id"],
+        "checked_items" => &["id", "owner_id"],
         "product_sample_pages" => &["id"],
         "tbf_events" => &["id"],
         "book_contents" => &["content_id"],
@@ -765,8 +769,20 @@ async fn table_rows(
         && table == "product_sample_pages"
         && let Some(filter) = owner
     {
+        let owner_id = filter
+            .sub
+            .map(nartik::derive_owner_id)
+            .unwrap_or_default();
         let ids = owner_checked_item_ids(&mut *conn, filter).await?;
-        where_sql = " WHERE checklist_item_id IN (SELECT value FROM json_each(?))".into();
+        where_sql = if owner_id.is_empty() {
+            " WHERE owner_id = '' AND checklist_item_id IN (SELECT value FROM json_each(?))"
+                .to_string()
+        } else {
+            format!(
+                " WHERE owner_id = '{owner_id}' OR (owner_id = '' AND \
+                   checklist_item_id IN (SELECT value FROM json_each(?)))"
+            )
+        };
         bind_json = Some(serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into()));
     }
     // 行の並びを PK 順に固定する。物理順（挿入順・索引の選択）に依存すると、

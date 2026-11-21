@@ -4,8 +4,15 @@
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-11-22
+
 ### Fixed
 
+- **Google アカウントを切り替えるとチェックリストが欠ける問題**: 技術書典の項目 ID は
+  アカウント間で同じため、`checked_items` の `id` 単独 PK では 2 アカウント目が
+  同じ項目を持てなかった。PK を `(id, owner_id)` にし、試し読みページも
+  `(checklist_item_id, owner_id)` で分離した。Web 側の移行手順は
+  `docs/web-owner-scoped-checklist.md` に記載。
 - **Web でチェックリストの表紙が出ない問題**: `ligrol-backup.json` の除外列から
   `checked_items.thumbnail_data` を外し、デスクトップが取得済みの 256px JPEG を
   バックアップに含めるようにした。チェックリスト同期時に未取得のサムネイルを

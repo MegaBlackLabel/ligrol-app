@@ -658,10 +658,14 @@ impl Workspace {
             loop {
                 // 所有者（現在の Google アカウント）は周期ごとに読み直す
                 // （ログイン/ログアウトが次の周期から反映される）。
-                let owner = {
+                let (owner, owner_id) = {
                     let profile = google_profile.lock().clone();
-                    crate::app_state::owner_token_from(profile.as_ref(), &secrets)
+                    (
+                        crate::app_state::owner_token_from(profile.as_ref(), &secrets),
+                        profile.map(|profile| nartik::derive_owner_id(&profile.sub)),
+                    )
                 };
+                let owner_id_for_poll = owner_id.clone();
                 let db_for_poll = db.clone();
                 let tbf_client_for_poll = tbf_client.clone();
                 let tbf_logged_in_for_poll = tbf_logged_in.clone();
@@ -688,11 +692,12 @@ impl Workspace {
                     {
                         let mut client = tbf_client_for_poll.lock();
                         for slug in &enabled {
-                            match tbf::sync::refresh_checklist(
+                            match tbf::sync::refresh_checklist_with_owner(
                                 &db_for_poll,
                                 &mut client,
                                 slug,
                                 owner.as_deref(),
+                                owner_id_for_poll.as_deref(),
                             ) {
                                 Ok(outcome) => {
                                     if outcome.changed {
@@ -710,8 +715,11 @@ impl Workspace {
                     }
                     // Web のチェックリスト表紙（ligrol-backup.json の thumbnail_data）用。
                     // 画面を開かなくても次の Drive 同期までに埋める。失敗分は次回に回る。
-                    let fetched_thumbnails =
-                        crate::views::checklist::backfill_missing_thumbnails(&db_for_poll, 500);
+                    let fetched_thumbnails = crate::views::checklist::backfill_missing_thumbnails(
+                        &db_for_poll,
+                        owner_id_for_poll.as_deref().unwrap_or(""),
+                        500,
+                    );
                     (
                         interval_min,
                         any_changed,

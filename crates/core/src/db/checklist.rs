@@ -1,6 +1,7 @@
 //! `tbf_events` / `checked_items` repository (チェックリスト).
 
 use crate::db::SqlitePool;
+use sqlx::Row;
 
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct TbfEvent {
@@ -156,13 +157,23 @@ pub fn list_enabled_slugs(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error>
 }
 
 pub fn upsert_item(pool: &SqlitePool, item: &CheckedItem) -> Result<(), sqlx::Error> {
+    upsert_item_for_owner(pool, item, "")
+}
+
+/// 所有者を明示してチェックリスト項目を upsert する。
+pub fn upsert_item_for_owner(
+    pool: &SqlitePool,
+    item: &CheckedItem,
+    owner_id: &str,
+) -> Result<(), sqlx::Error> {
     crate::db::block_on(async {
         sqlx::query(
-            "INSERT INTO checked_items (id, event_id, circle_name, space_number, memo, is_checked, \
-             sort_order, tbf_circle_id, product_id, product_title, thumbnail_url, thumbnail_data, \
-             price, is_purchased, first_appearance_event_name, sample_fetch_attempted_at, createdAt)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
-             ON CONFLICT(id) DO UPDATE SET
+            "INSERT INTO checked_items (id, owner_id, event_id, circle_name, space_number, memo, \
+             is_checked, sort_order, tbf_circle_id, product_id, product_title, thumbnail_url, \
+             thumbnail_data, price, is_purchased, first_appearance_event_name, \
+             sample_fetch_attempted_at, createdAt)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+             ON CONFLICT(id, owner_id) DO UPDATE SET
                event_id = excluded.event_id,
                circle_name = excluded.circle_name,
                space_number = excluded.space_number,
@@ -180,6 +191,7 @@ pub fn upsert_item(pool: &SqlitePool, item: &CheckedItem) -> Result<(), sqlx::Er
                sample_fetch_attempted_at = excluded.sample_fetch_attempted_at",
         )
         .bind(&item.id)
+        .bind(owner_id)
         .bind(&item.event_id)
         .bind(&item.circle_name)
         .bind(&item.space_number)
@@ -211,15 +223,32 @@ pub fn attribute_owner(
     event_id: &str,
     owner: Option<&str>,
 ) -> Result<u64, sqlx::Error> {
+    attribute_owner_with_id(pool, event_id, owner, None)
+}
+
+/// owner_sub と owner_id を同時に付ける。同じ id の現所有者行が既にある場合は
+/// owner_id を移さない（PK 衝突を避け、旧行は未所属のまま非表示に残す）。
+pub fn attribute_owner_with_id(
+    pool: &SqlitePool,
+    event_id: &str,
+    owner: Option<&str>,
+    owner_id: Option<&str>,
+) -> Result<u64, sqlx::Error> {
     let Some(owner) = owner else {
         return Ok(0);
     };
     crate::db::block_on(async {
         let result = sqlx::query(
-            "UPDATE checked_items SET owner_sub = ?1 \
-             WHERE event_id = ?2 AND owner_sub IS NULL",
+            "UPDATE checked_items AS old SET owner_sub = ?1, \
+               owner_id = CASE \
+                 WHEN ?2 <> '' AND old.owner_id = '' AND NOT EXISTS ( \
+                   SELECT 1 FROM checked_items AS current \
+                   WHERE current.id = old.id AND current.owner_id = ?2 \
+                 ) THEN ?2 ELSE old.owner_id END \
+             WHERE old.event_id = ?3 AND old.owner_sub IS NULL",
         )
         .bind(owner)
+        .bind(owner_id.unwrap_or(""))
         .bind(event_id)
         .execute(pool)
         .await?;
@@ -227,25 +256,105 @@ pub fn attribute_owner(
     })
 }
 
+/// 既存行の `owner_sub`（暗号文）から `owner_id` を埋める。
+///
+/// `checked_items` の後、試し読みページの `owner_id` を親に合わせる。FK を壊さない
+/// よう、コミット時まで検査を遅らせる。復号できない行は空のまま残す。
+pub fn backfill_owner_ids(pool: &SqlitePool, key: &[u8; 32]) -> Result<u64, sqlx::Error> {
+    crate::db::block_on(async {
+        let mut tx = pool.begin().await?;
+        sqlx::query("PRAGMA defer_foreign_keys = ON")
+            .execute(&mut *tx)
+            .await?;
+        let rows = sqlx::query(
+            "SELECT id, owner_sub FROM checked_items \
+             WHERE owner_id = '' AND owner_sub IS NOT NULL",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut updated = 0u64;
+        for row in rows {
+            let id: String = row.try_get("id")?;
+            let stored: Option<String> = row.try_get("owner_sub")?;
+            let Some(sub) = stored
+                .as_deref()
+                .and_then(|value| crate::owner::decrypt(key, value))
+            else {
+                continue;
+            };
+            let owner_id = nartik::derive_owner_id(&sub);
+            let affected = sqlx::query(
+                "UPDATE checked_items SET owner_id = ?1 \
+                 WHERE id = ?2 AND owner_id = '' \
+                   AND NOT EXISTS ( \
+                     SELECT 1 FROM checked_items AS current \
+                     WHERE current.id = ?2 AND current.owner_id = ?1 \
+                   )",
+            )
+            .bind(&owner_id)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            updated += affected;
+            if affected > 0 {
+                updated += sqlx::query(
+                    "UPDATE product_sample_pages SET owner_id = ?1 \
+                     WHERE checklist_item_id = ?2 AND owner_id = ''",
+                )
+                .bind(&owner_id)
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+            }
+        }
+        tx.commit().await?;
+        Ok(updated)
+    })
+}
+
 pub fn list_items(pool: &SqlitePool, event_id: &str) -> Result<Vec<CheckedItem>, sqlx::Error> {
+    list_items_for_owner(pool, event_id, "")
+}
+
+/// 所有者を明示してイベントのチェックリストを返す。
+pub fn list_items_for_owner(
+    pool: &SqlitePool,
+    event_id: &str,
+    owner_id: &str,
+) -> Result<Vec<CheckedItem>, sqlx::Error> {
     crate::db::block_on(async {
         sqlx::query_as::<_, CheckedItem>(
             "SELECT id, event_id, circle_name, space_number, memo, is_checked, sort_order, \
              tbf_circle_id, product_id, product_title, thumbnail_url, thumbnail_data, price, \
              is_purchased, first_appearance_event_name, sample_fetch_attempted_at, createdAt \
-             FROM checked_items WHERE event_id = ?1 ORDER BY sort_order, circle_name",
+             FROM checked_items WHERE event_id = ?1 AND owner_id = ?2 \
+             ORDER BY sort_order, circle_name",
         )
         .bind(event_id)
+        .bind(owner_id)
         .fetch_all(pool)
         .await
     })
 }
 
 pub fn set_checked(pool: &SqlitePool, item_id: &str, checked: bool) -> Result<(), sqlx::Error> {
+    set_checked_for_owner(pool, item_id, "", checked)
+}
+
+/// 所有者を明示してチェック状態を更新する。
+pub fn set_checked_for_owner(
+    pool: &SqlitePool,
+    item_id: &str,
+    owner_id: &str,
+    checked: bool,
+) -> Result<(), sqlx::Error> {
     crate::db::block_on(async {
-        sqlx::query("UPDATE checked_items SET is_checked = ?1 WHERE id = ?2")
+        sqlx::query("UPDATE checked_items SET is_checked = ?1 WHERE id = ?2 AND owner_id = ?3")
             .bind(checked as i64)
             .bind(item_id)
+            .bind(owner_id)
             .execute(pool)
             .await?;
         Ok(())
@@ -261,6 +370,15 @@ pub fn thumbnails_of(
     pool: &SqlitePool,
     ids: &[String],
 ) -> Result<Vec<(String, String)>, sqlx::Error> {
+    thumbnails_of_for_owner(pool, "", ids)
+}
+
+/// 所有者を明示して、指定 id のサムネイルを返す。
+pub fn thumbnails_of_for_owner(
+    pool: &SqlitePool,
+    owner_id: &str,
+    ids: &[String],
+) -> Result<Vec<(String, String)>, sqlx::Error> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -268,8 +386,10 @@ pub fn thumbnails_of(
     crate::db::block_on(async {
         let rows = sqlx::query_as::<_, (String, String)>(
             "SELECT id, thumbnail_data FROM checked_items \
-             WHERE thumbnail_data IS NOT NULL AND id IN (SELECT value FROM json_each(?1))",
+             WHERE owner_id = ?1 AND thumbnail_data IS NOT NULL \
+               AND id IN (SELECT value FROM json_each(?2))",
         )
+        .bind(owner_id)
         .bind(json)
         .fetch_all(pool)
         .await?;
@@ -278,20 +398,28 @@ pub fn thumbnails_of(
 }
 
 /// サムネイル未保存（`thumbnail_data` が空）で、取得先 URL がある項目。
-///
-/// チェックリスト同期後のバックフィル（Web の表紙用）と、表示時の取得が使う。
 pub fn missing_thumbnail_items(
     pool: &SqlitePool,
+    limit: usize,
+) -> Result<Vec<(String, String)>, sqlx::Error> {
+    missing_thumbnail_items_for_owner(pool, "", limit)
+}
+
+/// 所有者を明示して、未取得サムネイルの (id, url) を返す。
+pub fn missing_thumbnail_items_for_owner(
+    pool: &SqlitePool,
+    owner_id: &str,
     limit: usize,
 ) -> Result<Vec<(String, String)>, sqlx::Error> {
     crate::db::block_on(async {
         sqlx::query_as::<_, (String, String)>(
             "SELECT id, thumbnail_url FROM checked_items \
-             WHERE (thumbnail_data IS NULL OR thumbnail_data = '') \
+             WHERE owner_id = ?1 AND (thumbnail_data IS NULL OR thumbnail_data = '') \
                AND thumbnail_url IS NOT NULL AND thumbnail_url <> '' \
              ORDER BY event_id, sort_order, circle_name \
-             LIMIT ?1",
+             LIMIT ?2",
         )
+        .bind(owner_id)
         .bind(limit as i64)
         .fetch_all(pool)
         .await
@@ -304,21 +432,44 @@ pub fn update_thumbnail_data(
     item_id: &str,
     thumbnail_data: &str,
 ) -> Result<(), sqlx::Error> {
+    update_thumbnail_data_for_owner(pool, item_id, "", thumbnail_data)
+}
+
+/// 所有者を明示してサムネイルを保存する。
+pub fn update_thumbnail_data_for_owner(
+    pool: &SqlitePool,
+    item_id: &str,
+    owner_id: &str,
+    thumbnail_data: &str,
+) -> Result<(), sqlx::Error> {
     crate::db::block_on(async {
-        sqlx::query("UPDATE checked_items SET thumbnail_data = ?1 WHERE id = ?2")
-            .bind(thumbnail_data)
-            .bind(item_id)
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            "UPDATE checked_items SET thumbnail_data = ?1 WHERE id = ?2 AND owner_id = ?3",
+        )
+        .bind(thumbnail_data)
+        .bind(item_id)
+        .bind(owner_id)
+        .execute(pool)
+        .await?;
         Ok(())
     })
 }
 
 /// チェックリスト項目を削除する。
 pub fn delete_item(pool: &SqlitePool, item_id: &str) -> Result<(), sqlx::Error> {
+    delete_item_for_owner(pool, item_id, "")
+}
+
+/// 所有者を明示して削除する。
+pub fn delete_item_for_owner(
+    pool: &SqlitePool,
+    item_id: &str,
+    owner_id: &str,
+) -> Result<(), sqlx::Error> {
     crate::db::block_on(async {
-        sqlx::query("DELETE FROM checked_items WHERE id = ?1")
+        sqlx::query("DELETE FROM checked_items WHERE id = ?1 AND owner_id = ?2")
             .bind(item_id)
+            .bind(owner_id)
             .execute(pool)
             .await?;
         Ok(())
@@ -326,14 +477,24 @@ pub fn delete_item(pool: &SqlitePool, item_id: &str) -> Result<(), sqlx::Error> 
 }
 
 pub fn get_item(pool: &SqlitePool, item_id: &str) -> Result<Option<CheckedItem>, sqlx::Error> {
+    get_item_for_owner(pool, item_id, "")
+}
+
+/// 所有者を明示して 1 件取得する。
+pub fn get_item_for_owner(
+    pool: &SqlitePool,
+    item_id: &str,
+    owner_id: &str,
+) -> Result<Option<CheckedItem>, sqlx::Error> {
     crate::db::block_on(async {
         sqlx::query_as::<_, CheckedItem>(
             "SELECT id, event_id, circle_name, space_number, memo, is_checked, sort_order, \
              tbf_circle_id, product_id, product_title, thumbnail_url, thumbnail_data, price, \
              is_purchased, first_appearance_event_name, sample_fetch_attempted_at, createdAt \
-             FROM checked_items WHERE id = ?1",
+             FROM checked_items WHERE id = ?1 AND owner_id = ?2",
         )
         .bind(item_id)
+        .bind(owner_id)
         .fetch_optional(pool)
         .await
     })
@@ -461,6 +622,88 @@ mod tests {
         assert_eq!(
             stored.thumbnail_url.as_deref(),
             Some("https://example.com/img2.png")
+        );
+    }
+
+    /// 同じ技術書典の項目 ID を 2 アカウントが持てる（PK は id + owner_id）。
+    #[test]
+    fn the_same_checklist_item_id_coexists_per_owner() {
+        let pool = crate::db::test_pool();
+        upsert_event(&pool, &event("tbf21")).unwrap();
+        let owner_a = nartik::derive_owner_id("A");
+        let owner_b = nartik::derive_owner_id("B");
+        let item = CheckedItem {
+            id: "tbf21:same".into(),
+            event_id: "tbf21".into(),
+            circle_name: "サークル".into(),
+            space_number: "あ-01".into(),
+            memo: String::new(),
+            is_checked: 0,
+            sort_order: 0,
+            tbf_circle_id: None,
+            product_id: Some("p1".into()),
+            product_title: "本".into(),
+            thumbnail_url: None,
+            thumbnail_data: None,
+            price: None,
+            is_purchased: 0,
+            first_appearance_event_name: None,
+            sample_fetch_attempted_at: None,
+            created_at: "2026-01-01 00:00:00".into(),
+        };
+        upsert_item_for_owner(&pool, &item, &owner_a).unwrap();
+        upsert_item_for_owner(&pool, &item, &owner_b).unwrap();
+
+        assert_eq!(list_items_for_owner(&pool, "tbf21", &owner_a).unwrap().len(), 1);
+        assert_eq!(list_items_for_owner(&pool, "tbf21", &owner_b).unwrap().len(), 1);
+        set_checked_for_owner(&pool, "tbf21:same", &owner_a, true).unwrap();
+        assert_eq!(
+            get_item_for_owner(&pool, "tbf21:same", &owner_a)
+                .unwrap()
+                .unwrap()
+                .is_checked,
+            1
+        );
+        assert_eq!(
+            get_item_for_owner(&pool, "tbf21:same", &owner_b)
+                .unwrap()
+                .unwrap()
+                .is_checked,
+            0
+        );
+
+        // 試し読みも (checklist_item_id, owner_id) で分かれる。
+        for (id, owner) in [("sample-a", &owner_a), ("sample-b", &owner_b)] {
+            crate::db::samples::insert_sample_page_for_owner(
+                &pool,
+                &crate::db::samples::SamplePageRow {
+                    id: id.into(),
+                    checklist_item_id: "tbf21:same".into(),
+                    product_id: Some("p1".into()),
+                    page_number: 1,
+                    image_url: None,
+                    image_data: Some("eA==".into()),
+                    mime_type: "image/jpeg".into(),
+                    width: Some(1),
+                    height: Some(1),
+                    file_size: Some(1),
+                    fetched_at: "2026-01-01T00:00:00Z".into(),
+                },
+                owner,
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            crate::db::samples::list_for_item_for_owner(&pool, "tbf21:same", &owner_a)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            crate::db::samples::list_for_item_for_owner(&pool, "tbf21:same", &owner_b)
+                .unwrap()
+                .len(),
+            1
         );
     }
 

@@ -124,7 +124,7 @@ pub fn owned_keys(
     }
 
     let checklist_rows = block_on(async {
-        sqlx::query("SELECT id, owner_sub FROM checked_items")
+        sqlx::query("SELECT id, owner_sub, owner_id FROM checked_items")
             .fetch_all(pool)
             .await
     })?;
@@ -132,7 +132,13 @@ pub fn owned_keys(
     for row in checklist_rows {
         let id: String = row.try_get("id")?;
         let blob: Option<String> = row.try_get("owner_sub")?;
-        if crate::owner::matches(key, blob.as_deref(), sub) {
+        let row_owner: String = row.try_get("owner_id")?;
+        let matches = if row_owner.is_empty() {
+            crate::owner::matches(key, blob.as_deref(), sub)
+        } else {
+            row_owner == current_owner_id
+        };
+        if matches {
             checklist.insert(id);
         }
     }

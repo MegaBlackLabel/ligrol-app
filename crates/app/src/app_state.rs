@@ -461,6 +461,11 @@ impl AppState {
                 Ok(rows) => log::info!("owner id: 既存 {rows} 行を所有者 ID へ移行しました"),
                 Err(error) => log::warn!("owner id: 移行に失敗（次回起動で再試行）: {error}"),
             }
+            match ligrol_core::db::checklist::backfill_owner_ids(&db_pool, &key) {
+                Ok(0) => {}
+                Ok(rows) => log::info!("checklist owner id: 既存 {rows} 行を移行しました"),
+                Err(error) => log::warn!("checklist owner id: 移行に失敗: {error}"),
+            }
         }
         // BOOTH / FANZA / DLsite / 技術書典のセッションを DB（app_settings）から復元する。
         // セッション Cookie は Windows Credential Manager の上限（2560 UTF-16 文字）を
@@ -731,6 +736,7 @@ impl AppState {
         // サンプル / テストの固定データも owner_sub から owner_id を埋める。
         if let Ok(key) = secrets.db_key() {
             let _ = ligrol_core::db::bookshelf::backfill_owner_ids(&db_pool, &key);
+            let _ = ligrol_core::db::checklist::backfill_owner_ids(&db_pool, &key);
         }
         // 自動アップデートの状態（サンプルではネットワークへ出さない）。
         let updates = cx.new(|cx| crate::updates::Updates::new(cx, demo));

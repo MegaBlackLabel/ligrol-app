@@ -231,8 +231,11 @@ impl ChecklistView {
             }
             let events = db::checklist::list_events(db).unwrap_or_default();
             let selected = self.selected_slug.clone();
+            let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
             let items = match &selected {
-                Some(slug) => db::checklist::list_items(db, slug).unwrap_or_default(),
+                Some(slug) => {
+                    db::checklist::list_items_for_owner(db, slug, &owner_id).unwrap_or_default()
+                }
                 None => Vec::new(),
             };
             let last_sync = db::settings::get(db, "api.last_sync_at").ok().flatten();
@@ -503,6 +506,7 @@ impl ChecklistView {
         let handle = cx.entity();
         let state = AppState::global(cx);
         let db = state.db_pool.clone();
+        let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
         let task = cx.background_executor().spawn(async move {
             let agent = ureq::Agent::new_with_config(
                 ureq::Agent::config_builder()
@@ -533,9 +537,11 @@ impl ChecklistView {
                 }
             }
             for (id, data) in &stored {
-                let _ = db::checklist::update_thumbnail_data(&db, id, data);
+                let _ = db::checklist::update_thumbnail_data_for_owner(&db, id, &owner_id, data);
                 // Drive の表紙バンドル用の共有キャッシュにも入れる（再エンコードしない）
-                let _ = ligrol_core::thumbs::cache_checklist_thumbnail(&db, id, data);
+                let _ = ligrol_core::thumbs::cache_checklist_thumbnail_for_owner(
+                    &db, id, &owner_id, data,
+                );
             }
             (failed, stored)
         });
@@ -1161,14 +1167,16 @@ impl ChecklistView {
         let db = state.db_pool.clone();
         let slug_for_task = slug.clone();
         let owner = crate::app_state::owner_token(state);
+        let owner_id = crate::app_state::owner_id(state);
         let task: gpui_kit::Task<Result<usize, String>> =
             cx.background_executor().spawn(async move {
                 let mut client = tbf_client.lock();
-                let outcome = tbf::sync::refresh_checklist(
+                let outcome = tbf::sync::refresh_checklist_with_owner(
                     &db,
                     &mut client,
                     &slug_for_task,
                     owner.as_deref(),
+                    owner_id.as_deref(),
                 )
                 .map_err(|e| e.to_string())?;
                 Ok(outcome.count)
@@ -1227,13 +1235,20 @@ impl ChecklistView {
         let db = state.db_pool.clone();
         let slug_for_task = slug.clone();
         let owner = crate::app_state::owner_token(state);
+        let owner_id = crate::app_state::owner_id(state);
         let task: gpui_kit::Task<Result<usize, String>> =
             cx.background_executor().spawn(async move {
                 let mut client = tbf_client.lock();
                 let entries = client
                     .favorites(&slug_for_task)
                     .map_err(|e| e.to_string())?;
-                tbf::sync::save_checklist(&db, &slug_for_task, &entries, owner.as_deref())
+                tbf::sync::save_checklist_with_owner(
+                    &db,
+                    &slug_for_task,
+                    &entries,
+                    owner.as_deref(),
+                    owner_id.as_deref(),
+                )
                     .map_err(|e| e.to_string())?;
                 Ok(entries.len())
             });
@@ -1266,13 +1281,22 @@ impl ChecklistView {
         let (next, slug) = {
             let state = AppState::global(cx);
             let db = &state.db_pool;
-            let current = db::checklist::get_item(db, item_id)
-                .ok()
-                .flatten()
-                .map(|item| item.is_checked != 0)
-                .unwrap_or(false);
+            let current = db::checklist::get_item_for_owner(
+                db,
+                item_id,
+                &crate::app_state::owner_id(state).unwrap_or_default(),
+            )
+            .ok()
+            .flatten()
+            .map(|item| item.is_checked != 0)
+            .unwrap_or(false);
             let slug = self.selected_slug.clone().unwrap_or_default();
-            let _ = db::checklist::set_checked(db, item_id, !current);
+            let _ = db::checklist::set_checked_for_owner(
+                db,
+                item_id,
+                &crate::app_state::owner_id(state).unwrap_or_default(),
+                !current,
+            );
             (!current, slug)
         };
         let _ = slug;
@@ -1292,6 +1316,7 @@ impl ChecklistView {
         let state = AppState::global(cx);
         let tbf_client = state.tbf.clone();
         let db = state.db_pool.clone();
+        let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
         let item_id = item.id.clone();
         let open_item_id = item_id.clone();
         // 取得中はその行の表紙に進捗リングを出す（0.0 から始めて完了時に消す）
@@ -1308,7 +1333,7 @@ impl ChecklistView {
                 let mut stored: Vec<(String, u32, u32)> = Vec::new();
                 // 旧ページを先に 1 回だけ削除してから全ページを保存する
                 {
-                    let _ = db::samples::delete_for_item(&db, &item_id);
+                    let _ = db::samples::delete_for_item_for_owner(&db, &item_id, &owner_id);
                 }
                 for (index, page) in pages.into_iter().enumerate() {
                     // 試し読み画像は本体（`/api/product-dlc/`）とは別の許可リストを通す
@@ -1335,7 +1360,7 @@ impl ChecklistView {
                         _ => decode_size(&bytes).unwrap_or((0, 0)),
                     };
                     {
-                        let _ = db::samples::insert_sample_page(
+                        let _ = db::samples::insert_sample_page_for_owner(
                             &db,
                             &db::samples::SamplePageRow {
                                 id: uuid::Uuid::new_v4().to_string(),
@@ -1350,6 +1375,7 @@ impl ChecklistView {
                                 file_size: Some(bytes.len() as i64),
                                 fetched_at: chrono::Utc::now().to_rfc3339(),
                             },
+                            &owner_id,
                         );
                     }
                     // ページを読み切ったぶんを確定させる（`Content-Length` が無い画像でも進む）
@@ -2936,8 +2962,12 @@ fn apply_tbf21_highlights(
 /// Web のチェックリスト表紙は `ligrol-backup.json` の `thumbnail_data` から出すため、
 /// チェックリスト画面を開かなくてもバックアップ前に埋めておく。1 回 `limit` 件まで。
 /// 失敗した項目は `thumbnail_data` が空のまま残るので、次の同期で再試行される。
-pub(crate) fn backfill_missing_thumbnails(db: &db::SqlitePool, limit: usize) -> usize {
-    let Ok(items) = db::checklist::missing_thumbnail_items(db, limit) else {
+pub(crate) fn backfill_missing_thumbnails(
+    db: &db::SqlitePool,
+    owner_id: &str,
+    limit: usize,
+) -> usize {
+    let Ok(items) = db::checklist::missing_thumbnail_items_for_owner(db, owner_id, limit) else {
         return 0;
     };
     if items.is_empty() {
@@ -2959,8 +2989,11 @@ pub(crate) fn backfill_missing_thumbnails(db: &db::SqlitePool, limit: usize) -> 
                 .read_to_end(&mut body)
                 .map_err(|e| e.to_string())?;
             let jpeg_b64 = thumbnail_jpeg_base64(&body).ok_or("not an image")?;
-            db::checklist::update_thumbnail_data(db, &id, &jpeg_b64).map_err(|e| e.to_string())?;
-            let _ = ligrol_core::thumbs::cache_checklist_thumbnail(db, &id, &jpeg_b64);
+            db::checklist::update_thumbnail_data_for_owner(db, &id, owner_id, &jpeg_b64)
+                .map_err(|e| e.to_string())?;
+            let _ = ligrol_core::thumbs::cache_checklist_thumbnail_for_owner(
+                db, &id, owner_id, &jpeg_b64,
+            );
             Ok::<(), String>(())
         })();
         if result.is_ok() {

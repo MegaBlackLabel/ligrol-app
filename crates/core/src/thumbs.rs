@@ -106,7 +106,7 @@ pub fn build_plaintext(
         .map(|(_, key, _)| key.clone())
         .collect();
     let checklist_thumbs: HashMap<String, String> =
-        db::checklist::thumbnails_of(pool, &checklist_ids)?
+        db::checklist::thumbnails_of_for_owner(pool, &owned.owner_id, &checklist_ids)?
             .into_iter()
             .collect();
 
@@ -213,10 +213,19 @@ pub fn cache_checklist_thumbnail(
     item_id: &str,
     data_base64: &str,
 ) -> Result<bool, sqlx::Error> {
+    cache_checklist_thumbnail_for_owner(pool, item_id, "", data_base64)
+}
+
+pub fn cache_checklist_thumbnail_for_owner(
+    pool: &SqlitePool,
+    item_id: &str,
+    owner_id: &str,
+    data_base64: &str,
+) -> Result<bool, sqlx::Error> {
     let Some(image) = decode_checklist_thumbnail(data_base64) else {
         return Ok(false);
     };
-    store(pool, db::thumbs::KIND_CHECKLIST, item_id, "", image)?;
+    store(pool, db::thumbs::KIND_CHECKLIST, item_id, owner_id, image)?;
     Ok(true)
 }
 
