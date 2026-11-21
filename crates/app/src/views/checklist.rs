@@ -599,6 +599,7 @@ impl ChecklistView {
             self.sort_ascending = true;
         }
         self.page = 0;
+        self.decode_cached_thumbnails(cx);
         cx.notify();
     }
 
@@ -873,6 +874,7 @@ impl ChecklistView {
             return;
         };
         self.page = index / 50;
+        self.decode_cached_thumbnails(cx);
         // 子 0 はテーブルのヘッダー。選択行が表示範囲外なら最小限スクロールする。
         self.checklist_scroll_handle
             .scroll_to_item(index % 50 + 1);
@@ -2596,6 +2598,7 @@ impl ChecklistView {
                                 move |_, _window, cx| {
                                     handle.update(cx, |this, cx| {
                                         this.page = this.page.saturating_sub(1);
+                                        this.decode_cached_thumbnails(cx);
                                         cx.notify();
                                     });
                                 }
@@ -2615,6 +2618,7 @@ impl ChecklistView {
                                 move |_, _window, cx| {
                                     handle.update(cx, |this, cx| {
                                         this.page = (this.page + 1).min(total_pages - 1);
+                                        this.decode_cached_thumbnails(cx);
                                         cx.notify();
                                     });
                                 }
