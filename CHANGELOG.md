@@ -10,6 +10,7 @@
   `checked_items.thumbnail_data` を外し、デスクトップが取得済みの 256px JPEG を
   バックアップに含めるようにした。チェックリスト同期時に未取得のサムネイルを
   バックグラウンドで埋め、同期後の Drive バックアップへ反映する。
+  取得完了後は開いているチェックリストを再読込して表紙を即時反映する。
   同期の upsert が既存の `thumbnail_data` を消していた問題も直した。
 - **`ligrol-keys.json` が Drive に無いままになる問題**: keyring に PRK があるのに
   Drive の鍵 bundle が無い場合、Drive 同期で sub ラップ付き bundle を作り直す。

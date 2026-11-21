@@ -726,6 +726,17 @@ impl Workspace {
                         app.defer(|app| app.dispatch_action(&crate::actions::OpenAuth));
                     });
                 }
+                if fetched_thumbnails > 0 {
+                    cx.update(|app| {
+                        *AppState::global(app).checklist_invalidated.lock() = true;
+                        let ws = AppState::global(app).workspace.lock().clone();
+                        if let Some(ws) = ws {
+                            app.defer(move |cx| {
+                                let _ = ws.update(cx, |_, cx| cx.notify());
+                            });
+                        }
+                    });
+                }
                 if any_changed || fetched_thumbnails > 0 {
                     let _ = settings_entity
                         .update(cx, |settings, cx| settings.sync_drive_now(false, cx));

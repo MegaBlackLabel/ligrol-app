@@ -150,6 +150,8 @@ pub struct AppState {
     pub workspace: Arc<Mutex<Option<gpui_kit::WeakEntity<crate::workspace::Workspace>>>>,
     /// 本棚の再読込が必要（設定画面の非表示解除等）。render で確認して reload する
     pub bookshelf_invalidated: Arc<Mutex<bool>>,
+    /// チェックリストの再読込が必要（バックグラウンドの表紙取得完了等）。
+    pub checklist_invalidated: Arc<Mutex<bool>>,
     /// 終了確認ダイアログ（バックアップ対象の確認）を表示済みかどうか。
     /// キャンセル時は false に戻し、再度終了時に確認を出す。
     pub exit_checked: Arc<AtomicBool>,
@@ -642,6 +644,7 @@ impl AppState {
             toast_protected_until: Arc::new(Mutex::new(None)),
             workspace: Arc::new(Mutex::new(None)),
             bookshelf_invalidated: Arc::new(Mutex::new(false)),
+            checklist_invalidated: Arc::new(Mutex::new(false)),
             exit_checked: Arc::new(AtomicBool::new(false)),
             exit_uploading: Arc::new(AtomicBool::new(false)),
             google_login_done: Arc::new(AtomicBool::new(false)),
@@ -776,6 +779,7 @@ impl AppState {
             toast_protected_until: Arc::new(Mutex::new(None)),
             workspace: Arc::new(Mutex::new(None)),
             bookshelf_invalidated: Arc::new(Mutex::new(false)),
+            checklist_invalidated: Arc::new(Mutex::new(false)),
             exit_checked: Arc::new(AtomicBool::new(false)),
             exit_uploading: Arc::new(AtomicBool::new(false)),
             google_login_done: Arc::new(AtomicBool::new(false)),

@@ -1394,6 +1394,11 @@ fn decode_size(bytes: &[u8]) -> Option<(i64, i64)> {
 /// 試し読み画像を同じウィンドウのリーダーで開く（workspace が処理）。
 impl Render for ChecklistView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // バックグラウンドのサムネイル取得が終わったら DB を読み直して表紙を反映する。
+        if *AppState::global(cx).checklist_invalidated.lock() {
+            *AppState::global(cx).checklist_invalidated.lock() = false;
+            self.reload(cx);
+        }
         // 追い出し済みサムネイルの GPU テクスチャを解放する（window を持つここで行う）
         self.release_evicted_thumbs(window);
         // Web と同じ 2 画面構成: 選択中イベントがなければ一覧、あれば詳細
