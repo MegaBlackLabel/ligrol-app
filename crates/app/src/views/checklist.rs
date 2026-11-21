@@ -26,9 +26,10 @@ use crate::icons::AppIcon;
 use crate::views::bookshelf::{progress_ring_image, rasterize_svg_scaled};
 use image::GenericImageView as _;
 
-/// デコード済みサムネイルの保持上限（1 ページ = 50 件 + 余裕を持たせた値）。
-/// これを超えたら古い順に追い出してメモリに残さない。
-const MAX_THUMB_CACHE: usize = 64;
+/// デコード済みサムネイルの保持上限。
+/// 1 イベント（〜200 件）なら全件を保持し、マップ選択でページを飛んでも
+/// 表紙が欠けないようにする。それを超えるイベントは表示ページ単位に戻す。
+const MAX_THUMB_CACHE: usize = 200;
 
 /// 並び替えフィールド（Web の SortField 相当）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -263,14 +264,43 @@ impl ChecklistView {
         cx.notify();
     }
 
-    /// 現在の並び替え・ページ設定で表示中の項目（Web の PAGE_SIZE = 50 件）。
+    /// 現在選択中のイベント名（未選択・テスト時は空）。
+    fn current_event_name(&self) -> String {
+        self.selected_slug
+            .as_deref()
+            .and_then(|slug| {
+                self.events
+                    .iter()
+                    .find(|event| event.slug.as_deref() == Some(slug))
+            })
+            .map(|event| event.event_name.clone())
+            .unwrap_or_default()
+    }
+
     /// サムネイルのデコード対象と、追い出しから守る範囲を揃えるために使う。
+    /// 現在の並び替え・ページ設定で表示中の項目（Web の PAGE_SIZE = 50 件）。
     fn page_items(&self) -> Vec<CheckedItem> {
-        let mut sorted = self.items.clone();
-        sorted.sort_by(|a, b| {
+        // 表示側（`render_event_detail`）と同じフィルタ・並び順に揃える。
+        // ここがずれると、画面上のページとデコード対象のページが食い違い、
+        // 一部の表紙だけが出ない（スクロールで気づく）。
+        let event_name = self.current_event_name();
+        let mut sorted = if event_name.is_empty() {
+            self.items.clone()
+        } else {
+            self.visible_items(&event_name)
+        };
+        self.sort_items(&mut sorted);
+        const PAGE_SIZE: usize = 50;
+        let start = self.page * PAGE_SIZE;
+        sorted.into_iter().skip(start).take(PAGE_SIZE).collect()
+    }
+
+    /// 表示中の並び順を適用する（`page_items` と `render_event_detail` で共有）。
+    fn sort_items(&self, items: &mut [CheckedItem]) {
+        items.sort_by(|a, b| {
             let ordering = match self.sort_field {
                 SortField::CircleName => a.circle_name.cmp(&b.circle_name),
-                SortField::SpaceNumber => a.space_number.cmp(&b.space_number),
+                SortField::SpaceNumber => compare_space_numbers(&a.space_number, &b.space_number),
                 SortField::SortOrder => a.sort_order.cmp(&b.sort_order),
             };
             if self.sort_ascending {
@@ -279,9 +309,6 @@ impl ChecklistView {
                 ordering.reverse()
             }
         });
-        const PAGE_SIZE: usize = 50;
-        let start = self.page * PAGE_SIZE;
-        sorted.into_iter().skip(start).take(PAGE_SIZE).collect()
     }
 
     /// 選択中イベントが初出の項目（「初出以外も表示」が ON なら全項目）。
@@ -296,27 +323,29 @@ impl ChecklistView {
     /// 選択中イベントの項目を、現在の並び順で返す。
     fn sorted_display_items(&self, event_name: &str) -> Vec<CheckedItem> {
         let mut items = self.visible_items(event_name);
-        items.sort_by(|a, b| {
-            let ordering = match self.sort_field {
-                SortField::CircleName => a.circle_name.cmp(&b.circle_name),
-                SortField::SpaceNumber => compare_space_numbers(&a.space_number, &b.space_number),
-                SortField::SortOrder => a.sort_order.cmp(&b.sort_order),
-            };
-            if self.sort_ascending {
-                ordering
-            } else {
-                ordering.reverse()
-            }
-        });
+        self.sort_items(&mut items);
         items
     }
 
     /// DB に保存済みの thumbnail_data（base64）をバックグラウンドで
     /// 縮小デコードしてキャッシュする（render で毎回デコードしない）。
-    /// デコード対象（thumbnail_data あり・未キャッシュ）を現在表示中の
-    /// ページ（50 件）に限定して返す。全件を一括デコードしない。
+    /// 通常のイベントは全件、巨大なイベントだけ現在ページに限定する。
     fn decode_pending(&self) -> Vec<(String, String)> {
-        self.page_items()
+        // 小〜中規模のイベント（〜MAX_THUMB_CACHE 件）は全件をデコードしておく。
+        // マップ選択でページを飛んでも、スクロールしても表紙が欠けない。
+        // それを超えるイベントだけ表示ページに限定する。
+        let event_name = self.current_event_name();
+        let all = if event_name.is_empty() {
+            self.items.clone()
+        } else {
+            self.visible_items(&event_name)
+        };
+        let targets = if all.len() <= MAX_THUMB_CACHE {
+            all
+        } else {
+            self.page_items()
+        };
+        targets
             .into_iter()
             .filter(|item| {
                 item.thumbnail_data.is_some()
@@ -3556,24 +3585,26 @@ mod tests {
     }
 
     #[test]
-    fn decode_pending_limits_to_current_page() {
-        // 60 件の項目を直接構築（非同期タスクなしで決定的に検証する）
+    fn decode_pending_covers_the_whole_small_event() {
+        // 60 件（MAX_THUMB_CACHE 以下）はページに関係なく全件が対象。
         let items: Vec<CheckedItem> = (0..60)
             .map(|i| test_item(&format!("item-{i:02}"), i as i64))
             .collect();
         let view = view_with_items(items);
-        // ページ 0 では先頭 50 件が対象（1 度の実行は 20 件まで）
         let pending = view.decode_pending();
-        assert_eq!(pending.len(), 20, "page 0: at most 20 per batch");
-        // ページ 1 では残り 10 件だけが対象（全 60 件を一括デコードしない）
+        assert_eq!(pending.len(), 20, "1 回の実行は 20 件まで");
+        // ページを変えても、対象は同じイベント全件のうち未デコード分。
         let mut page1 = view;
         page1.page = 1;
         let pending = page1.decode_pending();
-        assert_eq!(pending.len(), 10, "page 1: only the last 10 items");
+        assert_eq!(pending.len(), 20, "ページ 1 でも全件が対象");
         // fetch_failed に記録された項目は再試行されない
-        page1.fetch_failed.insert("item-59".into());
+        page1.fetch_failed.insert("item-01".into());
         let pending = page1.decode_pending();
-        assert_eq!(pending.len(), 9, "failed item must be skipped");
+        assert!(
+            !pending.iter().any(|(id, _)| id == "item-01"),
+            "failed item must be skipped"
+        );
     }
 
     #[test]
@@ -3640,7 +3671,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    async fn fetched_thumbnails_are_decoded_only_for_current_page(cx: &mut TestAppContext) {
+    async fn fetched_thumbnails_are_decoded_for_the_whole_small_event(cx: &mut TestAppContext) {
         cx.update(gpui_kit::component::init);
         cx.update(AppState::init_test);
         // 1x1 の透明 PNG（base64）。取得済みサムネイルとして渡す
@@ -3680,14 +3711,14 @@ mod tests {
                 this.fetch_failed.contains("item-02"),
                 "失敗が記録されていない"
             );
-            // 描画中のページ（ページ 0）だけデコードされる
+            // MAX_THUMB_CACHE 以下のイベントは全件デコードされる
             assert!(
                 this.thumbnail_images.contains_key("item-01"),
-                "表示中のサムネイルがデコードされていない"
+                "先頭のサムネイルがデコードされていない"
             );
             assert!(
-                !this.thumbnail_images.contains_key("item-59"),
-                "非表示ページのサムネイルまでデコードしている"
+                this.thumbnail_images.contains_key("item-59"),
+                "ページ 2 のサムネイルまでデコードされていない"
             );
         });
     }
