@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-11-22
+
+### Fixed
+
+- **古い技術書典の購入でイベント名が空になる問題**: TBF 同期時に `causedAt` が
+  イベント開催期間内なら `event_name` / `event_slug` / `event_id` を補完して
+  `bookshelf_items` に保存する。表示時だけの補完だったため Drive バックアップに
+  載らず、Web で「イベント不明」になっていた。Web 側の手順は
+  `docs/web-tbf-event-backfill.md` に記載。
+
 ## [0.3.7] - 2026-11-22
 
 ### Fixed

@@ -88,9 +88,20 @@ pub fn save_bookshelf_with_owner(
     owner_id: Option<&str>,
 ) -> Result<usize, sqlx::Error> {
     let timestamp = now();
+    let events = crate::tbf::canonical_events();
     for item in items {
-        if let Some(slug) = item.event_slug.as_deref().filter(|slug| !slug.is_empty()) {
-            ensure_event(pool, slug, item.event_name.as_deref())?;
+        // 古い購入の GraphQL 応答には `marketHandshake.event` が無く、
+        // event_name / event_slug が null になる。購入日が canonical イベントの
+        // 開催期間内なら、表示時だけでなく DB にも補完してバックアップへ載せる。
+        let inferred_event = infer_event_from_caused_at(item.caused_at.as_deref(), &events);
+        let event_name = nonempty(item.event_name.as_deref())
+            .map(String::from)
+            .or_else(|| inferred_event.map(|event| event.event_name.clone()));
+        let event_slug = nonempty(item.event_slug.as_deref())
+            .map(String::from)
+            .or_else(|| inferred_event.map(|event| event.slug.clone()));
+        if let Some(slug) = event_slug.as_deref() {
+            ensure_event(pool, slug, event_name.as_deref())?;
         }
         let tags_json = item
             .tags
@@ -108,13 +119,9 @@ pub fn save_bookshelf_with_owner(
                 thumbnail_url: item.thumbnail_url.clone(),
                 format: item.format.clone(),
                 caused_at: item.caused_at.clone(),
-                event_name: item.event_name.clone(),
-                event_slug: item.event_slug.clone(),
-                event_id: item
-                    .event_slug
-                    .as_deref()
-                    .filter(|slug| !slug.is_empty())
-                    .map(String::from),
+                event_name,
+                event_slug: event_slug.clone(),
+                event_id: event_slug,
                 file_name: item.file_name.clone(),
                 download_url: item.download_url.clone(),
                 download_options: None,
@@ -147,6 +154,37 @@ pub fn save_bookshelf_with_owner(
     }
     bookshelf::attribute_owner_with_id(pool, SITE_ID_TECHBOOKFEST, owner, owner_id)?;
     Ok(items.len())
+}
+
+/// 空文字を「無い」として扱う。
+fn nonempty(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| !value.is_empty())
+}
+
+/// 購入日（`causedAt`）が開催期間内のイベントを返す。
+///
+/// 期間が重なる場合は開始日が最も新しいイベントを選ぶ（表示時補完と同じ規則）。
+fn infer_event_from_caused_at<'a>(
+    caused_at: Option<&str>,
+    events: &'a [TbfEventInfo],
+) -> Option<&'a TbfEventInfo> {
+    let date = caused_at?
+        .split(['T', ' '])
+        .next()
+        .filter(|date| date.len() >= 10)?;
+    events
+        .iter()
+        .filter(|event| {
+            event
+                .event_start_date
+                .as_deref()
+                .is_some_and(|start| start <= date)
+                && event
+                    .event_end_date
+                    .as_deref()
+                    .is_some_and(|end| end >= date)
+        })
+        .max_by(|a, b| a.event_start_date.cmp(&b.event_start_date))
 }
 
 /// Upsert event masters; `id` = slug for stable upserts.
@@ -358,7 +396,7 @@ pub fn refresh_checklist_with_owner(
 #[cfg(test)]
 mod tests {
 
-    use crate::db::{checklist, migrate};
+    use crate::db::{bookshelf, checklist, migrate};
     use crate::tbf::{RequestSpec, ResponseSpec, TbfError, Transport};
     use serde_json::Value;
 
@@ -654,5 +692,66 @@ mod tests {
         let outcome = refresh_checklist(&pool, &mut client, "tbf20", None).unwrap();
         assert_eq!(outcome.count, 2);
         assert!(outcome.changed);
+    }
+
+    /// 古い購入は GraphQL が `marketHandshake.event` を返さないため、
+    /// 購入日からイベントを補完して保存する。これで Drive バックアップにも
+    /// イベント名が載り、Web 側でも「イベント不明」にならない。
+    #[test]
+    fn save_bookshelf_fills_missing_event_from_caused_at() {
+        let pool = crate::db::test_pool();
+        migrate(&pool).unwrap();
+        let item = TbfShelfItem {
+            id: "p-old".into(),
+            title: "古い購入".into(),
+            circle_name: "サークル".into(),
+            thumbnail_url: None,
+            format: "PDF".into(),
+            caused_at: Some("2026-04-26T17:50:10.01342+09:00".into()),
+            event_name: None,
+            event_slug: None,
+            file_name: Some("old.pdf".into()),
+            download_url: None,
+            is_downloadable: true,
+            tags: None,
+        };
+        save_bookshelf(&pool, &[item], None).unwrap();
+
+        let rows = bookshelf::list_all_for_owner(&pool, "").unwrap();
+        let row = rows.iter().find(|row| row.database_id == "p-old").unwrap();
+        assert_eq!(row.event_name.as_deref(), Some("技術書典20"));
+        assert_eq!(row.event_slug.as_deref(), Some("tbf20"));
+        assert_eq!(row.event_id.as_deref(), Some("tbf20"));
+    }
+
+    /// 開催期間外の購入日は推測しない（2024-01-05 の実データを想定）。
+    #[test]
+    fn save_bookshelf_keeps_event_empty_when_date_has_no_event() {
+        let pool = crate::db::test_pool();
+        migrate(&pool).unwrap();
+        let item = TbfShelfItem {
+            id: "p-no-event".into(),
+            title: "期間外".into(),
+            circle_name: "サークル".into(),
+            thumbnail_url: None,
+            format: "PDF".into(),
+            caused_at: Some("2024-01-05T00:00:00Z".into()),
+            event_name: None,
+            event_slug: None,
+            file_name: None,
+            download_url: None,
+            is_downloadable: false,
+            tags: None,
+        };
+        save_bookshelf(&pool, &[item], None).unwrap();
+
+        let rows = bookshelf::list_all_for_owner(&pool, "").unwrap();
+        let row = rows
+            .iter()
+            .find(|row| row.database_id == "p-no-event")
+            .unwrap();
+        assert_eq!(row.event_name, None);
+        assert_eq!(row.event_slug, None);
+        assert_eq!(row.event_id, None);
     }
 }
