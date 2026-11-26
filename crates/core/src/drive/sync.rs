@@ -102,6 +102,32 @@ fn md5_file(path: &std::path::Path) -> Result<String, SyncError> {
     Ok(format!("{:x}", context.finalize()))
 }
 
+/// Drive 上の既存 `ligrol-backup.json` にユーザー生成データが入っているか。
+///
+/// 復号鍵が無く中身を判定できないときは `Ok(None)`（呼び出し側は上書きを止める）。
+fn existing_backup_has_user_content(
+    drive: &mut dyn DriveApi,
+    file: &DriveFile,
+    pack_root_key: Option<&PackRootKey>,
+) -> Result<Option<bool>, SyncError> {
+    let bytes = drive.download(&file.id)?;
+    let backup = crate::db::backup::DriveBackup::parse(&bytes)?;
+    // v2（平文）は owner_id を持たない。v3 はこの端末の PRK でしか復号できない。
+    let root = if backup.owner_id().is_some() {
+        pack_root_key
+    } else {
+        None
+    };
+    let json = match backup.plaintext(root) {
+        Ok(json) => json,
+        Err(crate::db::backup::BackupError::KeyRequired) => return Ok(None),
+        Err(error) => return Err(SyncError::from(error)),
+    };
+    let value: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|e| SyncError::Db(sqlx::Error::Protocol(e.to_string())))?;
+    Ok(Some(crate::db::backup::json_has_user_content(&value)))
+}
+
 /// 1 冊の pack を **Drive から削除**する（ローカルの pack は残す）。
 ///
 /// 「Drive の容量を空けたい」ための操作（バックアップ対象外にした大きい本を消す等）。
@@ -696,13 +722,40 @@ fn sync_inner(
         // 事故を防ぐ（実測: この端末で 0 件のまま 2 回アップロードし、他端末の内容を
         // 失った）。全呼び出し元（設定の同期 / 終了時アップロード / 自動同期）が
         // ここを通るので 1 箇所で足りる。
-        let overwrite_guard_blocks = needs_upload
+        // 「ユーザーデータが空」の判定に `books.owner_sub` を含めない。
+        // pack を Drive から落としただけの新端末でも本の行には owner_sub が入るため、
+        // それを数えると空のメタデータでバックアップを上書きしてしまう。
+        //
+        // ローカルが空でも、**Drive 側にもユーザーデータが無い**なら本のメタデータを
+        // 上げてよい（既存の book-only バックアップを更新する正常系）。Drive 側の
+        // 内容が読めないときは安全側（上書きしない）に倒す。
+        let local_has_user_content =
+            crate::db::backup::has_local_user_content(pool).unwrap_or(true);
+        let drive_has_user_content = if needs_upload
             && existing.is_some()
-            && crate::db::backup::user_data_row_count(pool).unwrap_or(1) == 0;
+            && !local_has_user_content
+        {
+            existing
+                .map(|file| {
+                    match existing_backup_has_user_content(drive, file, pack_root_key) {
+                        Ok(Some(has)) => has,
+                        Ok(None) => true, // 鍵が無く判定できない
+                        Err(error) => {
+                            log::warn!("drive sync: 既存 DB バックアップを判定できない: {error}");
+                            true
+                        }
+                    }
+                })
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        let overwrite_guard_blocks =
+            needs_upload && !local_has_user_content && drive_has_user_content;
         if overwrite_guard_blocks {
             log::warn!(
-                "drive sync: ローカルのユーザーデータが空のため DB バックアップの上書きを中止\
-                 （Drive 上の既存バックアップを保護）"
+                "drive sync: ローカルのユーザーデータが空で Drive 側にユーザーデータがあるため \
+                 DB バックアップの上書きを中止（Drive 上の既存バックアップを保護）"
             );
         }
         if needs_upload && !overwrite_guard_blocks {
@@ -1054,16 +1107,23 @@ pub struct BackupStatus {
     pub drive_changed: bool,
     /// Drive のバックアップとローカルの内容が違うか。
     pub local_differs: bool,
+    /// この端末でまだ一度もアップロード／復元しておらず、ローカルに
+    /// ユーザー生成データも無い（新端末）。基準値が無いだけの既存端末と区別する。
+    pub is_new_device: bool,
 }
 
 impl BackupStatus {
-    /// 復元確認を出すべきか。Drive 側が新しくなっていて、かつ内容が違うときだけ出す。
+    /// 復元確認を出すべきか。
+    ///
+    /// - Drive 側が最後のアップロードから動いている（既存端末）
+    /// - または、基準値が無くローカルにユーザー生成データも無い（新端末）
     ///
     /// 単に「ローカルと違う」だけで出すと、ローカル側だけが進んだ場合（他端末を
     /// 起動していない場合）にも「復元しますか」と聞き、新しいローカルを古い
-    /// バックアップで上書きしてしまう。
+    /// バックアップで上書きしてしまう。新端末だけは基準値が無いので、
+    /// ローカルが空であることを条件に復元を許可する。
     pub fn should_offer_restore(&self) -> bool {
-        self.drive_changed && self.local_differs
+        self.local_differs && (self.drive_changed || self.is_new_device)
     }
 }
 
@@ -1098,6 +1158,9 @@ pub fn inspect_drive_backup(
     let backup = crate::db::backup::DriveBackup::parse(&drive_bytes)?;
     let drive_token = backup.change_token()?;
     let drive_changed = baseline_md5.is_some_and(|baseline| baseline != drive_token);
+    // 基準値が無く、ローカルにもユーザー生成データが無い＝新端末。
+    // pack を落としただけの端末（books.owner_sub だけがある）も新端末として扱う。
+    let is_new_device = baseline_md5.is_none() && !crate::db::backup::has_local_user_content(pool)?;
     let root = match backup.owner_id() {
         Some(owner_id) => keyring_root_key(owner_id),
         None => None,
@@ -1112,6 +1175,7 @@ pub fn inspect_drive_backup(
                 info,
                 drive_changed,
                 local_differs: false,
+                is_new_device,
             }));
         }
         Err(error) => return Err(SyncError::from(error)),
@@ -1140,6 +1204,7 @@ pub fn inspect_drive_backup(
         info,
         drive_changed,
         local_differs: local_md5 != drive_md5,
+        is_new_device,
     }))
 }
 
@@ -1400,6 +1465,27 @@ mod tests {
             },
         )
         .unwrap();
+        crate::db::favorites::set_favorite(
+            &src,
+            crate::db::favorites::EntityKind::Circle,
+            "復元サークル",
+            true,
+            None,
+        )
+        .unwrap();
+        crate::db::notes::upsert(
+            &src,
+            &crate::db::notes::PageNoteInput {
+                id: "note-1",
+                book_id: "book-1",
+                content_id: "",
+                page: 7,
+                memo: "復元される付箋",
+                spread_side: None,
+            },
+        )
+        .unwrap();
+        crate::db::view_history::start(&src, "book-1").unwrap();
         let json = crate::db::backup::export_json(&src, None, None, false).unwrap();
 
         let mut drive = MockDrive {
@@ -1429,6 +1515,21 @@ mod tests {
         assert_eq!(restored.title, "復元される本");
         let progress = crate::db::progress::get(&dst, "book-1").unwrap().unwrap();
         assert_eq!(progress.current_page, 42);
+        assert!(
+            crate::db::favorites::list_favorites(&dst, crate::db::favorites::EntityKind::Circle)
+                .unwrap()
+                .contains(&"復元サークル".to_string()),
+            "お気に入りが復元される"
+        );
+        let note = crate::db::notes::get_for_page(&dst, "book-1", "", 7)
+            .unwrap()
+            .expect("付箋が復元される");
+        assert_eq!(note.memo, "復元される付箋");
+        assert_eq!(
+            crate::db::view_history::view_count(&dst, "book-1").unwrap(),
+            1,
+            "閲覧履歴が復元される"
+        );
     }
 
     #[test]
@@ -1715,14 +1816,20 @@ mod tests {
             self.uploaded
                 .borrow_mut()
                 .push((name.to_string(), bytes.to_vec()));
+            let id = format!("id-{name}");
+            // アップロード済みファイルも `download` で読めるようにする
+            // （DB バックアップの上書き判定が既存内容を確認するため）。
+            self.downloads
+                .borrow_mut()
+                .insert(id.clone(), bytes.to_vec());
             self.files.push(crate::drive::DriveFile {
-                id: format!("id-{name}"),
+                id: id.clone(),
                 name: name.to_string(),
                 size: Some(bytes.len() as i64),
                 md5_checksum: Some(format!("{:x}", md5::compute(bytes))),
                 modified_time: None,
             });
-            Ok(format!("id-{name}"))
+            Ok(id)
         }
         fn find_root_folders(
             &mut self,
@@ -1909,6 +2016,66 @@ mod tests {
         assert!(
             !drive.deleted.borrow().is_empty(),
             "old file must be deleted"
+        );
+    }
+
+    /// ローカルにユーザー生成データが無く、Drive 側に**ある**ときは
+    /// book-only のローカルで既存バックアップを上書きしない。
+    #[test]
+    fn sync_does_not_overwrite_a_drive_backup_that_has_user_content() {
+        let key = [11u8; 32];
+        // Drive 側: 本 + お気に入り
+        let src = crate::db::test_pool();
+        migrate(&src).unwrap();
+        crate::db::books::insert(&src, &test_book("book-1")).unwrap();
+        crate::db::favorites::set_favorite(
+            &src,
+            crate::db::favorites::EntityKind::Circle,
+            "drive-favorite",
+            true,
+            None,
+        )
+        .unwrap();
+        let backup = crate::db::backup::export_json(&src, None, None, false).unwrap();
+        let mut drive = drive_with_backup(&backup);
+
+        // ローカル: 本の所有者だけ（pack を落とした新端末相当）
+        let pool = crate::db::test_pool();
+        migrate(&pool).unwrap();
+        crate::db::books::insert(&pool, &test_book("book-1")).unwrap();
+        crate::db::books::set_owner_sub(
+            &pool,
+            "book-1",
+            Some(crate::owner::encrypt(&key, "test-sub")),
+        )
+        .unwrap();
+        let packs = std::env::temp_dir().join("ligrol-sync-guard-packs");
+        let dl = std::env::temp_dir().join("ligrol-sync-guard-dl");
+        std::fs::create_dir_all(&packs).unwrap();
+        std::fs::create_dir_all(&dl).unwrap();
+        let db_path = std::env::temp_dir().join("ligrol-sync-guard.db");
+
+        let outcome = super::sync(super::SyncRequest {
+            pool: &pool,
+            drive: &mut drive,
+            packs_dir: &packs,
+            downloads_dir: &dl,
+            identity_sub: Some("test-sub"),
+            pack_root_key: None,
+            owner_key: Some(&key),
+            folder_id: "folder",
+            sync_books: true,
+            db_path: Some(&db_path),
+            thumbnails_dir: None,
+        })
+        .unwrap();
+        assert!(
+            !outcome.database_backed_up,
+            "Drive のユーザーデータ入りバックアップを上書きしてはいけない"
+        );
+        assert!(
+            drive.uploaded.borrow().is_empty(),
+            "アップロード自体が起きてはいけない"
         );
     }
 
@@ -2111,24 +2278,108 @@ mod tests {
         );
     }
 
-    /// 基準値が無い（この機能でまだ一度もアップロードしていない）ときは
-    /// 方向を判定できないので復元確認を出さない。
+    /// 新端末（基準値なし・ローカルにユーザー生成データなし）は、
+    /// Drive の DB バックアップからお気に入り・付箋・履歴を復元できること。
     #[test]
-    fn inspect_drive_backup_without_a_baseline_does_not_offer_restore() {
+    fn inspect_drive_backup_offers_restore_on_a_new_device() {
+        let src = crate::db::test_pool();
+        migrate(&src).unwrap();
+        crate::db::books::insert(&src, &test_book("book-1")).unwrap();
+        crate::db::favorites::set_favorite(
+            &src,
+            crate::db::favorites::EntityKind::Circle,
+            "circle-1",
+            true,
+            None,
+        )
+        .unwrap();
+        crate::db::notes::upsert(
+            &src,
+            &crate::db::notes::PageNoteInput {
+                id: "note-1",
+                book_id: "book-1",
+                content_id: "",
+                page: 3,
+                memo: "復元されるメモ",
+                spread_side: None,
+            },
+        )
+        .unwrap();
+        crate::db::view_history::start(&src, "book-1").unwrap();
+        let uploaded = crate::db::backup::export_json(&src, None, None, false).unwrap();
+        let mut drive = drive_with_backup(&uploaded);
+
+        let dst = crate::db::test_pool();
+        migrate(&dst).unwrap();
+        let status = inspect_backup(&dst, &mut drive, None).expect("backup exists");
+        assert!(status.local_differs, "新端末は Drive と内容が違う");
+        assert!(status.is_new_device, "基準値なし + ローカル空 = 新端末");
+        assert!(
+            status.should_offer_restore(),
+            "新端末は Drive のユーザーデータを復元できる"
+        );
+    }
+
+    /// 基準値が無くても、ローカルにユーザー生成データがあるときは復元確認を出さない
+    /// （ローカルで新しく作ったデータを古い Drive バックアップで巻き戻さない）。
+    #[test]
+    fn inspect_drive_backup_without_a_baseline_does_not_offer_restore_when_local_has_user_data() {
         let pool = crate::db::test_pool();
         migrate(&pool).unwrap();
         crate::db::books::insert(&pool, &test_book("book-1")).unwrap();
         let uploaded = crate::db::backup::export_json(&pool, None, None, false).unwrap();
         let mut drive = drive_with_backup(&uploaded);
-        // ローカルには Drive のバックアップに無い本がある
+        // ローカルには Drive のバックアップに無い本とお気に入りがある
         crate::db::books::insert(&pool, &test_book("book-2")).unwrap();
+        crate::db::favorites::set_favorite(
+            &pool,
+            crate::db::favorites::EntityKind::Author,
+            "author-1",
+            true,
+            None,
+        )
+        .unwrap();
 
         let status = inspect_backup(&pool, &mut drive, None).expect("backup exists");
         assert!(
             !status.drive_changed,
             "基準値が無いときは『動いた』と断定しない"
         );
+        assert!(!status.is_new_device, "ローカルにユーザーデータがある");
         assert!(!status.should_offer_restore());
+    }
+
+    /// pack を復元しただけの本（owner_sub だけがある）を
+    /// 「ユーザーが作ったデータ」と誤判定しない。
+    #[test]
+    fn owner_sub_is_not_counted_as_local_user_content() {
+        let pool = crate::db::test_pool();
+        migrate(&pool).unwrap();
+        crate::db::books::insert(&pool, &test_book("book-1")).unwrap();
+        let key = [7u8; 32];
+        crate::db::books::set_owner_sub(
+            &pool,
+            "book-1",
+            Some(crate::owner::encrypt(&key, "sub-1")),
+        )
+        .unwrap();
+        assert!(
+            !crate::db::backup::has_local_user_content(&pool).unwrap(),
+            "所有情報だけではユーザー生成データではない"
+        );
+
+        crate::db::favorites::set_favorite(
+            &pool,
+            crate::db::favorites::EntityKind::Circle,
+            "circle-1",
+            true,
+            None,
+        )
+        .unwrap();
+        assert!(
+            crate::db::backup::has_local_user_content(&pool).unwrap(),
+            "お気に入りはユーザー生成データ"
+        );
     }
 
     /// 同じ内容なら挿入順が違っても同じ JSON を書き出す

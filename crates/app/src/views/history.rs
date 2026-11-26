@@ -359,6 +359,7 @@ impl HistoryView {
         let packs_dir = state.packs_dir.clone();
         // 本棚と同じ表紙の解決順にそろえる（サイトのサムネキャッシュを最優先）
         let thumbnails_dir = state.data_dir.join("thumbnails");
+        let pack_root_key = state.pack_root_key();
         let owned = owned_book_ids(state);
         let owner_id = crate::app_state::owner_id(state).unwrap_or_default();
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -428,7 +429,9 @@ impl HistoryView {
                     .or_insert_with(|| {
                         shelf
                             .and_then(|item| load_cached_cover(&thumbnails_dir, item))
-                            .or_else(|| load_cover_image(&packs_dir, book))
+                            .or_else(|| {
+                                load_cover_image(&packs_dir, book, pack_root_key.as_ref())
+                            })
                             .or_else(|| placeholder_cover(&book.title, &book.circle_name))
                     })
                     .clone(),

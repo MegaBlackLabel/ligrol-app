@@ -1485,6 +1485,14 @@ fn db_backup_upload_is_blocked_when_local_user_data_is_empty() {
     let root = PackRootKey::generate();
     save_root_key(sub, &root);
     insert_owned_book(&env.pool, "b1", "自分の本", sub, &owner_key);
+    // Drive 側にユーザーデータ（お気に入りタグ）がある状態を作る。
+    db::tags::set_favorite(
+        &env.pool,
+        "guard-favorite",
+        true,
+        Some(&ligrol_core::owner::encrypt(&owner_key, sub)),
+    )
+    .unwrap();
     let db_path = env.packs().join("ligrol.db");
 
     // ① ユーザーデータがある状態で 1 回目 → アップロードされる

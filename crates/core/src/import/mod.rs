@@ -426,10 +426,10 @@ fn read_zip_entry_capped_detail<R: std::io::Read + std::io::Seek>(
 
 /// 通常 ZIP エントリ 1 件の非圧縮サイズ上限（2 GiB。解凍爆弾対策）。
 ///
-/// **展開後**のサイズで判定する（宣言サイズは信用しない）。取り込み元ファイルの上限
-/// （[`MAX_IMPORT_SOURCE_BYTES`]）と同じ値にしてある: ここで許すのは
-/// 「そのサイズの 1 エントリをメモリに読んでよい」という意味で、それ以上は
-/// 取り込み側（`import_*_bytes`）が扱えない。
+/// **展開後**のサイズで判定する（宣言サイズは信用しない）。ここで許すのは
+/// 「そのサイズの 1 エントリを**メモリに読んでよい**」という意味。PDF は
+/// [`MAX_ZIP_PDF_ENTRY_BYTES`] まで一時ファイルへストリームできるので、
+/// この上限の対象外（2 GiB 超の PDF は `copy_zip_entry_to_file` 経由）。
 ///
 /// 512 MiB にしていたときは、**142 MB の ZIP に含まれる PDF が展開後 512 MiB を
 /// 超える**（スキャン画像を多く含む PDF は deflate がよく効く）という正当な本を
@@ -437,15 +437,113 @@ fn read_zip_entry_capped_detail<R: std::io::Read + std::io::Seek>(
 /// 元 PDF の大きさが pack の上限に効くことはない。
 pub const MAX_ZIP_ENTRY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+/// ZIP 内 PDF の上限（10 GiB）。PDF は**メモリに読まず一時ファイルへ流す**ので、
+/// 通常エントリの 2 GiB 上限を超える本（報告例: 展開後 3.8 GiB の PDF）も取り込める。
+/// 取り込み元ファイル全体の上限 [`MAX_IMPORT_SOURCE_BYTES`] と同じ。
+pub const MAX_ZIP_PDF_ENTRY_BYTES: u64 = MAX_IMPORT_SOURCE_BYTES;
+
 /// 上限超過エントリのエラー文言。
 ///
 /// 内訳（宣言サイズ・実際に読めた長さ）を出すのは、**上限に当たったのか
 /// データが壊れているのか**を切り分けるため（宣言より実際がはるかに大きい＝
 /// 展開爆弾か壊れた ZIP。どちらも同じ上限で弾くが、原因を追える）。
 fn zip_entry_too_large_error(name: &str, declared: u64, read: u64) -> ImportError {
+    zip_entry_too_large_error_with_limit(name, declared, read, MAX_ZIP_ENTRY_BYTES)
+}
+
+fn zip_entry_too_large_error_with_limit(
+    name: &str,
+    declared: u64,
+    read: u64,
+    limit: u64,
+) -> ImportError {
     ImportError::Zip(format!(
-        "エントリがサイズ上限（{MAX_ZIP_ENTRY_BYTES} バイト）を超えています: {name}（宣言 {declared} バイト / 実際に読めた {read} バイト）"
+        "エントリがサイズ上限（{limit} バイト）を超えています: {name}（宣言 {declared} バイト / 実際に読めた {read} バイト）"
     ))
+}
+
+/// ZIP エントリを**メモリに載せず**一時ファイルへコピーする（巨大 PDF 用）。
+/// 展開後の実バイト数で上限を判定し、超えたらファイルを消してエラーにする。
+fn copy_zip_entry_to_file<R: std::io::Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    meta: &EntryMeta,
+    dest: &std::path::Path,
+    limit: u64,
+) -> Result<u64, ImportError> {
+    match &meta.nested {
+        None => {
+            let entry = archive
+                .by_index(meta.index)
+                .map_err(|e| ImportError::Zip(e.to_string()))?;
+            copy_reader_to_file(entry, &meta.name, meta.declared_size, dest, limit)
+        }
+        Some(bytes) => {
+            let mut nested = zip::ZipArchive::new(std::io::Cursor::new(Arc::clone(bytes)))
+                .map_err(|e| ImportError::Zip(e.to_string()))?;
+            let entry = nested
+                .by_index(meta.index)
+                .map_err(|e| ImportError::Zip(e.to_string()))?;
+            copy_reader_to_file(entry, &meta.name, meta.declared_size, dest, limit)
+        }
+    }
+}
+
+fn copy_reader_to_file(
+    mut entry: impl Read,
+    name: &str,
+    declared: u64,
+    dest: &std::path::Path,
+    limit: u64,
+) -> Result<u64, ImportError> {
+    let file = std::fs::File::create(dest)?;
+    let mut writer = std::io::BufWriter::new(file);
+    let mut read = 0u64;
+    let mut chunk = [0u8; 1024 * 1024];
+    loop {
+        let n = entry
+            .read(&mut chunk)
+            .map_err(|e| ImportError::Zip(e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        read = read.saturating_add(n as u64);
+        if read > limit {
+            drop(writer);
+            let _ = std::fs::remove_file(dest);
+            return Err(zip_entry_too_large_error_with_limit(
+                name, declared, read, limit,
+            ));
+        }
+        std::io::Write::write_all(&mut writer, &chunk[..n])?;
+    }
+    std::io::Write::flush(&mut writer)?;
+    Ok(read)
+}
+
+/// 一時 PDF ファイル（`Drop` で必ず消す）。
+struct TempPdfFile {
+    path: std::path::PathBuf,
+}
+
+impl TempPdfFile {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "ligrol-import-{}-{}.pdf",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        Self { path }
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for TempPdfFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// `EntryMeta` が指すエントリを 1 件読み出す（入れ子 ZIP の中身にも対応）。
@@ -1973,6 +2071,25 @@ fn render_pdf_with(
     }
 }
 
+/// 一時ファイルに落とした PDF を描画する（PDFium にファイルを渡す）。
+fn render_pdf_file_with(
+    path: &std::path::Path,
+    progress: Option<&mut (dyn FnMut(f32) + Send)>,
+) -> Result<Vec<pdf::PageImage>, ImportError> {
+    let mut pages = Vec::new();
+    match progress {
+        Some(progress) => pdf::render_pdf_file_into(path, progress, &mut |page| {
+            pages.push(page);
+            Ok(())
+        })?,
+        None => pdf::render_pdf_file_into(path, &mut |_| {}, &mut |page| {
+            pages.push(page);
+            Ok(())
+        })?,
+    };
+    Ok(pages)
+}
+
 /// 名前に「本文」系の語を含むか（docs/import-patterns.md §5.1 の語彙）。
 fn is_body_name(name: &str) -> bool {
     name.contains("本文") || name.contains("本編")
@@ -2198,12 +2315,30 @@ pub fn commit_zip_with<R: std::io::Read + std::io::Seek>(
                 MediaKind::Pdf => {
                     let ordinal = rendition.entries.first().ok_or_else(missing_entry)?;
                     let meta = metas.get(*ordinal).ok_or_else(missing_entry)?;
-                    let data = read_entry(archive, meta)?;
-                    // 進捗は既定表示コンテンツの PDF だけに流す（他は描画の副作用を避ける）
-                    let pages = if legacy {
-                        render_pdf_with(&data, Some(&mut *progress))?
+                    // 2 GiB を超える PDF はメモリに読まず、一時ファイルへ流して
+                    // PDFium にファイルを渡す（報告例: 展開後 3.8 GiB の PDF）。
+                    let pages = if meta.nested.is_none() && meta.declared_size > MAX_ZIP_ENTRY_BYTES
+                    {
+                        let temp = TempPdfFile::new();
+                        copy_zip_entry_to_file(
+                            archive,
+                            meta,
+                            temp.path(),
+                            MAX_ZIP_PDF_ENTRY_BYTES,
+                        )?;
+                        // 進捗は既定表示コンテンツの PDF だけに流す
+                        if legacy {
+                            render_pdf_file_with(temp.path(), Some(&mut *progress))?
+                        } else {
+                            render_pdf_file_with(temp.path(), None)?
+                        }
                     } else {
-                        render_pdf_with(&data, None)?
+                        let data = read_entry(archive, meta)?;
+                        if legacy {
+                            render_pdf_with(&data, Some(&mut *progress))?
+                        } else {
+                            render_pdf_with(&data, None)?
+                        }
                     };
                     for (index, page) in pages.iter().enumerate() {
                         let page_number = index as i64 + 1;
@@ -3130,9 +3265,46 @@ mod pack_entry_store_tests {
 #[cfg(test)]
 mod zip_entry_limit_tests {
     use super::{
-        ImportError, MAX_ZIP_ENTRY_BYTES, read_zip_entry_capped_detail, zip_entry_too_large_error,
+        ImportError, MAX_ZIP_ENTRY_BYTES, collect_entry_metas, copy_zip_entry_to_file,
+        read_zip_entry_capped_detail, zip_entry_too_large_error,
     };
     use std::io::Write as _;
+
+    /// 大きい PDF は一時ファイルへストリームし、上限超過時は途中ファイルを残さない。
+    #[test]
+    fn streaming_copy_removes_the_partial_file_when_over_the_limit() {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            writer
+                .start_file("本編.pdf", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(&vec![3u8; 2000]).unwrap();
+            writer.finish().unwrap();
+        }
+        let bytes = buffer.into_inner();
+        let dest = std::env::temp_dir().join(format!(
+            "ligrol-zip-copy-test-{}-{}.pdf",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+        let metas = collect_entry_metas(&mut archive).unwrap();
+        let error = copy_zip_entry_to_file(&mut archive, &metas[0], &dest, 1999).unwrap_err();
+        let ImportError::Zip(message) = error else {
+            panic!("Zip エラーになる");
+        };
+        assert!(message.contains("1999"), "{message}");
+        assert!(!dest.exists(), "上限超過の途中ファイルを残さない");
+
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let metas = collect_entry_metas(&mut archive).unwrap();
+        let read = copy_zip_entry_to_file(&mut archive, &metas[0], &dest, 2000).unwrap();
+        assert_eq!(read, 2000);
+        assert_eq!(std::fs::metadata(&dest).unwrap().len(), 2000);
+        let _ = std::fs::remove_file(&dest);
+    }
 
     /// 上限ちょうどは読めて、1 バイト超は `None` + 実際に読めた長さを返す。
     ///

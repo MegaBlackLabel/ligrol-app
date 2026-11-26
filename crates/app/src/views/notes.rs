@@ -281,9 +281,16 @@ impl NotesView {
         let state = AppState::global(cx);
         let packs_dir = state.packs_dir.clone();
         let thumbnails_dir = state.data_dir.join("thumbnails");
+        let pack_root_key = state.pack_root_key();
         // pack の展開は重いので背景で回し、終わったら notify で描き直す
         let task = cx.background_executor().spawn(async move {
-            load_note_cover(&thumbnails_dir, &packs_dir, &book, shelf.as_ref())
+            load_note_cover(
+                &thumbnails_dir,
+                &packs_dir,
+                &book,
+                shelf.as_ref(),
+                pack_root_key.as_ref(),
+            )
         });
         cx.spawn_in(window, async move |this, cx| {
             let loaded = task.await;
@@ -1091,10 +1098,11 @@ fn load_note_cover(
     packs_dir: &std::path::Path,
     book: &books::Book,
     shelf: Option<&db::bookshelf::BookshelfItem>,
+    pack_root_key: Option<&nartik::PackRootKey>,
 ) -> Option<Arc<RenderImage>> {
     shelf
         .and_then(|item| load_cached_cover(thumbnails_dir, item))
-        .or_else(|| load_cover_image(packs_dir, book))
+        .or_else(|| load_cover_image(packs_dir, book, pack_root_key))
 }
 
 /// `YYYY-MM-DD HH:MM:SS`（UTC）をローカルの「YYYY年MM月DD日」にする。
@@ -1961,12 +1969,38 @@ mod tests {
         std::fs::write(packs.join("b1.nartik"), &bytes).unwrap();
 
         assert!(
-            load_note_cover(&thumbnails, &packs, &test_book("b1"), None).is_some(),
+            load_note_cover(&thumbnails, &packs, &test_book("b1"), None, None).is_some(),
             "pack の cover.webp から表紙を読めていない"
         );
+
+        // v3 の暗号化 pack は root key が無いと表紙を読めず、あれば読める。
+        // （新 PC は表紙キャッシュが無いので、ここが読めないと NoImage になる）
+        let root_key = nartik::PackRootKey::generate();
+        let mut builder = nartik::PackBuilder::new(2);
+        builder.add_entry("cover.webp", png, "image/webp", false);
+        let encrypted = builder
+            .build(Some(&root_key.derive_pack_key("b3")), true)
+            .unwrap();
+        std::fs::write(packs.join("b3.nartik"), &encrypted).unwrap();
+        assert!(
+            load_note_cover(
+                &thumbnails,
+                &packs,
+                &test_book("b3"),
+                None,
+                Some(&root_key)
+            )
+            .is_some(),
+            "暗号化 pack の表紙を root key で復号できていない"
+        );
+        assert!(
+            load_note_cover(&thumbnails, &packs, &test_book("b3"), None, None).is_none(),
+            "鍵なしで暗号化 pack の表紙が読めてはいけない"
+        );
+
         // pack が無い本は None（呼び出し側がプレースホルダを出す）
         assert!(
-            load_note_cover(&thumbnails, &packs, &test_book("b2"), None).is_none(),
+            load_note_cover(&thumbnails, &packs, &test_book("b2"), None, None).is_none(),
             "pack が無いのに表紙が返っている"
         );
 

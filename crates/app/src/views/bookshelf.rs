@@ -1269,8 +1269,8 @@ pub struct BookshelfView {
     carousel_cards: std::cell::RefCell<Vec<usize>>,
     /// GPU のテクスチャを描画時に解放するための待ち行列（`window` が要る）
     pending_image_drops: Vec<Arc<RenderImage>>,
-    /// 表紙取得の再実行済みフラグ（同期 reload で後から増えたカード分を 1 回だけ再取得）
-    cover_fetch_retried: bool,
+    /// 表紙取得の連続再実行回数（同期 reload で後から増えたカード分を取り切る）
+    cover_fetch_retries: u8,
     /// 取り込み確認モーダル（§6.3。曖昧な構造のときだけ出る）
     pending_import: Option<PendingImport>,
     /// 表紙取得中で開始できなかったダウンロード（取得完了後に実行する）
@@ -1915,7 +1915,7 @@ impl BookshelfView {
             visible_cards: std::cell::Cell::new(None),
             carousel_cards: std::cell::RefCell::new(Vec::new()),
             pending_image_drops: Vec::new(),
-            cover_fetch_retried: false,
+            cover_fetch_retries: 0,
             pending_import: None,
             pending_download: None,
             auto_download_started: false,
@@ -2654,6 +2654,9 @@ impl BookshelfView {
             reload_start.elapsed()
         );
         // Kick off remote cover fetching for cards that only have a placeholder.
+        // reload ごとに再実行の回数をリセットする（同期が複数サイトぶん続いても
+        // 後から増えたカードの表紙を取り切れるようにする）。
+        self.cover_fetch_retries = 0;
         self.fetch_remote_covers(cx);
         log::info!("reload: 完了（{:?}）", reload_start.elapsed());
         cx.notify();
@@ -2756,6 +2759,7 @@ impl BookshelfView {
         let state = Self::app_state(cx);
         let thumbnails_dir = state.data_dir.join("thumbnails");
         let packs_dir = state.packs_dir.clone();
+        let pack_root_key = state.pack_root_key();
         let shelf = self.shelf_cards[card_index].shelf.clone();
         let book = self.shelf_cards[card_index]
             .local
@@ -2763,7 +2767,13 @@ impl BookshelfView {
             .map(|entry| entry.book.clone());
         let handle = cx.entity();
         let task = cx.background_executor().spawn(async move {
-            load_cover_from_disk(&thumbnails_dir, &shelf, book.as_ref(), &packs_dir)
+            load_cover_from_disk(
+                &thumbnails_dir,
+                &shelf,
+                book.as_ref(),
+                &packs_dir,
+                pack_root_key.as_ref(),
+            )
         });
         cx.spawn(async move |_window, cx| {
             let decoded = task.await;
@@ -3063,12 +3073,16 @@ impl BookshelfView {
                     // ここで除外すると、その本の表紙が取得されないまま残る。
                     c.cover.is_remote() && c.shelf.thumbnail_url.is_some()
                 });
-                if still_pending && ok > 0 && !this.cover_fetch_retried {
-                    this.cover_fetch_retried = true;
+                // 同期 reload が後からカードを足した場合、その分も取り切る。
+                // 失敗したカードは `Failed` になるので、残りは減る。
+                if still_pending && this.cover_fetch_retries < 4 {
+                    this.cover_fetch_retries += 1;
                     this.fetch_remote_covers(cx);
                     return;
                 }
-                this.cover_fetch_retried = false;
+                if !still_pending {
+                    this.cover_fetch_retries = 0;
+                }
                 if ok == 0 {
                     // エラーは赤の 1 行だけ表示する（toast と重複させない）
                     crate::app_state::set_toast_kind(
@@ -10625,16 +10639,18 @@ fn load_cover_from_disk(
     shelf: &bookshelf::BookshelfItem,
     book: Option<&books::Book>,
     packs_dir: &std::path::Path,
+    pack_root_key: Option<&nartik::PackRootKey>,
 ) -> Option<Arc<RenderImage>> {
     if let Some(image) = load_cached_cover(thumbnails_dir, shelf) {
         return Some(image);
     }
-    book.and_then(|book| load_cover_image(packs_dir, book))
+    book.and_then(|book| load_cover_image(packs_dir, book, pack_root_key))
 }
 
 pub(crate) fn load_cover_image(
     packs_dir: &std::path::Path,
     book: &books::Book,
+    pack_root_key: Option<&nartik::PackRootKey>,
 ) -> Option<Arc<RenderImage>> {
     let pack_id = book.pack_id.as_deref().unwrap_or(&book.id);
     // 保存領域の外を指す id（改変バックアップ由来）では読まない。
@@ -10642,9 +10658,14 @@ pub(crate) fn load_cover_image(
     // pack 全体（この環境には 354 MB のものがある）を読まずに、ヘッダ + インデックス +
     // 表紙エントリだけを読む。表紙は表示サイズ（448px）へ縮小してから保持する
     // （リモート表紙と同じ経路・同じ解像度に揃える）。
+    //
+    // v3 の pack は**全エントリが暗号化**されている。鍵を渡さないと
+    // `read_entry_with_key(..., None)` は KeyRequired で失敗し、表紙キャッシュの
+    // 無い端末（新 PC）で pack の表紙が読めない。冊ごとの鍵は PRK + book id。
+    let key = pack_root_key.map(|root| root.derive_pack_key(pack_id));
     let reader = nartik::PackFileReader::open(&path).ok()?;
     for entry in ["thumbnail.webp", "cover.webp"] {
-        if let Ok(data) = reader.read_entry_with_key(entry, None)
+        if let Ok(data) = reader.read_entry_with_key(entry, key.as_ref())
             && let Some(image) = decode_and_resize(&data, 448)
         {
             return Some(image);

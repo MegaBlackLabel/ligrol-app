@@ -317,11 +317,16 @@
   - 判別と復号は `db::backup::DriveBackup`（`parse` / `owner_id` / `change_token` / `plaintext`）`crates/core/src/db/backup.rs:194`, `:218`。**`encryption` があるファイルは必ず封筒として扱い**、壊れていればエラーにする（暗号文を平文として取り込まない）。未知の `format_version` も同様に拒否する
   - 復号の鍵は keyring の `ligrol.pack-root-key:<owner_id>`（封筒の `owner_id` でスロットを選ぶ）`crates/core/src/drive/sync.rs:576`。**無ければ復号しない**
 - 復元 API: `check_drive_backup(drive, folder_id)` → `DriveBackupInfo{file_id, md5, size, modified_time}`（無ければ `None`）`crates/core/src/drive/sync.rs:517-531`; `restore_drive_backup(drive, folder_id, pool)` はダウンロード → v3 なら復号 → `backup::import_json` `crates/core/src/drive/sync.rs:538-569`。鍵が無ければ `SyncError::BackupKeyRequired` で失敗し**1 行も取り込まない**（fail-closed）。
-- 差分判定 `inspect_drive_backup(pool, drive, folder_id, book_ids, owner, baseline_md5)` → `Option<BackupStatus{info, drive_changed, local_differs}>` `crates/core/src/drive/sync.rs:638-687`:
+- 差分判定 `inspect_drive_backup(pool, drive, folder_id, book_ids, owner, baseline_md5)` → `Option<BackupStatus{info, drive_changed, local_differs, is_new_device}>` `crates/core/src/drive/sync.rs`:
   - 比較は両側を `backup::canonicalize_json` の正規形にしてから md5 で行う。正規形は「Drive 側に存在するテーブルだけに絞る」「揮発列（`books.updated_at` / `bookshelf_items.synced_at,updated_at` / `tbf_events.updated_at`）を落とす」「行を PK 順に並べる」`crates/core/src/db/backup.rs:50-146`。新テーブル追加・同期のたびに書き換わる時刻・行の物理順で毎回復元確認が出るのを防ぐ。**v3 は先に復号してから**同じ比較に載せる。
   - `drive_changed` = Drive 側の値が基準値 `app_settings['drive.backup.md5']`（最後にアップロード／復元した内容）と違う。**v3 = 封筒の `content_hmac` / v2 = 正規形 md5**（形式ごとに比較できる値が違う）`crates/core/src/drive/sync.rs:598`。基準値が無ければ判定不能として false。
   - **v3 で鍵が無いとき**: 内容を復号できないので `drive_changed` だけを判定し `local_differs` は false＝復元確認を出さない（復元しても失敗するため）。
-  - `should_offer_restore()` = `drive_changed && local_differs`。**ローカル側だけが進んだ場合は復元確認を出さない**（出すと新しいローカルを古いバックアップで上書きしてしまう）`crates/core/src/drive/sync.rs:611-620`。
+  - `should_offer_restore()` = `local_differs && (drive_changed || is_new_device)`。
+    `is_new_device` は「基準値が無く、ローカルにユーザー生成データも無い」場合だけ true。
+    **既存端末でローカル側だけが進んだ場合は復元確認を出さない**（出すと新しいローカルを
+    古いバックアップで上書きしてしまう）。新端末は基準値が無いので、ローカルが空である
+    ことを条件に復元を許可する（2026-11-26 修正。以前は基準値が無いだけで復元を
+    見送り、pack だけ落ちてお気に入り・付箋・履歴が戻らなかった）`crates/core/src/drive/sync.rs`。
 - `restore_drive_backup` は復元後に**同じ内容を基準値として保存**する（ローカルに Drive に無い行が残っていると差分は消えないため、更新しないと次回起動でまた復元を促し続ける）。v3 は封筒の `content_hmac` を保存する `crates/core/src/drive/sync.rs:563-569`。
 - **ユーザーデータ（`owner_sub` / `page_notes.memo`）は v3 では平文で運ぶ**（2026-09-29）:
   これらは端末ローカル鍵で暗号化されているため、暗号文のままでは他端末で復号できず、
@@ -332,18 +337,24 @@
     `owner_sub` を値から推定すると、他端末の暗号文を二重暗号化して行を消す）。
   - **比較側（`inspect_drive_backup` の `local_differs`）は Drive の形式に合わせる**
     （ローカルの能力で決めると値空間が食い違い、毎起動で復元確認が出る）。
-- **上書き防止（門）** `crates/core/src/drive/sync.rs`: ローカルのユーザーデータ
-  （`favorite_tags` / `favorite_entities` / `page_notes` / `owner_sub` 付き `books`）が
-  **0 件で Drive に既存バックアップがあるときは DB バックアップをアップロードしない**。
-  他端末が入れたユーザーデータを空のローカルで潰す事故を防ぐ。判定は
-  `sync_with_progress` の 1 箇所にあり、**設定の同期 / 終了時アップロード / 自動同期の
-  すべて**がそこを通る（`db::backup::user_data_row_count`）。
+- **上書き防止（門）** `crates/core/src/drive/sync.rs`: ローカルにユーザー生成データ
+  （`favorite_tags` / `favorite_entities` / `page_notes` / `view_history` / 実際に読んだ
+  `reading_progress` / `page_views` / お気に入りの本）が**無い**状態で Drive に既存
+  バックアップがあるときは DB バックアップをアップロードしない。
+  他端末が入れたユーザーデータを空のローカルで潰す事故を防ぐ。
+  **`books.owner_sub` は数えない**: pack を Drive から落としただけの新端末でも本の行には
+  `owner_sub` が入るため、これを数えると空のメタデータでバックアップを上書きしてしまう。
+  判定は `sync_with_progress` の 1 箇所にあり、**設定の同期 / 終了時アップロード /
+  自動同期のすべて**がそこを通る（`db::backup::has_local_user_content`）。
 - **同期時の取り込み（復元）**: `sync_drive_now(allow_restore, cx)` は `check_drive_backup`
   → `inspect_drive_backup` → **`should_offer_restore` を経由** → `restore_drive_backup` を
   **アップロードより前**に実行する（後ろだと「この PC の内容で Drive を上書きしてから
   取り込む」順になり、他端末のユーザーデータを失う。実測でこの事故が起きた）。
   - **`allow_restore` は利用者が起点の同期（設定の「同期」ボタン）だけ true**。自動同期
     （チェックリスト変更・ログイン直後）は false（＝同意なしの Drive 優先 UPSERT をしない）。
+    ただし**基準値が無く、ローカルにユーザー生成データも無い新端末**では、自動同期でも
+    `should_offer_restore` が true になり復元する（2026-11-26 修正）。復元に失敗した場合は
+    自動同期を続行し、上書き防止の門が Drive の控えを守る。
   - 復号できない／形式不正な控えは**中断して利用者に見せる**（読めない控えの上に
     ローカルを被せると唯一のオフサイト退避を失う）。
   - 復元後は基準値が更新され（`BACKUP_BASELINE_KEY`）、直後のアップロードは差分なしになる。

@@ -63,7 +63,8 @@
 | 合流エントリ数上限 | `MAX_NESTED_ENTRIES = 2000` | `import/mod.rs:197`, `:357-363` |
 | 合流規則 | 入れ子 ZIP のパス（拡張子除去）+ `/` + 内側エントリ名。外側の分類・グルーピングがそのまま効く | `import/mod.rs:336`, `:351-355` |
 | 上限超過時 | 半分だけ取り込まず**その入れ子全体をスキップ**し、`warnings` に 1 行積む（取り込み全体は失敗させない） | `import/mod.rs:357-364` |
-| 通常エントリの上限 | `MAX_ZIP_ENTRY_BYTES = 2 GiB`（**展開後**。宣言サイズではなく実際に読めたバイト数で判定）。超過は `ImportError::Zip`（部分的なデータで先へ進めない）。取り込み元ファイルの上限と同値にしてある: 512 MiB にしていたときは「142 MB の ZIP に含まれる PDF が展開後 512 MiB を超える」正当な本を弾いていた（2026-09-26） | `import/mod.rs`（`read_zip_entry_capped`） |
+| 通常エントリの上限 | `MAX_ZIP_ENTRY_BYTES = 2 GiB`（**展開後**。宣言サイズではなく実際に読めたバイト数で判定）。超過は `ImportError::Zip`（部分的なデータで先へ進めない）。512 MiB にしていたときは「142 MB の ZIP に含まれる PDF が展開後 512 MiB を超える」正当な本を弾いていた（2026-09-26） | `import/mod.rs`（`read_zip_entry_capped`） |
+| ZIP 内 PDF の上限 | `MAX_ZIP_PDF_ENTRY_BYTES = 10 GiB`。通常エントリの 2 GiB 上限を超える PDF（報告例: 展開後 3.8 GiB）は、`copy_zip_entry_to_file` で**一時ファイルへストリーム**し、PDFium の `load_pdf_from_file` で描画する（メモリに載せない）。上限判定は展開後の実バイト数 | `import/mod.rs`（`copy_zip_entry_to_file` / `render_pdf_file_with`） |
 | 外側 ZIP 全体の上限 | **展開の前**にエントリ数（`nartik::MAX_ENTRY_COUNT` = 10000）と、中央ディレクトリが宣言する展開後サイズの合計（`nartik::MAX_TOTAL_SIZE` = 10 GiB）を検査する。超過は `ImportError::ZipTooLarge { detail }`。宣言サイズは信用せず（実際の長さは個別上限で別途見る）、事前に弾ける分だけをここで弾く | `import/mod.rs`（`analyze_zip` / `EntryMeta::declared_size`） |
 | 取り込み元ファイルの上限 | `MAX_IMPORT_SOURCE_BYTES = 10 GiB`（pack の上限と同値）。**読む前に**メタデータで検査する。超過は `ImportError::SourceTooLarge { size, limit }`。アプリ側は①ストアが申告するサイズが分かるときは**転送の前**に断り（無駄なダウンロードをしない）②ダウンロード直後にも同じ値で検査する | `import/mod.rs`（`import_file`）、`crates/app/src/views/bookshelf.rs` |
 | 取り込み元の読み方 | **PDF と ZIP はファイルから読む**（`import_pdf_path` / `import_zip_path`。PDF は PDFium の `load_pdf_from_file`、ZIP は `ZipArchive<File>`）ので、取り込み元の大きさがそのまま RAM 使用量にはならない。EPUB（ビューアー非対応で 1 エントリとして入れるだけ）と単体画像は全体を読む（実データでは小さい）。**アプリのダウンロードも一時ファイル経由**（4 ストアの `download_to_file_with_progress` → `import_*_path`。`TempDownload` がどの経路でも消す） | | `crates/core/src/import/{mod,pdf}.rs` |
@@ -115,9 +116,10 @@ PDF も `pdf::render_pdf_pages_into` で**1 ページずつ** store へ入れる
 以前は全ページを `Vec<PageImage>` に集めてから clone していた）。画像 1 枚・EPUB・ZIP も
 store へ直接入る。
 
-**残る制約**: 取り込み元ファイルは `import_*_bytes` が全体をメモリへ読む（2 GiB 超は
-`MAX_IMPORT_SOURCE_BYTES` で先に断る）。metadata の書き戻し（`rename_content_in_pack`）も pack 全体を引数で受け取る
-（呼び出し側が既に全体を持っている経路）。
+**残る制約**: `import_*_bytes` は入力全体をメモリで受け取る（アプリのファイル取り込みは
+`import_file` → `import_pdf_path` / `import_zip_path` なので PDF/ZIP の本体はファイルから読む）。
+`MAX_IMPORT_SOURCE_BYTES`（10 GiB）は読む前に検査する。metadata の書き戻し
+（`rename_content_in_pack`）も pack 全体を引数で受け取る（呼び出し側が既に全体を持っている経路）。
 
 ### 3.6 ページ画像生成（数値・アルゴリズム）
 

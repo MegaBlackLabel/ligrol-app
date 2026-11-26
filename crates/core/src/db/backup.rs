@@ -331,29 +331,98 @@ impl DriveBackup {
     }
 }
 
-/// ローカルにある「ユーザーが作ったデータ」の行数（お気に入り・付箋・所有情報）。
+/// ローカルに**ユーザーが作ったデータ**があるか。
 ///
-/// Drive の DB バックアップを**空のローカルで上書きしない**ための門で使う
-/// （他端末が入れたユーザーデータを失う事故を防ぐ。実測で発生した）。
-pub fn user_data_row_count(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+/// お気に入り・付箋・閲覧履歴・実際に読んだ進捗・お気に入りの本だけを見る。
+/// `books.owner_sub` は **Drive から pack を復元しただけの新端末でも入る**ため
+/// 数えない（これを数えると、pack を落とした新端末が「ユーザーデータあり」と
+/// 誤判定され、空のメタデータで Drive のバックアップを上書きしてしまう）。
+///
+/// - Drive の DB バックアップを空のローカルで上書きしない門
+/// - 基準値が無い端末を「新端末」と判定して復元を提案する条件
+///
+/// の両方で使う。
+pub fn has_local_user_content(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
     crate::db::block_on(async {
-        let mut total = 0i64;
         for (table, where_sql) in [
             ("favorite_tags", ""),
             ("favorite_entities", ""),
             ("page_notes", ""),
-            // 所有情報（どのアカウントの本か）もユーザー由来のデータ
-            ("books", " WHERE owner_sub IS NOT NULL"),
+            ("view_history", ""),
+            // ページ数の初期行（current_page = 0）は取り込み時に作られるだけなので
+            // ユーザーの読書行為として数えない。
+            (
+                "reading_progress",
+                " WHERE current_page > 0 OR finished_at IS NOT NULL",
+            ),
+            ("page_views", " WHERE view_count > 0 OR total_seconds > 0"),
+            ("books", " WHERE is_favorite = 1"),
         ] {
-            let sql = format!("SELECT COUNT(*) FROM {table}{where_sql}");
-            let count: i64 = sqlx::query_scalar(dynamic_sql(sql.as_str()))
-                .fetch_one(pool)
+            let sql = format!("SELECT 1 FROM {table}{where_sql} LIMIT 1");
+            let found: Option<i64> = sqlx::query_scalar(dynamic_sql(sql.as_str()))
+                .fetch_optional(pool)
                 .await?;
-            total += count;
+            if found.is_some() {
+                return Ok(true);
+            }
         }
-        Ok(total)
+        Ok(false)
     })
 }
+/// バックアップ JSON に**ユーザーが作ったデータ**が入っているか。
+///
+/// Drive 上の既存バックアップを、ローカルの空データで上書きしてよいか判定する。
+/// 行の有無だけを見る（暗号化された値は復号しない）。`has_local_user_content` と
+/// 同じ対象（お気に入り・付箋・履歴・実際に読んだ進捗・お気に入りの本）。
+pub fn json_has_user_content(payload: &serde_json::Value) -> bool {
+    let rows = |table: &str| {
+        payload
+            .get(table)
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    };
+    for table in [
+        "favorite_tags",
+        "favorite_entities",
+        "page_notes",
+        "view_history",
+    ] {
+        if !rows(table).is_empty() {
+            return true;
+        }
+    }
+    let read_progress = rows("reading_progress").iter().any(|row| {
+        row.get("current_page")
+            .and_then(serde_json::Value::as_i64)
+            .is_some_and(|page| page > 0)
+            || row
+                .get("finished_at")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+    });
+    if read_progress {
+        return true;
+    }
+    let page_views = rows("page_views").iter().any(|row| {
+        row.get("view_count")
+            .and_then(serde_json::Value::as_i64)
+            .is_some_and(|count| count > 0)
+            || row
+                .get("total_seconds")
+                .and_then(serde_json::Value::as_f64)
+                .is_some_and(|seconds| seconds > 0.0)
+    });
+    if page_views {
+        return true;
+    }
+    rows("books").iter().any(|row| {
+        row.get("is_favorite")
+            .and_then(serde_json::Value::as_i64)
+            == Some(1)
+    })
+}
+
 /// バックアップ JSON にユーザーデータの形式を明示するマーカーのキー。
 pub const USER_DATA_MARKER_KEY: &str = "user_data";
 /// 平文で載っている（取込側で暗号化し直す必要がある）。
