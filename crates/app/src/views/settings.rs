@@ -1536,10 +1536,18 @@ impl SettingsView {
             // 後ろに置くと「この PC の（空かもしれない）内容で Drive を上書きしてから
             // 取り込む」順になり、他端末が入れたユーザーデータ（お気に入り・付箋・履歴）
             // を失う。実測でこの事故が起きた。判定は起動時ダイアログと同じ
-            // `should_offer_restore`（drive_changed && local_differs）を必ず経由する
-            // （ローカルだけが進んでいるときに古いバックアップで巻き戻さないため）。
+            // `should_offer_restore` を必ず経由する（ローカルだけが進んでいるときに
+            // 古いバックアップで巻き戻さないため）。基準値が無い端末でも、
+            // ローカルにユーザー生成データが無ければ新端末として復元する。
+            let baseline = db::settings::get(&db, sync::BACKUP_BASELINE_KEY)
+                .ok()
+                .flatten();
+            // 基準値が無い端末は、ローカルにユーザー生成データが無ければ新端末。
+            // 自動同期（allow_restore = false）でも、その場合だけ復元を試す。
+            // 既存端末でローカルだけが進んでいる場合は従来どおり復元しない。
+            let may_restore = allow_restore || baseline.is_none();
             let mut restored = false;
-            if allow_restore
+            if may_restore
                 && let (Some(sub), Some(key)) = (google_sub.as_deref(), db_key.as_ref())
             {
                 let book_ids = db::books::owned_book_ids(&db, key, Some(sub)).unwrap_or_default();
@@ -1547,7 +1555,6 @@ impl SettingsView {
                     key,
                     sub: Some(sub),
                 };
-                let baseline = db::settings::get(&db, "drive.backup.md5").ok().flatten();
                 match sync::inspect_drive_backup(
                     &db,
                     &mut drive,
@@ -1567,9 +1574,14 @@ impl SettingsView {
                         *bookshelf_invalidated.lock() = true;
                     }
                     Ok(_) => {}
-                    Err(error) => {
+                    Err(error) if allow_restore => {
                         // 読めない控えの上にローカルを被せると唯一のオフサイト退避を失う。
                         return Err(crate::pack_keys::sync_failure(&error));
+                    }
+                    // 自動同期の新端末復元は失敗しても続行する。DB バックアップの
+                    // 上書きは下の門（ユーザーデータが空なら上げない）が防ぐ。
+                    Err(error) => {
+                        log::warn!("sync_drive_now: 新端末の自動復元をスキップ: {error}");
                     }
                 }
             }
