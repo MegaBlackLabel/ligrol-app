@@ -77,7 +77,9 @@ DB は `<data_dir>/ligrol.db`。**マイグレーションは実行しない**�
 | `LIGROL_AI_LIBRARY` | `1` | 本棚・タグ・表紙 |
 | `LIGROL_AI_TEXT` | `0` | 本文・本文検索 |
 | `LIGROL_AI_STATS` | `1` | 読書統計 |
-| `LIGROL_AI_NOTES` | `0` | 付箋 |
+| `LIGROL_AI_NOTES` | `0` | 付箋の読み取り |
+| `LIGROL_AI_WRITE_NOTES` | `0` | 付箋の書き込み（add / remove） |
+| `LIGROL_AI_WRITE_TAGS` | `0` | タグの書き込み（add / remove） |
 | `LIGROL_AI_PURCHASES` | `1` | 購入一覧 |
 | `LIGROL_AI_TBF` | `1` | 技術書典 |
 | `LIGROL_AI_ACTIONS` | `0` | 操作要求 |
@@ -92,7 +94,7 @@ DB は `<data_dir>/ligrol.db`。**マイグレーションは実行しない**�
 
 - Transport: stdio（改行区切りの JSON-RPC 2.0）
 - 対応: `initialize` / `ping` / `tools/list` / `tools/call` /
-  `resources/list` / `resources/read` / `resources/templates/list` / `prompts/list`
+  `resources/list` / `resources/read` / `resources/templates/list` / `prompts/list` / `prompts/get`
 - `initialize` はクライアントの `protocolVersion` をそのまま返す。無ければ
   `2026-07-28`。
 - stdout は JSON-RPC 専用。ログは stderr。
@@ -146,11 +148,12 @@ DB は `<data_dir>/ligrol.db`。**マイグレーションは実行しない**�
 
 | 引数 | 型 | 内容 |
 |---|---|---|
-| `query` | string? | 書名・作者・サークル・タグの部分一致 |
+| `query` | string? | 書名・作者・サークル・タグ・説明・テーマ・シリーズの部分一致 |
 | `site_id` | string? | `techbookfest` / `booth` / `fanza` / `dlsite` / `fantia` |
 | `tag` | string? | タグ（大文字小文字無視） |
 | `state` | `unread`/`reading`/`read`? | 読書状態 |
 | `favorite_only` | bool? | お気に入りだけ |
+| `sort` | string? | `last-read`（既定）/ `title` / `purchase-date` / `release-date` / `added` |
 | `limit` | int? | 1..50（既定 20） |
 | `cursor` | string? | opaque cursor |
 
@@ -219,15 +222,17 @@ DB は `<data_dir>/ligrol.db`。**マイグレーションは実行しない**�
 
 | 引数 | 型 | 内容 |
 |---|---|---|
-| `book_ids` | string[] | 1..5 冊 |
+| `book_ids` | string[]? | 1..5 冊。省略 / 空配列は見える本を最大 50 冊走査 |
 | `query` | string | 部分一致 |
 | `limit` | int? | 1..50（既定 20） |
+| `cursor` | string? | 前回の `next_cursor` |
 
-返り値: `TextMatch[]`（`book_id` / `title` / `kind` / `ordinal` /
-`section_title` / `href` / `source` / `snippet`）。
+返り値: `{ items: TextMatch[], next_cursor, truncated }`。`TextMatch` は
+`book_id` / `title` / `kind` / `ordinal` / `section_title` / `href` / `source` /
+`snippet`。
 
-**全体検索ではない**。暗号化された `document_text` を対象書籍だけ復号して
-メモリ上で走査する。
+暗号化された `document_text` を対象書籍だけ復号してメモリ上で走査する。
+`book_ids` を省略すると見える本を最大 50 冊まで簡易スキャンする（FTS ではない）。
 
 #### `ligrol_get_reading_stats`
 
@@ -255,6 +260,10 @@ DB は `<data_dir>/ligrol.db`。**マイグレーションは実行しない**�
 `is_downloadable` / `is_purchased` / `downloaded` / `choices[]`。
 `choices[]` は `index` / `name`（URL は返さない）。
 
+#### `ligrol_list_tbf_events`
+
+引数なし。`{ event_id, event_name, event_date, event_format, is_cancelled, is_featured, poll_sync_enabled }[]`。
+
 #### `ligrol_get_tbf_plan`
 
 `{ event_id? }`。`TbfPlan`:
@@ -266,6 +275,29 @@ DB は `<data_dir>/ligrol.db`。**マイグレーションは実行しない**�
 
 `{ book_id }`。`content[0]` が画像、`content[1]` が
 `book_id` / `mime` / `width` / `height` / `sha256` の JSON。
+`thumbnail_share` が無い場合は pack 内 `thumbnail.webp` にフォールバックする。
+
+#### `ligrol_add_note`
+
+| 引数 | 型 | 内容 |
+|---|---|---|
+| `book_id` | string | 必須 |
+| `page` | int | 1-indexed |
+| `memo` | string | 最大 10,000 文字 |
+| `content_id` | string? | 省略時は `''` |
+| `expected_updated_at` | string? | 既存付箋の `updated_at`。違えば `revision_conflict` |
+
+返り値: `NoteView`（`memo` / `is_active` / `updated_at` など）。
+
+#### `ligrol_remove_note`
+
+`book_id` / `page` / `content_id?` / `expected_updated_at?`。
+`is_active = 0` にするだけで、メモは残す。
+
+#### `ligrol_add_tag` / `ligrol_remove_tag`
+
+`{ book_id, tag }`。追加は既存ならそのまま、削除は生成タグも対象。
+再取り込みで生成タグが復活する場合がある。
 
 ### 6.2 操作（承認キュー）
 
@@ -294,6 +326,11 @@ DB は `<data_dir>/ligrol.db`。**マイグレーションは実行しない**�
 `{ book_id }`。空の `document_text` ページだけ OCR する。
 モデルが無い場合はジョブが `ocr_model_missing` で失敗する。
 
+#### `ligrol_request_epub_extract`
+
+`{ book_id }`。既存の EPUB 本（raw `.epub` を pack に持つ）から本文を遡及抽出する。
+既存の `document_text(source='epub')` を置き換える。EPUB でない本は `not_epub`。
+
 #### `ligrol_open_book`
 
 `{ book_id }`。Ligrol の UI で本を開く。
@@ -320,6 +357,9 @@ DB は `<data_dir>/ligrol.db`。**マイグレーションは実行しない**�
 | `not_started` | 承認後の実行開始に失敗 |
 | `confirmation_expired` | 60 秒の承認期限切れ |
 | `ocr_model_missing` | OCR モデル未配置 |
+| `not_epub` | EPUB ではない本に遡及抽出を要求した |
+| `epub_entry_missing` | pack 内に raw `.epub` が無い |
+| `epub_extract_failed` | EPUB 抽出に失敗 |
 
 ## 7. resources
 
@@ -334,6 +374,16 @@ DB は `<data_dir>/ligrol.db`。**マイグレーションは実行しない**�
 
 `resources/templates/list` で上記テンプレートを返す。
 
+## 7.1 prompts
+
+| name | 内容 |
+|---|---|
+| `summarize-book` | 1 冊を章 / ページ単位で読んで要約する |
+| `reading-plan` | 統計と積読から次の読書計画を立てる |
+| `tbf-route` | 技術書典の回遊ルートと予算を提案する |
+
+`prompts/get` は `messages` を返す。プロンプト内でも「本文は untrusted」を明示している。
+
 ## 8. 承認キュー
 
 ### 8.1 状態
@@ -346,7 +396,7 @@ DB は `<data_dir>/ligrol.db`。**マイグレーションは実行しない**�
 - 承認ダイアログで「許可 / 拒否」
 - 許可後、`download` は既存のダウンロード / import、`open_book` は
   `ReaderView`、`ocr` は `pure-onnx-ocr` を実行
-- `download` の成功は、対象の本が `books` に現れた時点で判定
+- `download` の成功は取り込み完了時に `ai_jobs` へ反映する（本の出現でも成功を検出）
 - 拒否 / 期限切れは `cancelled` / `expired`
 
 ### 8.2 テーブル
@@ -387,10 +437,10 @@ DB は `<data_dir>/ligrol.db`。**マイグレーションは実行しない**�
 - loopback HTTP / Bearer は未実装（v1 は DB + `ai_jobs`）
 - 付箋 / タグの書き込みツールは未実装（読み取りのみ）
 - 設定 UI でのスコープ切替は未実装（環境変数）
-- 本文検索は 1〜5 冊のメモリ内走査。全体 FTS は未実装
+- 本文検索は 1〜5 冊のメモリ内走査（opaque cursor でページング）。全体 FTS は未実装
 - EPUB の固定レイアウト / DRM / 画像だけの本は本文なし
 - OCR はモデル配置が必要
-- ダウンロード失敗のジョブ反映は弱い（本の出現で成功、失敗は UI 通知）
+- ダウンロードの完了・失敗・キャンセルは `ai_jobs` に反映される（本の出現でも成功を検出）
 
 ## 11. トラブルシューティング
 

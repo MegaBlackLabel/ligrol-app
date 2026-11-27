@@ -20,6 +20,21 @@
 
 ### Changed
 
+- MCP の本棚検索に `sort` を追加し、`description` / `theme` / `series_name` も検索対象にした。
+  本文検索は opaque cursor でページングできる。
+- MCP にプロンプト（`summarize-book` / `reading-plan` / `tbf-route`）を追加した。
+- 実行中の OCR ジョブを `ligrol_cancel_job` で中止できるようにした。OCR ページの
+  `token_analysis` も再生成する。
+- 既存 EPUB 本の本文を遡及抽出する `ligrol_request_epub_extract` を追加した。
+- 技術書典のイベント一覧 `ligrol_list_tbf_events` を追加した。
+- 表紙は `thumbnail_share` が無い場合、pack 内 `thumbnail.webp` にフォールバックする。
+- AI のダウンロードジョブは、取り込み完了・失敗・キャンセルを `ai_jobs` と監査ログに反映する。
+- 付箋の書き込みツール（`ligrol_add_note` / `ligrol_remove_note`）を追加した。
+  `LIGROL_AI_WRITE_NOTES=1` と `LIGROL_AI_READ_ONLY=0` のときだけ有効で、
+  `expected_updated_at` による競合検出と soft delete に対応する。
+- `ligrol_search_text` は `book_ids` 省略時に見える本を最大 50 冊まで簡易スキャンできる。
+- タグの書き込みツール（`ligrol_add_tag` / `ligrol_remove_tag`）を追加した。
+  `LIGROL_AI_WRITE_TAGS=1` と `LIGROL_AI_READ_ONLY=0` のときだけ有効。
 - `document_text` に `source` / `engine` / `confidence` / `section_title` / `section_href`
   を追加し、`content_id` を INSERT に含める。既存行は `source='extracted'`。
 - AI 読み取り用に `db::connect_for_ai` を追加（マイグレーションを実行しない）。

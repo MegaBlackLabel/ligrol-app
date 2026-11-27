@@ -122,6 +122,46 @@ pub fn request_ocr(
     Ok(job.into())
 }
 
+pub fn request_epub_extract(
+    pool: &SqlitePool,
+    ctx: &AiContext,
+    client_id: &str,
+    book_id: &str,
+) -> Result<JobView, AiError> {
+    ctx.require_actions()?;
+    let visible = ctx.visible_book_ids(pool)?;
+    if !visible.contains(book_id) {
+        return Err(AiError::NotFound);
+    }
+    let book = books::get(pool, book_id)?.ok_or(AiError::NotFound)?;
+    if book.is_hidden != 0 {
+        return Err(AiError::NotFound);
+    }
+    let params = serde_json::json!({ "book_id": book_id }).to_string();
+    let job = ai_jobs::enqueue(
+        pool,
+        &NewAiJob {
+            client_id,
+            action: "epub_extract",
+            target: book_id,
+            params_json: &params,
+            idempotency_key: None,
+            owner_id: &ctx.owner_id(),
+            expires_in_seconds: Some(60),
+        },
+    )?;
+    ai_jobs::audit(
+        pool,
+        &ctx.owner_id(),
+        client_id,
+        "epub_extract",
+        book_id,
+        status::PENDING_CONFIRMATION,
+        None,
+    )?;
+    Ok(job.into())
+}
+
 pub fn request_open_book(
     pool: &SqlitePool,
     ctx: &AiContext,

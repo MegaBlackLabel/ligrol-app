@@ -271,6 +271,9 @@ pub struct Workspace {
     pack_key_pending: bool,
     /// AI（MCP）からの操作要求。承認するまで実行しない。
     ai_job_prompt: Option<ligrol_core::db::ai_jobs::AiJob>,
+    /// 実行中の AI OCR ジョブの中止フラグ（job_id → flag）。
+    ai_ocr_cancels:
+        std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// 解錠ダイアログの入力欄（初回表示時に生成）。
     pack_key_input: Option<Entity<InputState>>,
     /// 入力欄を空にしてフォーカスする要求（ダイアログを出した直後に 1 回だけ）。
@@ -495,6 +498,7 @@ impl Workspace {
             exit_uploading: false,
             pack_key_pending: false,
             ai_job_prompt: None,
+            ai_ocr_cancels: std::collections::HashMap::new(),
             pack_key_input: None,
             pack_key_input_reset: false,
             pack_key_error: None,
@@ -599,6 +603,20 @@ impl Workspace {
                         }
                     }
                 }
+                // 実行中の OCR が MCP から cancel されたら worker のフラグを立てる。
+                let _ = handle.update(cx, |this, _cx| {
+                    this.ai_ocr_cancels.retain(|job_id, cancel| {
+                        match ligrol_core::db::ai_jobs::get(&db, job_id) {
+                            Ok(Some(job)) => {
+                                if job.status == "cancelled" {
+                                    cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                                }
+                                !ligrol_core::db::ai_jobs::status::is_terminal(&job.status)
+                            }
+                            _ => false,
+                        }
+                    });
+                });
             }
         })
         .detach();
@@ -650,7 +668,13 @@ impl Workspace {
                     .and_then(|value| value.as_u64())
                     .unwrap_or(0) as usize;
                 let started = self.bookshelf.update(cx, |bookshelf, cx| {
-                    bookshelf.ai_download(cx, &site_id, &database_id, option_index)
+                    bookshelf.ai_download(
+                        cx,
+                        &site_id,
+                        &database_id,
+                        option_index,
+                        Some(&job.id),
+                    )
                 });
                 if started {
                     let _ = ligrol_core::db::ai_jobs::set_status(
@@ -688,11 +712,10 @@ impl Workspace {
                     );
                 }
             }
-            "ocr" => {
+            "epub_extract" => {
                 let state = AppState::global(cx);
                 let pack_root_key = state.pack_root_key.lock().clone();
                 let packs_dir = state.packs_dir.clone();
-                let data_dir = state.data_dir.clone();
                 let db = state.db_pool.clone();
                 let book_id = job.target.clone();
                 let job_id = job.id.clone();
@@ -707,9 +730,93 @@ impl Workspace {
                     None,
                 );
                 let task = cx.background_executor().spawn(async move {
+                    ligrol_core::import::epub::backfill_from_pack(
+                        &db,
+                        &packs_dir,
+                        pack_root_key.as_ref(),
+                        &book_id,
+                    )
+                });
+                let db = AppState::global(cx).db_pool.clone();
+                cx.spawn(async move |_window, cx| {
+                    let result = task.await;
+                    let (status, result_json, error_code) = match result {
+                        Ok(outcome) => (
+                            "succeeded",
+                            Some(
+                                serde_json::json!({
+                                    "sections": outcome.sections,
+                                    "chars": outcome.chars,
+                                    "drm_protected": outcome.drm_protected,
+                                    "fixed_layout": outcome.fixed_layout,
+                                })
+                                .to_string(),
+                            ),
+                            None,
+                        ),
+                        Err(ligrol_core::import::epub::BackfillError::NotEpub) => {
+                            ("failed", None, Some("not_epub"))
+                        }
+                        Err(ligrol_core::import::epub::BackfillError::NoEntry) => {
+                            ("failed", None, Some("epub_entry_missing"))
+                        }
+                        Err(error) => {
+                            log::warn!("AI EPUB extract failed: {error}");
+                            ("failed", None, Some("epub_extract_failed"))
+                        }
+                    };
+                    let _ = ligrol_core::db::ai_jobs::finish(
+                        &db,
+                        &job_id,
+                        status,
+                        result_json.as_deref(),
+                        error_code,
+                    );
+                    let _ = ligrol_core::db::ai_jobs::audit(
+                        &db,
+                        &owner_id,
+                        &client_id,
+                        "epub_extract",
+                        &target,
+                        status,
+                        error_code,
+                    );
+                    let message = match status {
+                        "succeeded" => "AI の EPUB 本文抽出が完了しました",
+                        _ => "AI の EPUB 本文抽出に失敗しました",
+                    };
+                    let kind = if status == "succeeded" {
+                        crate::app_state::ToastKind::Success
+                    } else {
+                        crate::app_state::ToastKind::Error
+                    };
+                    cx.update(|cx| crate::app_state::set_toast_kind(cx, kind, message));
+                })
+                .detach();
+            }
+            "ocr" => {
+                let state = AppState::global(cx);
+                let pack_root_key = state.pack_root_key.lock().clone();
+                let packs_dir = state.packs_dir.clone();
+                let data_dir = state.data_dir.clone();
+                let db = state.db_pool.clone();
+                let book_id = job.target.clone();
+                let job_id = job.id.clone();
+                let target = job.target.clone();
+                let client_id = client_id.clone();
+                let owner_id = job.owner_id.clone();
+                let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                self.ai_ocr_cancels.insert(job_id.clone(), cancel.clone());
+                let _ = ligrol_core::db::ai_jobs::set_status(
+                    &db,
+                    &job_id,
+                    "running",
+                    0.0,
+                    None,
+                );
+                let task = cx.background_executor().spawn(async move {
                     let model_dir = ligrol_core::ocr::default_model_dir(&data_dir);
                     let mut progress = |_| {};
-                    let cancel = std::sync::atomic::AtomicBool::new(false);
                     ligrol_core::ocr::ocr_book(
                         &db,
                         &packs_dir,
@@ -717,7 +824,7 @@ impl Workspace {
                         pack_root_key.as_ref(),
                         &model_dir,
                         &mut progress,
-                        &cancel,
+                        cancel.as_ref(),
                     )
                 });
                 let db = AppState::global(cx).db_pool.clone();
@@ -3038,6 +3145,10 @@ impl Render for Workspace {
                     let body = match job.action.as_str() {
                         "download" => format!(
                             "AI クライアント「{}」が、購入済みの本（{}）の取り込みを要求しています。\nLigrol がストアからダウンロードして本棚に追加します。",
+                            job.client_id, job.target
+                        ),
+                        "epub_extract" => format!(
+                            "AI クライアント「{}」が、『{}』の EPUB 本文を抽出することを要求しています。既存の EPUB 本文を置き換えます。",
                             job.client_id, job.target
                         ),
                         "ocr" => format!(

@@ -929,6 +929,157 @@ mod tests {
                 .unwrap()
                 .ends_with("ch1.xhtml")
         );
+        let outcome = backfill_from_pack(&pool, &dir, None, &imported.book.id).unwrap();
+        assert_eq!(outcome.sections, 2);
+        assert_eq!(outcome.chars, 15);
+        let rows =
+            crate::db::documents::all_text_rows_for_document(&pool, &imported.document.id, Some(&key))
+                .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].source, "epub");
+        assert_eq!(rows[0].section_title.as_deref(), Some("第1章"));
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// 既存の EPUB 本（raw `.epub` を pack に持つ）から本文を遡及抽出する。
+///
+/// 取り込み時に抽出済みの本では `document_text(source='epub')` を入れ替える。
+/// pack が見つからない / EPUB が入っていない場合はエラー。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackfillOutcome {
+    pub sections: i64,
+    pub chars: i64,
+    pub drm_protected: bool,
+    pub fixed_layout: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BackfillError {
+    #[error("database error: {0}")]
+    Db(#[from] sqlx::Error),
+    #[error("pack error: {0}")]
+    Pack(#[from] nartik::PackError),
+    #[error("epub error: {0}")]
+    Epub(#[from] EpubError),
+    #[error("book is not EPUB")]
+    NotEpub,
+    #[error("pack has no EPUB entry")]
+    NoEntry,
+    #[error("book/document not found")]
+    NotFound,
+}
+
+pub fn backfill_from_pack(
+    pool: &crate::db::SqlitePool,
+    packs_dir: &std::path::Path,
+    root_key: Option<&nartik::PackRootKey>,
+    book_id: &str,
+) -> Result<BackfillOutcome, BackfillError> {
+    let book = crate::db::books::get(pool, book_id)?.ok_or(BackfillError::NotFound)?;
+    let document = crate::db::documents::get_document_by_book_id(pool, book_id)?
+        .ok_or(BackfillError::NotFound)?;
+    if document.source_type != "epub" {
+        return Err(BackfillError::NotEpub);
+    }
+    let pack_id = book.pack_id.as_deref().unwrap_or(&book.id);
+    let path = crate::pack_path::pack_path(packs_dir, pack_id)
+        .map_err(|error| BackfillError::Pack(nartik::PackError::Corrupted(error.to_string())))?;
+    let reader = nartik::PackFileReader::open(&path)?;
+    let key = root_key.map(|root| root.derive_pack_key(pack_id));
+    let entry = reader
+        .entries()
+        .iter()
+        .find(|entry| entry.path.to_ascii_lowercase().ends_with(".epub"))
+        .or_else(|| {
+            reader
+                .entries()
+                .iter()
+                .find(|entry| entry.mime_type == "application/epub+zip")
+        })
+        .ok_or(BackfillError::NoEntry)?;
+    let bytes = reader.read_entry_with_key(&entry.path, key.as_ref())?;
+    let parsed = extract(&bytes)?;
+    let content_id = crate::db::block_on(async {
+        sqlx::query_scalar::<_, String>(
+            "SELECT content_id FROM book_contents WHERE book_id = ?1 \
+             ORDER BY is_primary DESC, sort_order, content_id LIMIT 1",
+        )
+        .bind(book_id)
+        .fetch_optional(pool)
+        .await
+    })?
+    .unwrap_or_default();
+
+    crate::db::block_on(async {
+        sqlx::query("DELETE FROM document_text WHERE document_id = ?1 AND source = 'epub'")
+            .bind(&document.id)
+            .execute(pool)
+            .await?;
+        sqlx::query("DELETE FROM token_analysis WHERE document_id = ?1")
+            .bind(&document.id)
+            .execute(pool)
+            .await?;
+        Ok::<_, sqlx::Error>(())
+    })?;
+
+    if parsed.drm_protected {
+        return Ok(BackfillOutcome {
+            sections: 0,
+            chars: 0,
+            drm_protected: true,
+            fixed_layout: parsed.fixed_layout,
+        });
+    }
+
+    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let rows: Vec<crate::db::documents::DocumentText> = parsed
+        .sections
+        .iter()
+        .map(|section| crate::db::documents::DocumentText {
+            id: uuid::Uuid::new_v4().to_string(),
+            document_id: document.id.clone(),
+            content_id: content_id.clone(),
+            page_number: section.ordinal,
+            text_content: section.text.clone(),
+            source: "epub".to_string(),
+            engine: Some("epub-xhtml".to_string()),
+            confidence: None,
+            section_title: section.title.clone(),
+            section_href: Some(section.href.clone()),
+            created_at: timestamp.clone(),
+        })
+        .collect();
+    let chars = rows
+        .iter()
+        .map(|row| row.text_content.chars().count() as i64)
+        .sum();
+    if !rows.is_empty() {
+        crate::db::documents::insert_texts_batch(pool, &rows)?;
+        let mut tokens = Vec::new();
+        for row in &rows {
+            for (word, count) in crate::tags::extract_nouns(&row.text_content, &[&book.title]) {
+                tokens.push(crate::db::documents::TokenRow {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    document_id: document.id.clone(),
+                    page_number: row.page_number,
+                    token: word,
+                    pos: "名詞".to_string(),
+                    base_form: None,
+                    reading: None,
+                    frequency: count as i64,
+                    created_at: timestamp.clone(),
+                });
+            }
+        }
+        if !tokens.is_empty() {
+            crate::db::documents::insert_tokens_batch(pool, &tokens)?;
+        }
+    }
+    Ok(BackfillOutcome {
+        sections: rows.len() as i64,
+        chars,
+        drm_protected: false,
+        fixed_layout: parsed.fixed_layout,
+    })
 }

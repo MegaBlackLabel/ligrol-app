@@ -32,6 +32,8 @@ pub struct AiScopes {
     pub text: bool,
     pub stats: bool,
     pub notes: bool,
+    pub write_notes: bool,
+    pub write_tags: bool,
     pub purchases: bool,
     pub tbf: bool,
     /// 操作要求（ダウンロード / 開く / 抽出）を受け付けるか。
@@ -47,6 +49,8 @@ impl Default for AiScopes {
             text: false,
             stats: true,
             notes: false,
+            write_notes: false,
+            write_tags: false,
             purchases: true,
             tbf: true,
             actions: false,
@@ -74,6 +78,8 @@ impl AiScopes {
             text: on("LIGROL_AI_TEXT", false),
             stats: on("LIGROL_AI_STATS", true),
             notes: on("LIGROL_AI_NOTES", false),
+            write_notes: on("LIGROL_AI_WRITE_NOTES", false),
+            write_tags: on("LIGROL_AI_WRITE_TAGS", false),
             purchases: on("LIGROL_AI_PURCHASES", true),
             tbf: on("LIGROL_AI_TBF", true),
             actions: !read_only && on("LIGROL_AI_ACTIONS", false),
@@ -87,6 +93,8 @@ impl AiScopes {
             text: true,
             stats: true,
             notes: true,
+            write_notes: true,
+            write_tags: true,
             purchases: true,
             tbf: true,
             actions: true,
@@ -103,6 +111,8 @@ pub struct AiContext {
     /// `owner_sub` の復号鍵。`None` のときは所属本を読めない（fail-closed）。
     pub owner_key: Option<[u8; 32]>,
     pub scopes: AiScopes,
+    /// 表紙 fallback（pack 内 thumbnail.webp）用。MCP が設定する。
+    pub data_dir: Option<std::path::PathBuf>,
 }
 
 impl AiContext {
@@ -115,6 +125,7 @@ impl AiContext {
             owner_sub,
             owner_key,
             scopes,
+            data_dir: None,
         }
     }
 
@@ -124,6 +135,7 @@ impl AiContext {
             owner_sub: None,
             owner_key: None,
             scopes,
+            data_dir: None,
         }
     }
 
@@ -180,6 +192,20 @@ impl AiContext {
             .notes
             .then_some(())
             .ok_or(AiError::ScopeDisabled("notes.read"))
+    }
+
+    pub fn require_write_tags(&self) -> Result<(), AiError> {
+        if self.scopes.read_only || !self.scopes.write_tags {
+            return Err(AiError::ScopeDisabled("tags.write"));
+        }
+        Ok(())
+    }
+
+    pub fn require_write_notes(&self) -> Result<(), AiError> {
+        if self.scopes.read_only || !self.scopes.write_notes {
+            return Err(AiError::ScopeDisabled("notes.write"));
+        }
+        Ok(())
     }
 
     pub fn require_purchases(&self) -> Result<(), AiError> {
@@ -458,6 +484,17 @@ pub struct TbfItemView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TbfEventView {
+    pub event_id: String,
+    pub event_name: String,
+    pub event_date: Option<String>,
+    pub event_format: String,
+    pub is_cancelled: bool,
+    pub is_featured: bool,
+    pub poll_sync_enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TbfPlan {
     pub event_id: String,
     pub event_name: String,
@@ -569,6 +606,12 @@ pub fn status(pool: &SqlitePool, ctx: &AiContext) -> Result<Status, AiError> {
     }
     if ctx.scopes.notes {
         scopes.push("notes.read".to_string());
+    }
+    if !ctx.scopes.read_only && ctx.scopes.write_notes {
+        scopes.push("notes.write".to_string());
+    }
+    if !ctx.scopes.read_only && ctx.scopes.write_tags {
+        scopes.push("tags.write".to_string());
     }
     if ctx.scopes.purchases {
         scopes.push("purchases.read".to_string());

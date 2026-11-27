@@ -1,6 +1,6 @@
 //! 本文セグメントの取得と検索。PDF はページ、EPUB は章、OCR はページ。
 
-use crate::ai::{AiContext, AiError, TextMatch, TextSegment, key_for_read, library};
+use crate::ai::{AiContext, AiError, Page, TextMatch, TextSegment, key_for_read, library};
 use crate::db::{SqlitePool, books, documents};
 use crate::secrets::SecretStore;
 
@@ -94,20 +94,33 @@ pub fn search_text(
     book_ids: &[String],
     query: &str,
     limit: Option<i64>,
-) -> Result<Vec<TextMatch>, AiError> {
+    cursor: Option<&str>,
+) -> Result<Page<TextMatch>, AiError> {
     ctx.require_text()?;
     let needle = query.trim();
     if needle.is_empty() {
         return Err(AiError::Invalid("query".to_string()));
     }
-    if book_ids.is_empty() || book_ids.len() > 5 {
-        return Err(AiError::Invalid("book_ids (1..=5)".to_string()));
-    }
     let visible = ctx.visible_book_ids(pool)?;
+    // 空の book_ids は「見える本を最大 50 冊」の全体検索（簡易スキャン）。
+    let book_ids: Vec<String> = if book_ids.is_empty() {
+        let mut ids: Vec<String> = visible.iter().cloned().collect();
+        ids.sort();
+        ids.truncate(50);
+        ids
+    } else {
+        if book_ids.len() > 5 {
+            return Err(AiError::Invalid("book_ids (0 or 1..=5)".to_string()));
+        }
+        book_ids.to_vec()
+    };
     let key = key_for_read(&SecretStore::new());
     let limit = limit.unwrap_or(20).clamp(1, 50) as usize;
+    let offset = library::decode_cursor(cursor)?;
+    // 次の有無を判定するため 1 件多く集める。
+    let wanted = offset.saturating_add(limit);
     let mut out = Vec::new();
-    for book_id in book_ids {
+    for book_id in &book_ids {
         if !visible.contains(book_id) {
             continue;
         }
@@ -138,11 +151,19 @@ pub fn search_text(
                     source: row.source,
                     snippet,
                 });
-                if out.len() >= limit {
-                    return Ok(out);
+                if out.len() > wanted {
+                    break;
                 }
             }
         }
     }
-    Ok(out)
+    let truncated = out.len() > wanted;
+    let items: Vec<TextMatch> = out.into_iter().skip(offset).take(limit).collect();
+    let next = offset + items.len();
+    Ok(Page {
+        truncated,
+        next_cursor: (!items.is_empty() && (truncated || next < wanted))
+            .then(|| library::encode_cursor(next)),
+        items,
+    })
 }

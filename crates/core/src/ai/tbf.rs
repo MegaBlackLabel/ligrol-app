@@ -1,7 +1,23 @@
 //! 技術書典のチェックリスト（イベント別）。
 
-use crate::ai::{AiContext, AiError, TbfItemView, TbfPlan};
+use crate::ai::{AiContext, AiError, TbfEventView, TbfItemView, TbfPlan};
 use crate::db::{SqlitePool, checklist};
+
+pub fn events(pool: &SqlitePool, ctx: &AiContext) -> Result<Vec<TbfEventView>, AiError> {
+    ctx.require_tbf()?;
+    Ok(checklist::list_events(pool)?
+        .into_iter()
+        .map(|event| TbfEventView {
+            event_id: event.id,
+            event_name: event.event_name,
+            event_date: event.event_date,
+            event_format: event.event_format,
+            is_cancelled: event.is_cancelled != 0,
+            is_featured: event.is_featured != 0,
+            poll_sync_enabled: event.poll_sync_enabled != 0,
+        })
+        .collect())
+}
 
 pub fn plan(
     pool: &SqlitePool,

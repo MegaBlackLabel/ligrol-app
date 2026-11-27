@@ -1206,6 +1206,8 @@ pub struct BookshelfView {
     shelf_items: Vec<bookshelf::BookshelfItem>,
     shelf_cards: Vec<ShelfCard>,
     download_states: HashMap<String, DownloadState>,
+    /// AI 承認ジョブ（database_id → job_id）。完了時に ai_jobs を更新する。
+    ai_job_by_database_id: HashMap<String, String>,
     /// 進行中のダウンロードの中止フラグ（database_id → フラグ）。worker スレッドが
     /// 進捗のたびに読み、立っていれば転送を中断する（取り込みは行わない）。
     download_cancels: HashMap<String, Arc<AtomicBool>>,
@@ -1881,6 +1883,7 @@ impl BookshelfView {
             shelf_items: Vec::new(),
             shelf_cards: Vec::new(),
             download_states: HashMap::new(),
+            ai_job_by_database_id: HashMap::new(),
             download_cancels: HashMap::new(),
             download_notice: None,
             download_notice_at: None,
@@ -4597,6 +4600,7 @@ impl BookshelfView {
         site_id: &str,
         database_id: &str,
         option_index: usize,
+        job_id: Option<&str>,
     ) -> bool {
         let Some(item) = self
             .shelf_cards
@@ -4609,7 +4613,15 @@ impl BookshelfView {
         let Some(item) = choose_download(&item, option_index) else {
             return false;
         };
-        self.start_download(cx, item, false, true)
+        if let Some(job_id) = job_id {
+            self.ai_job_by_database_id
+                .insert(database_id.to_string(), job_id.to_string());
+        }
+        let started = self.start_download(cx, item, false, true);
+        if !started && job_id.is_some() {
+            self.ai_job_by_database_id.remove(database_id);
+        }
+        started
     }
 
     /// 取り込み（ダウンロード）の前提を満たしているか（**F03 の fail-closed**）。
@@ -4688,6 +4700,7 @@ impl BookshelfView {
             }
         }
         let database_id = item.database_id.clone();
+        let ai_job_id = self.ai_job_by_database_id.get(&database_id).cloned();
         // 2 GiB 超の確認: このセッションで確認済みなら worker はそのまま進む
         // （未確認なら worker が `TooLarge` を返し、UI が確認して再開する）。
         let large_confirmed = self.confirmed_large_downloads.contains(&database_id);
@@ -5371,6 +5384,41 @@ impl BookshelfView {
                     };
                     crate::app_state::set_toast_kind(cx, kind, message);
                 }
+                if let Some(job_id) = &ai_job_id {
+                    let db = &AppState::global(cx).db_pool;
+                    let code = if succeeded {
+                        None
+                    } else {
+                        Some(match &result {
+                            Err(ImportFailure::TooLarge { .. }) => "too_large",
+                            Err(ImportFailure::Cancelled | ImportFailure::DownloadCancelled) => {
+                                "cancelled"
+                            }
+                            Err(ImportFailure::NotAReadable) => "not_readable",
+                            _ => "download_failed",
+                        })
+                    };
+                    let status = if succeeded {
+                        "succeeded"
+                    } else if code == Some("cancelled") {
+                        "cancelled"
+                    } else {
+                        "failed"
+                    };
+                    let _ = ligrol_core::db::ai_jobs::finish(db, job_id, status, None, code);
+                    if let Ok(Some(job)) = ligrol_core::db::ai_jobs::get(db, job_id) {
+                        let _ = ligrol_core::db::ai_jobs::audit(
+                            db,
+                            &job.owner_id,
+                            &job.client_id,
+                            &job.action,
+                            &job.target,
+                            status,
+                            code,
+                        );
+                    }
+                }
+                this.ai_job_by_database_id.remove(&database_id);
                 if succeeded {
                     this.reload(cx);
                 }

@@ -19,6 +19,8 @@ pub struct BookQuery {
     /// `unread` / `reading` / `read`
     pub state: Option<String>,
     pub favorite_only: bool,
+    /// `last-read`（既定）/ `title` / `purchase-date` / `release-date` / `added`
+    pub sort: Option<String>,
     pub limit: Option<i64>,
     pub cursor: Option<String>,
 }
@@ -64,7 +66,7 @@ fn tag_refs(tags: &[tags::BookTag]) -> Vec<TagRef> {
         .collect()
 }
 
-fn decode_cursor(cursor: Option<&str>) -> Result<usize, AiError> {
+pub(crate) fn decode_cursor(cursor: Option<&str>) -> Result<usize, AiError> {
     let Some(cursor) = cursor.filter(|value| !value.is_empty()) else {
         return Ok(0);
     };
@@ -80,9 +82,34 @@ fn decode_cursor(cursor: Option<&str>) -> Result<usize, AiError> {
         .ok_or_else(|| AiError::Invalid("cursor".to_string()))
 }
 
-fn encode_cursor(offset: usize) -> String {
+pub(crate) fn encode_cursor(offset: usize) -> String {
     let value = serde_json::json!({ "offset": offset });
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string())
+}
+
+fn progress_map(
+    pool: &SqlitePool,
+) -> Result<HashMap<String, progress::ReadingProgress>, AiError> {
+    let rows = crate::db::block_on(async {
+        sqlx::query_as::<_, progress::ReadingProgress>(
+            "SELECT book_id, content_id, current_page, total_pages, finished_at, last_read_at \
+             FROM reading_progress",
+        )
+        .fetch_all(pool)
+        .await
+    })?;
+    let mut map = HashMap::new();
+    for row in rows {
+        // 同じ本に複数コンテンツの進捗がある場合は、既定表示に近い行を優先する。
+        map.entry(row.book_id.clone())
+            .and_modify(|current: &mut progress::ReadingProgress| {
+                if row.content_id.is_empty() && !current.content_id.is_empty() {
+                    *current = row.clone();
+                }
+            })
+            .or_insert(row);
+    }
+    Ok(map)
 }
 
 pub fn build_summary(
@@ -92,8 +119,8 @@ pub fn build_summary(
     book_tags: &HashMap<String, Vec<String>>,
     book_tag_rows: Option<&[tags::BookTag]>,
     stats: Option<&view_history::ViewStats>,
+    progress: Option<&progress::ReadingProgress>,
 ) -> Result<BookSummary, AiError> {
-    let progress = progress::get(pool, &book.id)?;
     let tag_refs = match book_tag_rows {
         Some(rows) => tag_refs(rows),
         None => book_tags
@@ -121,7 +148,7 @@ pub fn build_summary(
         is_hidden: book.is_hidden != 0,
         page_count: book.page_count,
         tags: tag_refs,
-        progress: progress_view(progress.as_ref()),
+        progress: progress_view(progress),
         stats: stats_view(stats),
         cover: crate::ai::covers::cover_ref(pool, ctx, book)?,
     })
@@ -137,6 +164,7 @@ pub fn search(
     let all_books = books::list(pool)?;
     let tag_names = tags::tag_names_by_book(pool)?;
     let stats = view_history::view_stats(pool)?;
+    let progress_by_book = progress_map(pool)?;
     let needle = query
         .query
         .as_deref()
@@ -168,8 +196,14 @@ pub fn search(
                 .unwrap_or_default()
                 .join(" ");
             let haystack = format!(
-                "{} {} {} {}",
-                book.title, book.author, book.circle_name, tags_text
+                "{} {} {} {} {} {} {}",
+                book.title,
+                book.author,
+                book.circle_name,
+                tags_text,
+                book.description.as_deref().unwrap_or(""),
+                book.theme.as_deref().unwrap_or(""),
+                book.series_name.as_deref().unwrap_or(""),
             )
             .to_lowercase();
             if !haystack.contains(needle) {
@@ -184,7 +218,7 @@ pub fn search(
                 continue;
             }
         }
-        let state = progress::ReadingState::from_progress(progress::get(pool, &book.id)?.as_ref());
+        let state = progress::ReadingState::from_progress(progress_by_book.get(&book.id));
         if let Some(wanted) = query.state.as_deref()
             && state_label(state) != wanted
         {
@@ -192,17 +226,36 @@ pub fn search(
         }
         matched.push((book, state));
     }
+    let sort = query.sort.as_deref().unwrap_or("last-read");
     matched.sort_by(|(a, _), (b, _)| {
-        let a_last = stats
-            .get(&a.id)
-            .and_then(|stats| stats.last_viewed_at.clone())
-            .unwrap_or_default();
-        let b_last = stats
-            .get(&b.id)
-            .and_then(|stats| stats.last_viewed_at.clone())
-            .unwrap_or_default();
-        b_last
-            .cmp(&a_last)
+        let order = match sort {
+            "title" => a.title.cmp(&b.title),
+            "purchase-date" => b.purchase_date.cmp(&a.purchase_date),
+            "release-date" => b.release_date.cmp(&a.release_date),
+            "added" => b.created_at.cmp(&a.created_at),
+            _ => {
+                let a_last = progress_by_book
+                    .get(&a.id)
+                    .map(|progress| progress.last_read_at.clone())
+                    .or_else(|| {
+                        stats
+                            .get(&a.id)
+                            .and_then(|stats| stats.last_viewed_at.clone())
+                    })
+                    .unwrap_or_default();
+                let b_last = progress_by_book
+                    .get(&b.id)
+                    .map(|progress| progress.last_read_at.clone())
+                    .or_else(|| {
+                        stats
+                            .get(&b.id)
+                            .and_then(|stats| stats.last_viewed_at.clone())
+                    })
+                    .unwrap_or_default();
+                b_last.cmp(&a_last)
+            }
+        };
+        order
             .then_with(|| a.title.cmp(&b.title))
             .then_with(|| a.id.cmp(&b.id))
     });
@@ -220,6 +273,7 @@ pub fn search(
             &tag_names,
             Some(&tag_rows),
             stats.get(&book.id),
+            progress_by_book.get(&book.id),
         )?);
     }
     let next = offset + items.len();
@@ -250,6 +304,7 @@ pub fn get_book(pool: &SqlitePool, ctx: &AiContext, book_id: &str) -> Result<Boo
         &tag_names,
         Some(&tag_rows),
         stats.get(book_id),
+        progress::get(pool, book_id)?.as_ref(),
     )?;
     let contents = contents::list_with_formats(pool, book_id)?
         .into_iter()

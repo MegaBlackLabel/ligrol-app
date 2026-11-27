@@ -4,7 +4,7 @@
 //! 所有者・非表示・スコープ・ジョブ検証を固定する。
 
 use ligrol_core::ai::{
-    AiContext, AiError, AiScopes, BookQuery, jobs, library, notes, purchases, stats, text,
+    AiContext, AiError, AiScopes, BookQuery, jobs, library, notes, purchases, stats, tags, tbf, text,
 };
 use ligrol_core::db::{
     SqlitePool, block_on, books, bookshelf, documents, notes as notes_db, progress, tags as tags_db,
@@ -194,9 +194,9 @@ fn text_and_search_return_epub_sections_and_respect_scope() {
     assert_eq!(segments[0].title.as_deref(), Some("第1章"));
     assert_eq!(segments[0].source, "epub");
 
-    let matches = text::search_text(&pool, &ctx(), &["b1".into()], "非同期", None).unwrap();
-    assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0].ordinal, 1);
+    let matches = text::search_text(&pool, &ctx(), &[], "非同期", None, None).unwrap();
+    assert_eq!(matches.items.len(), 1);
+    assert_eq!(matches.items[0].ordinal, 1);
 
     let mut scopes = AiScopes::all_for_tests();
     scopes.text = false;
@@ -316,4 +316,169 @@ fn purchase_list_marks_downloaded_items() {
     let items = purchases::list_purchases(&pool, &ctx(), None, true).unwrap();
     assert_eq!(items.len(), 1);
     assert!(items[0].downloaded);
+}
+
+
+#[test]
+fn search_includes_description_theme_and_sorts_by_title() {
+    let pool = pool();
+    seed_book(&pool, "b1", "A の本", 0);
+    seed_book(&pool, "b2", "B の本", 0);
+    ligrol_core::db::block_on(async {
+        sqlx::query("UPDATE books SET description = '固有の手がかり' WHERE id = 'b1'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE books SET theme = '固有の手がかり' WHERE id = 'b2'")
+            .execute(&pool)
+            .await
+            .unwrap();
+    });
+
+    let page = library::search(
+        &pool,
+        &ctx(),
+        &BookQuery {
+            query: Some("固有の手がかり".into()),
+            sort: Some("title".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(page.items.len(), 2);
+    assert!(page.items[0].title.starts_with('A'));
+    assert!(page.items[1].title.starts_with('B'));
+}
+
+#[test]
+fn text_search_pages_with_an_opaque_cursor() {
+    let pool = pool();
+    seed_book(&pool, "b1", "ページングの本", 0);
+    seed_document(&pool, "b1");
+    for (page, text) in [(1, "非同期の話"), (2, "非同期の続き"), (3, "非同期の結論")] {
+        documents::insert_text(
+            &pool,
+            &documents::DocumentText {
+                id: format!("dt-{page}"),
+                document_id: "doc-b1".into(),
+                content_id: String::new(),
+                page_number: page,
+                text_content: text.into(),
+                source: "extracted".into(),
+                engine: Some("pdfium".into()),
+                confidence: None,
+                section_title: None,
+                section_href: None,
+                created_at: "2026-11-01 00:00:00".into(),
+            },
+        )
+        .unwrap();
+    }
+
+    let first = text::search_text(&pool, &ctx(), &["b1".into()], "非同期", Some(1), None).unwrap();
+    assert_eq!(first.items.len(), 1);
+    assert_eq!(first.items[0].ordinal, 1);
+    assert!(first.next_cursor.is_some());
+
+    let second = text::search_text(
+        &pool,
+        &ctx(),
+        &["b1".into()],
+        "非同期",
+        Some(1),
+        first.next_cursor.as_deref(),
+    )
+    .unwrap();
+    assert_eq!(second.items.len(), 1);
+    assert_eq!(second.items[0].ordinal, 2);
+}
+
+
+#[test]
+fn tbf_events_lists_events() {
+    let pool = pool();
+    ligrol_core::db::checklist::upsert_event(
+        &pool,
+        &ligrol_core::db::checklist::TbfEvent {
+            id: "tbf18".into(),
+            site_id: "techbookfest".into(),
+            slug: Some("tbf18".into()),
+            tbf_event_id: Some("Event:tbf18".into()),
+            event_name: "技術書典18".into(),
+            event_date: Some("2026-05-05".into()),
+            event_start_date: Some("2026-05-01".into()),
+            event_end_date: Some("2026-05-31".into()),
+            event_format: "offline".into(),
+            is_cancelled: 0,
+            display_order: 0,
+            is_featured: 1,
+            poll_sync_enabled: 1,
+            created_at: "2026-11-01 00:00:00".into(),
+            updated_at: "2026-11-01 00:00:00".into(),
+        },
+    )
+    .unwrap();
+    let events = tbf::events(&pool, &ctx()).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_id, "tbf18");
+    assert!(events[0].is_featured);
+}
+
+
+#[test]
+fn note_writes_use_revision_conflicts_and_soft_delete() {
+    let pool = pool();
+    seed_book(&pool, "b1", "書き込みの本", 0);
+    let ctx = ctx();
+    let note = notes::add_note(&pool, &ctx, "b1", "", 3, "最初のメモ", None).unwrap();
+    assert_eq!(note.memo, "最初のメモ");
+    assert!(note.is_active);
+
+    assert!(matches!(
+        notes::add_note(
+            &pool,
+            &ctx,
+            "b1",
+            "",
+            3,
+            "競合する更新",
+            Some("2000-01-01 00:00:00")
+        ),
+        Err(AiError::Conflict)
+    ));
+
+    let updated = notes::add_note(
+        &pool,
+        &ctx,
+        "b1",
+        "",
+        3,
+        "更新したメモ",
+        Some(&note.updated_at),
+    )
+    .unwrap();
+    assert_eq!(updated.memo, "更新したメモ");
+
+    let removed = notes::remove_note(&pool, &ctx, "b1", "", 3, Some(&updated.updated_at)).unwrap();
+    assert!(!removed.is_active);
+    assert_eq!(removed.memo, "更新したメモ");
+}
+
+
+#[test]
+fn tag_writes_add_and_remove_manual_tags() {
+    let pool = pool();
+    seed_book(&pool, "b1", "タグ書き込みの本", 0);
+    let ctx = ctx();
+    let added = tags::add_tag(&pool, &ctx, "b1", "手動タグ").unwrap();
+    assert_eq!(added.name, "手動タグ");
+    assert_eq!(added.source, "manual");
+    // 同じタグを足しても重複しない
+    let again = tags::add_tag(&pool, &ctx, "b1", "手動タグ").unwrap();
+    assert_eq!(again, added);
+    let rows = tags_db::list_for_book(&pool, "b1").unwrap();
+    assert_eq!(rows.len(), 1);
+
+    assert!(tags::remove_tag(&pool, &ctx, "b1", "手動タグ").unwrap());
+    assert!(tags_db::list_for_book(&pool, "b1").unwrap().is_empty());
 }

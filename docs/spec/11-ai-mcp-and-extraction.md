@@ -16,8 +16,9 @@
 | アプリ側の承認ダイアログ + ダウンロード実行 | **実装済み** (`Workspace` / `BookshelfView::ai_download`) |
 | EPUB 本文抽出（章 / ルビ / コード / DRM / 固定レイアウト） | **実装済み** (`crates/core/src/import/epub.rs`) |
 | OCR（`pure-onnx-ocr` / PP-OCRv6 small） | **実装済み（モデル配置が必要）**。MCP の `ligrol_request_ocr` → 承認 → 空ページのみ |
+| EPUB 本文の遡及抽出 | **実装済み**。`ligrol_request_epub_extract` → 承認 → 既存 pack から再抽出 |
 | loopback HTTP ブリッジ | **未実装**（v1 は DB + `ai_jobs`。§2.1） |
-| 付箋 / タグの書き込みツール | **未実装**（読み取りのみ） |
+| 付箋 / タグの書き込みツール | **実装済み**（`notes.write` / `tags.write`。タグは ETag なし） |
 | 設定 UI でのスコープ切替 | **未実装**（環境変数。§3.2） |
 
 ## 1. 全体像
@@ -106,7 +107,10 @@ macOS は `/Applications/Ligrol.app/Contents/MacOS/ligrol-mcp`。配布 zip / MS
 | `ligrol_get_reading_stats` | 本 / タグ / サイト / 月 | `stats.read` |
 | `ligrol_list_tags` | 冊数・読了・累計時間・お気に入り・Zenn 説明 | `library.read` |
 | `ligrol_list_notes` | 付箋（復号済み） | `notes.read` |
+| `ligrol_add_note` / `ligrol_remove_note` | 付箋の書き込み（ETag / soft delete） | `notes.write` |
+| `ligrol_add_tag` / `ligrol_remove_tag` | タグの書き込み | `tags.write` |
 | `ligrol_list_purchases` | 購入済み・未取込・DL 可能 | `purchases.read` |
+| `ligrol_list_tbf_events` | 技術書典のイベント一覧 | `tbf.read` |
 | `ligrol_get_tbf_plan` | 技術書典チェックリスト・予算 | `tbf.read` |
 | `ligrol_get_cover` | 表紙画像（MCP image content） | `library.read` |
 
@@ -116,6 +120,7 @@ macOS は `/Applications/Ligrol.app/Contents/MacOS/ligrol-mcp`。配布 zip / MS
 |---|---|
 | `ligrol_request_download` | 購入済み・DL 可能な本の取り込み要求 |
 | `ligrol_request_ocr` | 空ページの OCR 要求（モデル必須） |
+| `ligrol_request_epub_extract` | 既存 EPUB の本文を遡及抽出 |
 | `ligrol_get_job` | ジョブ状態・進捗・結果 |
 | `ligrol_cancel_job` | 承認待ち / 実行中の中止 |
 | `ligrol_open_book` | Ligrol の UI で本を開く |
@@ -193,7 +198,7 @@ macOS は `/Applications/Ligrol.app/Contents/MacOS/ligrol-mcp`。配布 zip / MS
 |---|---|
 | `id` | UUID |
 | `client_id` | MCP クライアント名 |
-| `action` | `download` / `open_book` / `ocr` |
+| `action` | `download` / `open_book` / `ocr` / `epub_extract` |
 | `target` | `site:database_id` / `book_id` |
 | `params_json` | 対象 ID と選択肢だけ（URL / 本文 / トークンなし） |
 | `params_hash` | 同意の束縛用 |
@@ -216,7 +221,8 @@ macOS は `/Applications/Ligrol.app/Contents/MacOS/ligrol-mcp`。配布 zip / MS
 4. 承認ダイアログで「許可 / 拒否」
 5. 許可: `BookshelfView::ai_download` → 既存の `start_download` / import
    - `ocr`: `ligrol_core::ocr::ocr_book` をバックグラウンド実行
-6. ダウンロードは `books` に対象行が現れた時点で `succeeded`
+   - `epub_extract`: `import::epub::backfill_from_pack` をバックグラウンド実行
+6. ダウンロードは取り込み完了時に `succeeded` / `failed` / `cancelled` を反映
 7. 拒否 / 期限切れは `cancelled` / `expired`
 
 ### 4.3 制約
@@ -398,8 +404,7 @@ mise run build
 - OCR はモデル配置が必須（同梱・ダウンロード UI は未実装）
 - loopback HTTP ブリッジ未実装（DB + `ai_jobs` で代替）
 - 付箋 / タグの書き込みツール未実装
-- ダウンロード失敗のジョブ反映が弱い（本の出現で成功、失敗は UI 通知）
 - `document_text.content_id` は PDF/EPUB の単一コンテンツのみ。ZIP の複数コンテンツは未対応
 - EPUB の固定レイアウト / 画像だけの本は本文抽出できない
-- 本文検索は対象 1〜5 冊のメモリ内走査。全体 FTS は未実装
+- 本文検索は対象 1〜5 冊（`book_ids` 省略時は最大 50 冊）のメモリ内走査（opaque cursor でページング）。全体 FTS は未実装
 - 設定 UI でのスコープ切替は未実装（環境変数）

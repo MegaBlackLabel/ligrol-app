@@ -160,6 +160,41 @@ pub fn ocr_book(
                 .await?;
             Ok::<_, sqlx::Error>(())
         })?;
+        // 同じページを再 OCR したときに形態素が重複しないよう、対象ページの
+        // token_analysis だけ入れ替える（抽出済みページのトークンは残す）。
+        let pages: Vec<i64> = rows.iter().map(|row| row.page_number).collect();
+        crate::db::block_on(async {
+            for page in &pages {
+                sqlx::query(
+                    "DELETE FROM token_analysis WHERE document_id = ?1 AND page_number = ?2",
+                )
+                .bind(&document.id)
+                .bind(page)
+                .execute(pool)
+                .await?;
+            }
+            Ok::<_, sqlx::Error>(())
+        })?;
+        let mut tokens = Vec::new();
+        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        for row in &rows {
+            for (word, count) in crate::tags::extract_nouns(&row.text_content, &[&book.title]) {
+                tokens.push(documents::TokenRow {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    document_id: document.id.clone(),
+                    page_number: row.page_number,
+                    token: word,
+                    pos: "名詞".to_string(),
+                    base_form: None,
+                    reading: None,
+                    frequency: count as i64,
+                    created_at: timestamp.clone(),
+                });
+            }
+        }
+        if !tokens.is_empty() {
+            documents::insert_tokens_batch(pool, &tokens)?;
+        }
         documents::insert_texts_batch(pool, &rows)?;
     }
 

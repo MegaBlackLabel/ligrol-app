@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use sqlx::Row;
 
-use crate::ai::{AiContext, AiError, TagStat, stats};
+use crate::ai::{AiContext, AiError, TagRef, TagStat, stats};
 use crate::db::{SqlitePool, books, progress, tags, view_history};
 
 pub fn list_tags(
@@ -75,4 +75,80 @@ pub fn list_tags(
             .then_with(|| a.tag.cmp(&b.tag))
     });
     Ok(rows)
+}
+
+
+fn validate_tag(tag: &str) -> Result<&str, AiError> {
+    let tag = tag.trim();
+    if tag.is_empty() || tag.chars().count() > 64 || tag.chars().any(char::is_control) {
+        return Err(AiError::Invalid("tag".to_string()));
+    }
+    Ok(tag)
+}
+
+/// 手動タグを追加する（既にあればそのまま返す）。
+pub fn add_tag(
+    pool: &SqlitePool,
+    ctx: &AiContext,
+    book_id: &str,
+    tag: &str,
+) -> Result<TagRef, AiError> {
+    ctx.require_write_tags()?;
+    let tag = validate_tag(tag)?;
+    let visible = ctx.visible_book_ids(pool)?;
+    if !visible.contains(book_id) {
+        return Err(AiError::NotFound);
+    }
+    let book = books::get(pool, book_id)?.ok_or(AiError::NotFound)?;
+    if book.is_hidden != 0 {
+        return Err(AiError::NotFound);
+    }
+    if let Some(existing) = tags::list_for_book(pool, book_id)?
+        .into_iter()
+        .find(|row| row.tag_name == tag)
+    {
+        return Ok(TagRef {
+            name: existing.tag_name,
+            source: existing.source,
+        });
+    }
+    crate::db::block_on(async {
+        sqlx::query(
+            "INSERT INTO book_tags (id, book_id, tag_name, source) VALUES (?1, ?2, ?3, 'manual')",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(book_id)
+        .bind(tag)
+        .execute(pool)
+        .await?;
+        Ok::<_, sqlx::Error>(())
+    })?;
+    Ok(TagRef {
+        name: tag.to_string(),
+        source: "manual".to_string(),
+    })
+}
+
+/// タグを削除する（生成タグも削除対象。再取り込みで再生成され得る）。
+pub fn remove_tag(
+    pool: &SqlitePool,
+    ctx: &AiContext,
+    book_id: &str,
+    tag: &str,
+) -> Result<bool, AiError> {
+    ctx.require_write_tags()?;
+    let tag = validate_tag(tag)?;
+    let visible = ctx.visible_book_ids(pool)?;
+    if !visible.contains(book_id) {
+        return Err(AiError::NotFound);
+    }
+    let deleted = crate::db::block_on(async {
+        let result = sqlx::query("DELETE FROM book_tags WHERE book_id = ?1 AND tag_name = ?2")
+            .bind(book_id)
+            .bind(tag)
+            .execute(pool)
+            .await?;
+        Ok::<_, sqlx::Error>(result.rows_affected() > 0)
+    })?;
+    Ok(deleted)
 }

@@ -39,11 +39,14 @@ MCP サーバー名: `ligrol`
 | `ligrol_search_library` | 書名・作者・サークル・タグ・読書状態で本を探す |
 | `ligrol_get_book` | 1 冊の書誌・タグ・構成・進捗・統計・本文インデックスを見る |
 | `ligrol_get_book_text` | ページ / 章の本文を読む。`book_id` と範囲を指定 |
-| `ligrol_search_text` | 1〜5 冊の本文を部分一致検索する |
+| `ligrol_search_text` | 1〜5 冊（または省略で最大 50 冊）の本文を部分一致検索する |
 | `ligrol_get_reading_stats` | 本 / タグ / サイト / 月の読書統計 |
 | `ligrol_list_tags` | タグ別の冊数・読了・累計時間・Zenn 説明 |
 | `ligrol_list_notes` | 付箋（利用者が許可した場合だけ） |
+| `ligrol_add_note` / `ligrol_remove_note` | 付箋の追加 / 更新 / 非表示（書き込み許可時だけ。`expected_updated_at` を渡す） |
+| `ligrol_add_tag` / `ligrol_remove_tag` | タグの追加 / 削除（書き込み許可時だけ） |
 | `ligrol_list_purchases` | 購入済み・未取込・ダウンロード可能な本 |
+| `ligrol_list_tbf_events` | 技術書典のイベント一覧 |
 | `ligrol_get_tbf_plan` | 技術書典のイベント別チェックリスト・予算 |
 | `ligrol_get_cover` | 表紙画像（MCP の image content） |
 | `ligrol_status` | 有効スコープ・所有者状態・承認待ち件数 |
@@ -54,6 +57,7 @@ MCP サーバー名: `ligrol`
 |---|---|
 | `ligrol_request_download` | 購入済み・DL 可能な本の取り込みを要求する |
 | `ligrol_request_ocr` | 空ページの OCR を要求する（モデルが必要） |
+| `ligrol_request_epub_extract` | 既存 EPUB の本文を遡及抽出する |
 | `ligrol_open_book` | Ligrol で本を開く |
 | `ligrol_get_job` / `ligrol_cancel_job` | 要求の状態確認・中止 |
 
@@ -72,7 +76,7 @@ MCP サーバー名: `ligrol`
 4. **引用する**
    返ってきた `kind` / `ordinal` / `section_title` / `href` を使う。
 5. **操作が必要なら**
-   `ligrol_request_download` / `ligrol_request_ocr` / `ligrol_open_book` を呼び、
+   `ligrol_request_download` / `ligrol_request_ocr` / `ligrol_request_epub_extract` / `ligrol_open_book` を呼び、
    `ligrol_get_job` で状態を見る。利用者の承認が必要だと伝える。
 
 ### 例
