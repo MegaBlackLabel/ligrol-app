@@ -26,5 +26,10 @@ opt-level = 3
 [profile.release]
 # リリースビルドにデバッグ情報を含めない（ビルド高速化・バイナリ縮小）
 debug = false
-# シンボルを落として配布物を小さくする（63MB -> 大幅減）
-strip = true
+# `strip` は必ず明示する。**キーを消すだけでは効かない** — `debug = false` のとき cargo は
+# 既定で `-C strip=debuginfo` を渡し、rustc の LLVM ベースの strip が `__LINKEDIT` の
+# 文字列プールを 8 バイト境界に整列させない（`LC_SYMTAB.stroff % 8 == 4`）。macOS 27 の
+# 厳しくなった dyld はこれを `mis-aligned LINKEDIT string pool` として拒否するため、
+# proc-macro の dylib（`libsqlx_macros-*.dylib`）がロードできずビルドが落ちる
+# （rust-lang/rust#157750、llvm/llvm-project#203678。`strip = true` でも同じ）。
+strip = "none"
