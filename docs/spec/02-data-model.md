@@ -662,6 +662,8 @@ CREATE TABLE IF NOT EXISTS drive_sync_state (
 | `book_first_events` | 本の初出イベント | `(site_id, database_id)` | 複合 FK `(site_id, database_id) → bookshelf_items(site_id, database_id)` | `schema.sql:256-264` |
 | `product_sample_pages` | 試し読み画像。**`owner_id` を持ち、複合 FK `(checklist_item_id, owner_id) → checked_items(id, owner_id)`** | `id` | `(checklist_item_id, owner_id) → checked_items(id, owner_id)` | `schema.sql:266-281` / `crates/core/src/db/mod.rs` |
 | `thumbnail_share` | 表紙バンドル（Drive `ligrol-thumbs.json`）に載せる画像の派生キャッシュ。**DB バックアップの対象外**（復元先で作り直せる） | `(kind, item_key)` | — | `schema.sql:291-306` / `crates/core/src/db/mod.rs`（`migrate`） |
+| `ai_jobs` | AI（MCP）からの操作要求と承認状態。**DB バックアップの対象外** | `id` | — | `crates/core/src/db/mod.rs`（`migrate`）/ `docs/spec/11-ai-mcp-and-extraction.md` |
+| `ai_audit_log` | AI 操作の監査（本文・URL・トークンなし）。**DB バックアップの対象外** | `id` | — | `crates/core/src/db/mod.rs`（`migrate`） |
 | `drive_sync_state` | Drive 同期の記帳 | `pack_id` | — | `crates/core/src/db/desktop.sql:3-9` / `0001_init.sql:230-238` |
 | `view_history` | 閲覧セッション（開始/終了時刻） | `id` | `book_id → books(id) ON DELETE CASCADE` | `crates/core/src/db/mod.rs:274` |
 | `page_notes` | 付箋（1 ページ 1 件） | `id` + `UNIQUE(book_id, content_id, page)` | `book_id → books(id) ON DELETE CASCADE` | `crates/core/src/db/mod.rs:291` |
@@ -705,9 +707,9 @@ ON DELETE の注記（事実）: `books` の子のうち `imported_documents` / 
 | 進捗のコンテンツ単位化 | §1.4 参照。何度実行しても安全（`content_id` 列の有無で判定） | `crates/core/src/db/mod.rs:105-181` |
 | 同期ラッパー | `run_progress_content_migration(pool) -> Result<u64>`（移行件数） | `crates/core/src/db/mod.rs:183-189` |
 | 旧ラベルの書き換え | `content_formats.label` が旧値（`pdf`/`epub` で `PDF`/`EPUB` 以外、`image` で `画像`）の行だけ更新。画像は本のファイル名の拡張子 → `JPEG`/`PNG`/… へ、無ければ `JPEG` | `crates/core/src/db/contents.rs:214-282` |
-| 初回クリア | `app_settings['owner_sub_model.initialized']` が無い初回起動時のみ、FK 安全順（子→親）で 17 テーブル（`thumbnail_share` を含む）を `DELETE` し、`packs` / `thumbnails` ディレクトリを作り直し、`drive.last_sync_at` / `drive.sync.enabled` / `drive.sync.folder_id` / `drive.backup.md5` / `drive.thumbs.hash` / `drive.thumbs.failed` を削除してからフラグを立てる。2 回目以降は `false` を返して何もしない | `crates/core/src/db/mod.rs`（`clear_owner_model_if_first_run`） |
+| 初回クリア | `app_settings['owner_sub_model.initialized']` が無い初回起動時のみ、FK 安全順（子→親）で 19 テーブル（`ai_jobs` / `ai_audit_log` / `thumbnail_share` を含む）を `DELETE` し、`packs` / `thumbnails` ディレクトリを作り直し、`drive.last_sync_at` / `drive.sync.enabled` / `drive.sync.folder_id` / `drive.backup.md5` / `drive.thumbs.hash` / `drive.thumbs.failed` を削除してからフラグを立てる。2 回目以降は `false` を返して何もしない | `crates/core/src/db/mod.rs`（`clear_owner_model_if_first_run`） |
 | 機密列の暗号化 | `document_text.text_content` / `token_analysis` の 4 列 / `page_notes.memo` の**平文を一度だけ暗号化**する（`app_settings['column_crypto.v1_migrated']` で 2 回目以降は何もしない）。平文の行が無ければ**鍵（keyring）に触れずに**フラグだけ立てる。鍵が取れない・書き込みに失敗したときはフラグを立てず、**次回起動で再試行**する（§1.11） | `crates/core/src/db/mod.rs`（`migrate_column_crypto_once`）、`crates/core/src/db/column_crypto.rs` |
-| クリア対象テーブル（順序そのまま） | `product_sample_pages` → `token_analysis` → `document_text` → `document_images` → `content_formats` → `book_contents` → `imported_documents` → `book_tags` → `reading_progress` → `view_history` → `page_views` → `book_first_events` → `checked_items` → `bookshelf_items` → `books` → `drive_sync_state` → `thumbnail_share`（`sites` / `tbf_events` は残す） | `crates/core/src/db/mod.rs`（`clear_owner_model_if_first_run`） |
+| クリア対象テーブル（順序そのまま） | `product_sample_pages` → `token_analysis` → `document_text` → `document_images` → `content_formats` → `book_contents` → `imported_documents` → `book_tags` → `reading_progress` → `view_history` → `page_views` → `book_first_events` → `checked_items` → `bookshelf_items` → `books` → `drive_sync_state` → `ai_jobs` → `ai_audit_log` → `thumbnail_share`（`sites` / `tbf_events` は残す） | `crates/core/src/db/mod.rs`（`clear_owner_model_if_first_run`） |
 | 表紙バンドルの派生キャッシュ | `thumbnail_share` は**DB バックアップに含めない**（復元先で作り直せる派生データ）。Drive の `ligrol-thumbs.json` は PRK があるときだけ上げ、1 枚も作れなければ既存のファイルを残す（上位の詳細は `docs/spec/10-pack-keys.md` §11.8） | `crates/core/src/db/thumbs.rs`, `crates/core/src/thumbs.rs`, `crates/core/src/drive/sync.rs`（`backup_thumbnails`） |
 | バックアップ対象テーブル（順序 = FK 参照元が先） | `books`, `bookshelf_items`, `checked_items`, `product_sample_pages`（所有者は親の `checked_items` 経由で判定）, `tbf_events`, `book_contents`, `content_formats`, `reading_progress`, `page_views`, `book_tags`, `favorite_tags`, `favorite_entities`, `imported_documents`, `document_images`, `book_first_events`, `zenn_tag_metadata`, `view_history`（17 件） | `crates/core/src/db/backup.rs:17-43,192-214,515-526` |
 | バックアップから除外する列 | `thumbnail_data`, `image_data`（画像 base64 を含めない。`product_sample_pages` は `image_url` を残し、開くたびに自サイトの `/api/image/` から取り直すので復元先でも開ける）, `extracted_text`（`document_images` のページ本文。暗号化 pack の本文を平文で載せない） | `crates/core/src/db/backup.rs` |
@@ -715,6 +717,16 @@ ON DELETE の注記（事実）: `books` の子のうち `imported_documents` / 
 | バックアップの形式版 | 先頭に `format_version` を持つ（現行 2）。表ではない値なので**内容の比較（md5）には含めない**（`canonicalize_json` は配列以外のキーを無視する）。版が無いバックアップは 1 とみなし、`is_drm = 0` を「不明（2）」に寄せて復元する（旧仕様の `0` は「未確認」の意味だった） | `crates/core/src/db/backup.rs` |
 | 書き出しの行順 | `table_rows` が `pk_columns()` の PK 順に `ORDER BY` する（挿入順・索引の選択で md5 が変わらないように） | `crates/core/src/db/backup.rs:278-284` |
 | バックアップ PK 対応表 | `pk_columns()` が上記 16 テーブルの PK 列を返す（`book_contents→content_id`, `content_formats→format_id`, `reading_progress→[book_id, content_id]`, `page_views→[book_id, content_id, page_number]`, `view_history→id` 等）。書き出しの `ORDER BY` と比較の行ソート（`row_sort_key`）もこの定義を使う | `crates/core/src/db/backup.rs:204-226`, `:100-111` |
+
+### 1.10.1 AI / 抽出用の追加（2026-11-27）
+
+`document_text` に `source` / `engine` / `confidence` / `section_title` / `section_href` を
+runtime DDL で追加する。`source` は `extracted`（PDF / `_export.txt`）/ `epub` / `ocr`。
+EPUB は `page_number` を spine の ordinal として使い、章タイトルと href を持つ。
+`content_id` は INSERT に含める（PDF / EPUB の単一コンテンツ）。
+
+AI 連携用に `ai_jobs`（承認キュー）と `ai_audit_log` を追加する。どちらも device-local で
+Drive バックアップ対象外。詳細は `docs/spec/11-ai-mcp-and-extraction.md`。
 
 ### 1.11 機密列の暗号化（保存形式）
 
@@ -765,7 +777,7 @@ AES-256-GCM にして保存する。
 | `imported_documents` | `file_hash` | 生成した pack バイト列の SHA-256（小文字 hex） | `import/mod.rs:983`, `:1857`, `:60-63` |
 | `document_images` | `id` | `Uuid::new_v4()` | `import/mod.rs:1040`, `:1079`, `:2045` |
 | `document_images` | `pack_entry_path` | pack 内エントリパス（`pages/page_0001.webp` 等） | `import/mod.rs:1045`, `documents.rs:21-39` |
-| `document_text` | `id` | `Uuid::new_v4()`。**`content_id` は INSERT 文に含めない**ため常に既定値 `''` | `import/mod.rs:1105`, `db/documents.rs:253-266` |
+| `document_text` | `id` | `Uuid::new_v4()`。`content_id` は PDF/EPUB の単一コンテンツ ID を入れる（ZIP の複数コンテンツは未対応） | `import/mod.rs`, `db/documents.rs` |
 | `token_analysis` | `id` | `Uuid::new_v4()`。`pos` は常に `"名詞"`、`base_form = token`、`reading = None`、`frequency = 出現回数`。`content_id` は INSERT に含めない（既定 `''`） | `import/mod.rs:1119-1128`, `db/documents.rs:366-417` |
 | `book_tags` | `id` | `Uuid::new_v4()`。`source` は取り込み時 `"generated"` | `db/tags.rs:18-44`, `import/mod.rs:1129-1137` |
 | `reading_progress` | `(book_id, content_id)` | `content_id` = 対象コンテンツ ID。コンテンツが無い本は `''` | `db/progress.rs:8`, `:57-64` |
@@ -786,7 +798,7 @@ AES-256-GCM にして保存する。
 | `book_contents.content_id` = **読む単位**（本文・別冊・おまけ等）の識別子。表紙・裏表紙はコンテンツにしない（決定 D4） | `db/contents.rs:1-8` / `docs/import-patterns.md:671-680` |
 | `content_formats` = 同じ内容の**別形式・別バリアント**（`PDF版`/`画像版`、`文字あり`/`文字なし`、`MP3/WAV × SEあり/なし`）で、コンテンツ 1 : レンディション N | `db/contents.rs:1-8` / `docs/import-patterns.md:673`（D3） |
 | `document_images.content_id` が NULL = フェーズ2以前の旧データ（単一コンテンツ扱い。`images_for_selection` は常に対象に含める） | `db/documents.rs:24-27`, `:167-207` |
-| `reading_progress.content_id` / `page_views.content_id` / `page_notes.content_id` / `document_text.content_id` / `token_analysis.content_id` の `''` = 未指定（旧データ / 単一コンテンツ） | `db/progress.rs:8`, `db/page_views.rs:12`, `db/notes.rs:53`, `schema.sql:206`, `schema.sql:216` |
+| `reading_progress.content_id` / `page_views.content_id` / `page_notes.content_id` / `document_text.content_id` / `token_analysis.content_id` の `''` = 未指定（旧データ / 単一コンテンツ）。PDF/EPUB の `document_text` は取り込み時に content_id を入れる | `db/progress.rs:8`, `db/page_views.rs:12`, `db/notes.rs:53`, `schema.sql:206`, `schema.sql:216` |
 | 本の進捗を「既定表示コンテンツ」で読むときの解決順は `book_contents` の `ORDER BY is_primary DESC, sort_order, content_id LIMIT 1`。無ければ `''` の行を見る | `db/progress.rs:57-64`, `db/contents.rs:99-113` |
 | パスからコンテンツを決める規則（pack 復元時）: `content_formats.pack_entry_prefix` がエントリパスの接頭辞であること | `import/mod.rs:1806-1818` |
 | 旧ラベル移行は `format_kind`（`pdf`/`epub`/`image`/…）を見て `label` を上書きする（`content_id` は変えない） | `db/contents.rs:235-284` |

@@ -43,6 +43,30 @@ DRM で保護された作品は**このアプリでは開けない**ため、各
 > [!NOTE]
 > **本の取り込み（ダウンロード）には Google ログインも必要です**（取り込んだ本は Google アカウントごとの鍵で暗号化するため。手順 2 のアカウント欄から Google にもログインしてください）。**すでに取り込んだ本を読むのにログインは要りません**。
 
+## AI / MCP
+
+Ligrol はローカルの MCP サーバー `ligrol-mcp` を同梱しています。Claude Desktop /
+Cursor などの MCP クライアントから、本棚・タグ・本文・読書統計・技術書典の
+チェックリストを読めます。ダウンロードや OCR は Ligrol の画面で承認するまで実行しません。
+
+- AI 向けの使い方: [AI_GUIDE.md](AI_GUIDE.md)（インストール先にも同梱）
+- MCP の仕様: [docs/mcp.md](docs/mcp.md)
+- 設計: [docs/spec/11-ai-mcp-and-extraction.md](docs/spec/11-ai-mcp-and-extraction.md)
+
+```json
+{
+  "mcpServers": {
+    "ligrol": {
+      "command": "C:\\Users\\<you>\\AppData\\Local\\Ligrol\\ligrol-mcp.exe",
+      "env": { "LIGROL_AI_TEXT": "1" }
+    }
+  }
+}
+```
+
+本文と付箋は既定で無効です（`LIGROL_AI_TEXT=1` / `LIGROL_AI_NOTES=1`）。
+操作を許可するには `LIGROL_AI_ACTIONS=1` と `LIGROL_AI_READ_ONLY=0` を設定します。
+
 ## サンプル（デモ）モード
 
 実在の本（表紙・本文）を出さずに、**架空のサンプル 50 冊**でアプリの全画面を試せる**サンプル（デモ）モード**があります。起動は次のどちらかです。

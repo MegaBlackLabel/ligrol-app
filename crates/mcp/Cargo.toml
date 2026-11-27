@@ -1,0 +1,15 @@
+[package]
+name = "ligrol-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ligrol-mcp"
+path = "src/main.rs"
+
+[dependencies]
+ligrol-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true
+dirs = "7"

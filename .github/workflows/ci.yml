@@ -78,7 +78,7 @@ jobs:
         shell: bash
         run: |
           cargo test -p nartik -p ligrol-core --locked
-          cargo build -p ligrol --locked
+          cargo build -p ligrol -p ligrol-mcp --locked
 
   # 依存の既知脆弱性を継続的に確認する。例外（許容する勧告）は `.cargo/audit.toml` に
   # 「理由」と「見直し時期」つきで列挙し、**それ以外は失敗させる**。

@@ -94,7 +94,7 @@ jobs:
           LIGROL_GOOGLE_CLIENT_SECRET: ${{ secrets.LIGROL_GOOGLE_CLIENT_SECRET }}
           # 更新フィードの minisign 公開鍵。設定するとアプリは Strict（署名必須）になる。
           LIGROL_UPDATE_MINISIGN_KEY: ${{ vars.LIGROL_UPDATE_MINISIGN_KEY }}
-        run: cargo build --release --locked --target ${{ matrix.target }} -p ligrol
+        run: cargo build --release --locked --target ${{ matrix.target }} -p ligrol -p ligrol-mcp
 
       # PDFium (BSD-3-Clause / Apache-2.0) は mupdf (AGPL-3.0) の代替として
       # macOS でも使う。静的リンクはしない — 実行時に dylib をロードする方式なら
@@ -217,6 +217,8 @@ jobs:
           rm -rf "$APP"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp "target/${{ matrix.target }}/release/ligrol" "$APP/Contents/MacOS/ligrol"
+          cp "target/${{ matrix.target }}/release/ligrol-mcp" "$APP/Contents/MacOS/ligrol-mcp"
+          cp "AI_GUIDE.md" "$APP/Contents/Resources/AI_GUIDE.md"
           cp crates/app/assets/app-icon/icon.icns "$APP/Contents/Resources/icon.icns"
           cat > "$APP/Contents/Info.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
@@ -264,6 +266,8 @@ jobs:
           echo "署名 ID: $IDENTITY"
           codesign --force --options runtime --timestamp \
             --keychain "$KC" --sign "$IDENTITY" "$APP/Contents/Frameworks/libpdfium.dylib"
+          codesign --force --options runtime --timestamp \
+            --keychain "$KC" --sign "$IDENTITY" "$APP/Contents/MacOS/ligrol-mcp"
           codesign --force --options runtime --timestamp \
             --keychain "$KC" --sign "$IDENTITY" "$APP"
           codesign --verify --strict --verbose=2 "$APP"
@@ -332,6 +336,7 @@ jobs:
           # Rust 依存クレートの一覧はアプリ内に埋め込んである（1,000 件超の全文を
           # テキストで置くと配布物が肥大するため、規約上必要な同梱アセットだけを置く）。
           cp LICENSE "$STAGE/"
+          cp AI_GUIDE.md "$STAGE/"
           cp crates/app/assets/third-party/lucide-LICENSE.txt "$STAGE/"
           cp crates/app/assets/third-party/pdfium-LICENSE.txt "$STAGE/"
           # ditto でバンドル構造（権限・リソース）を保ったまま zip 化する
@@ -372,7 +377,9 @@ jobs:
           # 規約上必要な同梱アセットの全文だけをテキストで置く）。
           Compress-Archive -Path @(
             "target/${{ matrix.target }}/release/ligrol.exe",
+            "target/${{ matrix.target }}/release/ligrol-mcp.exe",
             "target/${{ matrix.target }}/release/pdfium.dll",
+            "AI_GUIDE.md",
             "LICENSE",
             "crates/app/assets/third-party/lucide-LICENSE.txt",
             "crates/app/assets/third-party/pdfium-LICENSE.txt"
@@ -380,7 +387,7 @@ jobs:
 
           # ライセンス全文を配布ディレクトリにも置く（MSI / MSIX が同梱する）。
           $releaseDir = "target/${{ matrix.target }}/release"
-          Copy-Item LICENSE, "crates/app/assets/third-party/lucide-LICENSE.txt", "crates/app/assets/third-party/pdfium-LICENSE.txt" $releaseDir
+          Copy-Item LICENSE, "AI_GUIDE.md", "crates/app/assets/third-party/lucide-LICENSE.txt", "crates/app/assets/third-party/pdfium-LICENSE.txt" $releaseDir
 
           # 直販用: 署名なしの per-user MSI。更新はアプリ内の gpui-updater が行う。
           $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"

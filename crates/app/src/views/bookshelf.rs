@@ -4589,6 +4589,29 @@ impl BookshelfView {
         self.start_download(cx, item, false, false);
     }
 
+    /// AI（承認済みジョブ）からのダウンロード。候補を選び直してから既存の
+    /// `start_download` に渡す。見つからない・候補が変わったときは false。
+    pub fn ai_download(
+        &mut self,
+        cx: &mut Context<Self>,
+        site_id: &str,
+        database_id: &str,
+        option_index: usize,
+    ) -> bool {
+        let Some(item) = self
+            .shelf_cards
+            .iter()
+            .find(|card| card.shelf.site_id == site_id && card.shelf.database_id == database_id)
+            .map(|card| card.shelf.clone())
+        else {
+            return false;
+        };
+        let Some(item) = choose_download(&item, option_index) else {
+            return false;
+        };
+        self.start_download(cx, item, false, true)
+    }
+
     /// 取り込み（ダウンロード）の前提を満たしているか（**F03 の fail-closed**）。
     ///
     /// pack の鍵（v3 の PRK）は Google アカウントごとに作るため、未ログインでは

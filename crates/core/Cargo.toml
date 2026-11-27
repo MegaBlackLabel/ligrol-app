@@ -38,6 +38,8 @@ lindera = { version = "6.2", features = ["embed-ipadic"] }
 lindera-analysis = "6.2"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 yaml-rust2 = "0.13"
+quick-xml = "0.38"
+pure-onnx-ocr = "0.3.2"
 # PDF レンダリングは PDFium（BSD-3-Clause / Apache-2.0）に統一した。mupdf は
 # AGPL-3.0 で、MIT で配布するこのアプリと両立しないため依存から外している。
 # PDFium は**実行時ロード**（静的リンクではない）ので、ビルド時にライブラリは

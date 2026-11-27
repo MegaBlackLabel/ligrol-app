@@ -53,7 +53,7 @@ New-Item -ItemType Directory -Path (Join-Path $stage 'Assets') -Force | Out-Null
 try {
     Copy-Item $exe, $dll $stage
     Copy-Item (Join-Path $here 'Assets\*.png') (Join-Path $stage 'Assets')
-    foreach ($name in @('LICENSE', 'lucide-LICENSE.txt', 'pdfium-LICENSE.txt', 'はじめにお読みください.txt')) {
+    foreach ($name in @('AI_GUIDE.md', 'LICENSE', 'lucide-LICENSE.txt', 'pdfium-LICENSE.txt', 'はじめにお読みください.txt')) {
         $candidate = Join-Path $SourceDir $name
         if (Test-Path $candidate) { Copy-Item $candidate $stage }
     }

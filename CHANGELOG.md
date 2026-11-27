@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### Added
+
+- **AI（MCP）連携**: `ligrol-mcp`（stdio）が本棚・タグ・本文・統計・付箋・購入一覧・
+  技術書典チェックリストを読み取り専用で公開する。本文と付箋は opt-in。
+  ダウンロード / 本を開く / OCR は `ai_jobs` に積み、Ligrol 本体の承認ダイアログを
+  経てから実行する。監査は `ai_audit_log`。設計は `docs/spec/11-ai-mcp-and-extraction.md`。
+- **EPUB 本文抽出**: spine の章単位で XHTML をテキスト化し、`document_text` に
+  `source='epub'` / 章タイトル / href を保存する。ルビは親文字だけ、コードブロックは
+  インデントを保持。DRM と固定レイアウトは安全にスキップ。pack の
+  `documents/text.jsonl` にも章メタを保存し、Drive 復元で維持する。
+- **OCR（任意）**: `pure-onnx-ocr`（PP-OCRv6 small）で空のページだけを OCR する。
+  `document_text` に `source='ocr'` / `engine` / `confidence` を保存する。
+  モデルは `<data_dir>/models/ocr/ppocrv6-small/` に置く（未配置なら安全に失敗）。
+
+### Changed
+
+- `document_text` に `source` / `engine` / `confidence` / `section_title` / `section_href`
+  を追加し、`content_id` を INSERT に含める。既存行は `source='extracted'`。
+- AI 読み取り用に `db::connect_for_ai` を追加（マイグレーションを実行しない）。
+  MCP は既存 DB を読み、`ai_jobs` への enqueue だけを行う。
+
 ## [0.3.9] - 2026-11-26
 
 ### Security

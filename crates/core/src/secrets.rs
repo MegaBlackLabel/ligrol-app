@@ -210,6 +210,14 @@ impl SecretStore {
         self.random_key(USER_DB_KEY)
     }
 
+    /// 既に保存済みの DB 鍵を読む。**無ければ生成しない**。
+    ///
+    /// MCP のような読み取り専用プロセスが鍵を勝手に作ると、既存の暗号文を
+    /// 復号できない新しい鍵が保存されてしまう。読み取り経路はこちらを使う。
+    pub fn try_db_key(&self) -> Result<Option<[u8; 32]>, SecretError> {
+        self.load_key(USER_DB_KEY)
+    }
+
     /// ストアのセッション Cookie の暗号化用ローカル鍵（32 byte）。
     /// `db_key` とは別スロット＝別鍵（用途ごとに分離する）。
     pub fn session_key(&self) -> Result<[u8; 32], SecretError> {

@@ -135,6 +135,13 @@ pub fn db_key() -> Result<[u8; 32], sqlx::Error> {
         .map_err(|e| sqlx::Error::Protocol(format!("column crypto: DB 鍵を取得できない: {e}")))
 }
 
+/// 既存の DB 鍵を読む。**無ければ生成しない**（AI の読み取り経路用）。
+pub fn try_db_key() -> Result<Option<[u8; 32]>, sqlx::Error> {
+    SecretStore::new()
+        .try_db_key()
+        .map_err(|e| sqlx::Error::Protocol(format!("column crypto: DB 鍵を取得できない: {e}")))
+}
+
 /// リポジトリ向け: 列を暗号化する（`sqlx::Error` に包む）。
 pub fn encrypt_str(key: &[u8; 32], aad: &str, plain: &str) -> Result<String, sqlx::Error> {
     encrypt(key, aad, plain).map_err(|e| sqlx::Error::Protocol(format!("column crypto: {e}")))
