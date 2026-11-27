@@ -33,6 +33,7 @@
   `LIGROL_AI_WRITE_NOTES=1` と `LIGROL_AI_READ_ONLY=0` のときだけ有効で、
   `expected_updated_at` による競合検出と soft delete に対応する。
 - `ligrol_search_text` は `book_ids` 省略時に見える本を最大 50 冊まで簡易スキャンできる。
+- 承認直前に `ai_jobs.params_json` のハッシュを再計算し、改変された要求を拒否するようにした。
 - タグの書き込みツール（`ligrol_add_tag` / `ligrol_remove_tag`）を追加した。
   `LIGROL_AI_WRITE_TAGS=1` と `LIGROL_AI_READ_ONLY=0` のときだけ有効。
 - Windows の MSI / MSIX はクリーンなステージから作り、`ligrol-mcp.exe` と

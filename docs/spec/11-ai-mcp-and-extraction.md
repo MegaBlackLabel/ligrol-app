@@ -217,7 +217,8 @@ macOS は `/Applications/Ligrol.app/Contents/MacOS/ligrol-mcp`。配布 zip / MS
 
 1. MCP `ligrol_request_download` が購入状態・DL 可能・選択肢を検証
 2. `ai_jobs` に `pending_confirmation` で enqueue（60 秒で期限切れ）
-3. Ligrol の Workspace が 1 秒ごとに `pending_confirmation` を拾う
+3. Ligrol の Workspace が 1 秒ごとに `pending_confirmation` を拾う。
+   承認直前に `params_json` のハッシュを再計算し、改変されていれば `invalid_request` で拒否する
 4. 承認ダイアログで「許可 / 拒否」
 5. 許可: `BookshelfView::ai_download` → 既存の `start_download` / import
    - `ocr`: `ligrol_core::ocr::ocr_book` をバックグラウンド実行

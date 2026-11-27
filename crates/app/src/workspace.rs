@@ -628,6 +628,26 @@ impl Workspace {
         };
         let db = AppState::global(cx).db_pool.clone();
         let client_id = job.client_id.clone();
+        if !ligrol_core::db::ai_jobs::params_match(&job) {
+            let _ = ligrol_core::db::ai_jobs::finish(
+                &db,
+                &job.id,
+                "failed",
+                None,
+                Some("invalid_request"),
+            );
+            let _ = ligrol_core::db::ai_jobs::audit(
+                &db,
+                &job.owner_id,
+                &client_id,
+                &job.action,
+                &job.target,
+                "failed",
+                Some("invalid_request"),
+            );
+            cx.notify();
+            return;
+        }
         match job.action.as_str() {
             "open_book" => {
                 let book_id = job.target.clone();

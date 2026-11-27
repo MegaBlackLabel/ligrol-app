@@ -52,7 +52,7 @@ pub struct NewAiJob<'a> {
     pub expires_in_seconds: Option<i64>,
 }
 
-fn hash_params(params_json: &str) -> String {
+pub fn hash_params(params_json: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(params_json.as_bytes());
     hasher
@@ -60,6 +60,12 @@ fn hash_params(params_json: &str) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// 保存済みの `params_json` が enqueue 時のハッシュと一致するか。
+/// 承認前に改変されていないことの確認に使う。
+pub fn params_match(job: &AiJob) -> bool {
+    hash_params(&job.params_json) == job.params_hash
 }
 
 pub fn enqueue(pool: &SqlitePool, job: &NewAiJob<'_>) -> Result<AiJob, sqlx::Error> {
@@ -316,6 +322,28 @@ mod tests {
         assert_eq!(expire_stale(&pool).unwrap(), 1);
         let expired = get(&pool, &job.id).unwrap().unwrap();
         assert_eq!(expired.status, status::EXPIRED);
+    }
+
+    #[test]
+    fn params_match_detects_tampering() {
+        let pool = crate::db::test_pool();
+        let job = enqueue(
+            &pool,
+            &NewAiJob {
+                client_id: "client",
+                action: "download",
+                target: "techbookfest:123",
+                params_json: r#"{"site_id":"techbookfest","database_id":"123"}"#,
+                idempotency_key: None,
+                owner_id: "",
+                expires_in_seconds: Some(60),
+            },
+        )
+        .unwrap();
+        assert!(params_match(&job));
+        let mut tampered = job.clone();
+        tampered.params_json = r#"{"site_id":"techbookfest","database_id":"999"}"#.to_string();
+        assert!(!params_match(&tampered));
     }
 
     #[test]
