@@ -213,6 +213,12 @@ CREATE TABLE IF NOT EXISTS document_text (
   content_id TEXT NOT NULL DEFAULT '',
   page_number INTEGER NOT NULL,
   text_content TEXT NOT NULL,
+  -- AI / 抽出用のメタデータ（runtime DDL で追加。docs/spec/11 参照）
+  source TEXT NOT NULL DEFAULT 'extracted',
+  engine TEXT,
+  confidence REAL,
+  section_title TEXT,
+  section_href TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

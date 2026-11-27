@@ -68,6 +68,8 @@ fn migrate_creates_all_schema_tables() {
         names,
         vec![
             "_sqlx_migrations",
+            "ai_audit_log",
+            "ai_jobs",
             "app_settings",
             "book_contents",
             "book_first_events",
@@ -2321,8 +2323,14 @@ fn document_text_is_encrypted_at_rest() {
         &documents::DocumentText {
             id: "dt-1".into(),
             document_id: "doc-1".into(),
+            content_id: String::new(),
             page_number: 1,
             text_content: "ページの本文".into(),
+            source: "extracted".into(),
+            engine: Some("pdfium".into()),
+            confidence: None,
+            section_title: None,
+            section_href: None,
             created_at: "2026-09-26 00:00:00".into(),
         },
     )

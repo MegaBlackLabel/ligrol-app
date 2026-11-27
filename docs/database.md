@@ -256,11 +256,26 @@ OFF のとき Drive 同期は pack の送受信をスキップする）、`api.l
 
 ### document_text / token_analysis
 
-- `document_text`: 抽出したページテキスト（タグ生成の入力）
+- `document_text`: 抽出したページテキスト（タグ生成・AI 検索の入力）
+  - `source`: `extracted`（PDF / `_export.txt`）/ `epub` / `ocr`
+  - `engine`: `pdfium` / `epub-xhtml` / `pure-onnx-ocr/ppocrv6`
+  - `confidence`: OCR の平均信頼度
+  - `section_title` / `section_href`: EPUB の章タイトル・OPF 相対パス
+  - `page_number` は PDF ならページ、EPUB なら spine の ordinal（1-indexed）
 - `token_analysis`: 形態素解析結果（名詞の頻度など）
 - `document_text.text_content` と `token_analysis` の `token` / `pos` / `base_form` / `reading` は
   **平文で保存しない**（keyring の DB 鍵で AES-256-GCM。`enc:v1:...`。
   `crates/core/src/db/column_crypto.rs`）。保存形式は `docs/spec/02-data-model.md` §1.11
+
+### ai_jobs / ai_audit_log
+
+AI（MCP）からの操作要求と監査。Drive バックアップ対象外。詳細は
+`docs/spec/11-ai-mcp-and-extraction.md`。
+
+| テーブル | 内容 |
+|---|---|
+| `ai_jobs` | 承認待ち / 実行中 / 完了の操作（`download` / `open_book` / `ocr`） |
+| `ai_audit_log` | 誰が・何を・いつ・どうしたか（本文・URL・トークンなし） |
 
 ### book_tags
 

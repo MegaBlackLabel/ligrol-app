@@ -194,6 +194,8 @@ pub enum ModalKind {
     PassphraseNotice,
     /// 同期の続き通知（情報 + 「続きを取り込む」）。状態は保持されるので後から出せる。
     SyncNotice,
+    /// AI からの操作要求（ダウンロード / 本を開く）の承認。
+    AiJob,
     /// 終了確認（アップロードの確認）。
     ExitConfirm,
     /// ダウンロード中止の確認。
@@ -218,6 +220,7 @@ impl ModalKind {
         match self {
             Self::PassphraseNotice => "パスフレーズの設定の確認",
             Self::SyncNotice => "同期の続きの確認",
+            Self::AiJob => "AI からの操作要求",
             Self::ExitConfirm => "終了の確認",
             Self::DownloadCancel => "ダウンロードの中止の確認",
             Self::DownloadConfirm => "ダウンロードの確認",

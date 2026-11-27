@@ -4,6 +4,51 @@
 
 ## [Unreleased]
 
+### Added
+
+- **AI（MCP）連携**: `ligrol-mcp`（stdio）が本棚・タグ・本文・統計・付箋・購入一覧・
+  技術書典チェックリストを読み取り専用で公開する。本文と付箋は opt-in。
+  ダウンロード / 本を開く / OCR は `ai_jobs` に積み、Ligrol 本体の承認ダイアログを
+  経てから実行する。監査は `ai_audit_log`。設計は `docs/spec/11-ai-mcp-and-extraction.md`。
+- **EPUB 本文抽出**: spine の章単位で XHTML をテキスト化し、`document_text` に
+  `source='epub'` / 章タイトル / href を保存する。ルビは親文字だけ、コードブロックは
+  インデントを保持。DRM と固定レイアウトは安全にスキップ。pack の
+  `documents/text.jsonl` にも章メタを保存し、Drive 復元で維持する。
+- **OCR（任意）**: `pure-onnx-ocr`（PP-OCRv6 small）で空のページだけを OCR する。
+  `document_text` に `source='ocr'` / `engine` / `confidence` を保存する。
+  モデルは `<data_dir>/models/ocr/ppocrv6-small/` に置く（未配置なら安全に失敗）。
+
+### Security
+
+- `quick-xml` を 0.38 から 0.41 へ更新（RUSTSEC-2026-0194 / RUSTSEC-2026-0195）。
+  EPUB の XHTML / OPF / NCX パースで使う。0.41 の `Attribute::normalized_value` に追従。
+
+### Changed
+
+- MCP の本棚検索に `sort` を追加し、`description` / `theme` / `series_name` も検索対象にした。
+  本文検索は opaque cursor でページングできる。
+- MCP にプロンプト（`summarize-book` / `reading-plan` / `tbf-route`）を追加した。
+- 実行中の OCR ジョブを `ligrol_cancel_job` で中止できるようにした。OCR ページの
+  `token_analysis` も再生成する。
+- 既存 EPUB 本の本文を遡及抽出する `ligrol_request_epub_extract` を追加した。
+- 技術書典のイベント一覧 `ligrol_list_tbf_events` を追加した。
+- 表紙は `thumbnail_share` が無い場合、pack 内 `thumbnail.webp` にフォールバックする。
+- AI のダウンロードジョブは、取り込み完了・失敗・キャンセルを `ai_jobs` と監査ログに反映する。
+- 付箋の書き込みツール（`ligrol_add_note` / `ligrol_remove_note`）を追加した。
+  `LIGROL_AI_WRITE_NOTES=1` と `LIGROL_AI_READ_ONLY=0` のときだけ有効で、
+  `expected_updated_at` による競合検出と soft delete に対応する。
+- `ligrol_search_text` は `book_ids` 省略時に見える本を最大 50 冊まで簡易スキャンできる。
+- 承認直前に `ai_jobs.params_json` のハッシュを再計算し、改変された要求を拒否するようにした。
+- タグの書き込みツール（`ligrol_add_tag` / `ligrol_remove_tag`）を追加した。
+  `LIGROL_AI_WRITE_TAGS=1` と `LIGROL_AI_READ_ONLY=0` のときだけ有効。
+- Windows の MSI / MSIX はクリーンなステージから作り、`ligrol-mcp.exe` と
+  `AI_GUIDE.md` を同梱するようにした。MSI / MSIX / zip の内容を実ビルドで確認済み
+  （dmg は macOS ランナーでの確認が必要）。
+- `document_text` に `source` / `engine` / `confidence` / `section_title` / `section_href`
+  を追加し、`content_id` を INSERT に含める。既存行は `source='extracted'`。
+- AI 読み取り用に `db::connect_for_ai` を追加（マイグレーションを実行しない）。
+  MCP は既存 DB を読み、`ai_jobs` への enqueue だけを行う。
+
 ## [0.3.9] - 2026-11-26
 
 ### Security

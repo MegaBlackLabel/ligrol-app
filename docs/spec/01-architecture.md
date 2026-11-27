@@ -11,6 +11,7 @@
 | `crates/nartik` | 書籍ファイル形式 `.nartik` の読み書き（自前形式） | Rust / aes-gcm, sha2 |
 | `crates/core` | DB・取り込み・各ストア同期・Google/Drive・タグ・暗号（UI 非依存） | Rust / sqlx, tokio, reqwest 相当は ureq, lindera, pdfium-render |
 | `crates/app` | GPUI デスクトップ UI（画面・ビューアー・通知・アイコン） | Rust / gpui-kit, gpui-webview, image, resvg, usvg |
+| `crates/mcp` | AI（MCP）の stdio サーバー。読み取りは DB、操作は `ai_jobs` | Rust / ligrol-core, serde_json, dirs |
 
 - ワークスペース: `resolver = "3"`, `edition = "2024"`, version 0.2.4, license MIT（`Cargo.toml:1-9`）
 - リリースプロファイルは `debug = false`（`Cargo.toml:19-23`）

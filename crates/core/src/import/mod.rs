@@ -5,6 +5,7 @@
 pub mod pdf;
 
 pub mod classify;
+pub mod epub;
 pub mod export_text;
 mod zip_names;
 
@@ -736,8 +737,8 @@ pub struct ImportPlan {
     pub contents: Vec<PlannedContent>,
     /// 既定で選ばれるコンテンツの添字（`contents` が空なら無意味）。
     pub primary: usize,
-    /// `_export.txt` から読んだ `(page_number, text)`。
-    pub export_text: Vec<(i64, String)>,
+    /// `_export.txt` から読んだ本文。
+    pub export_text: Vec<TextSpec>,
     /// 解析時に読み飛ばしたエントリ。
     pub warnings: Vec<String>,
     /// 取り込む対象が無いときの理由。
@@ -1028,10 +1029,15 @@ fn metadata_entry(
 ///
 /// 本文に改行が含まれても行が壊れないよう、JSON の文字列として書く（読み手は 1 行ずつ
 /// `serde_json::from_str` する）。
-fn texts_entry(texts: &[(i64, String)]) -> Vec<u8> {
+fn texts_entry(texts: &[TextSpec]) -> Vec<u8> {
     let mut out = Vec::new();
-    for (page_number, text) in texts {
-        let line = serde_json::json!({ "pageNumber": page_number, "text": text });
+    for text in texts {
+        let line = serde_json::json!({
+            "pageNumber": text.ordinal,
+            "text": text.text,
+            "sectionTitle": text.section_title,
+            "sectionHref": text.section_href,
+        });
         serde_json::to_writer(&mut out, &line).expect("text entry json");
         out.push(b'\n');
     }
@@ -1147,12 +1153,48 @@ fn single_content(
     }
 }
 
+/// 取り込み時に保存する本文 1 件。
+///
+/// PDF はページ、EPUB は章（spine）。`section_title` / `section_href` は EPUB のときだけ。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextSpec {
+    pub ordinal: i64,
+    pub text: String,
+    pub section_title: Option<String>,
+    pub section_href: Option<String>,
+}
+
+impl TextSpec {
+    pub fn page(ordinal: i64, text: String) -> Self {
+        Self {
+            ordinal,
+            text,
+            section_title: None,
+            section_href: None,
+        }
+    }
+
+    pub fn section(
+        ordinal: i64,
+        text: String,
+        title: Option<String>,
+        href: Option<String>,
+    ) -> Self {
+        Self {
+            ordinal,
+            text,
+            section_title: title,
+            section_href: href,
+        }
+    }
+}
+
 struct PackSpec {
     /// 取り込み中のページデータ（合計が閾値を超えたら一時ファイルへ逃がす）。
     entries: PackEntryStore,
     page_rows: Vec<PageRow>,
-    /// (page_number, text) — PDF の抽出テキストや `_export.txt` の中身。
-    texts: Vec<(i64, String)>,
+    /// PDF の抽出テキスト / `_export.txt` / EPUB の章本文。
+    texts: Vec<TextSpec>,
     /// 読み飛ばしたエントリの説明（壊れた画像など）。
     warnings: Vec<String>,
     /// 永続化するコンテンツ構造（フェーズ2）。
@@ -1672,26 +1714,48 @@ fn finish_import(
     log::info!("finish_import: images バッチ挿入完了");
 
     let mut text_rows = Vec::with_capacity(spec.texts.len());
-    for (page_number, text) in &spec.texts {
-        text_rows.push(documents::DocumentText {
-            id: uuid::Uuid::new_v4().to_string(),
-            document_id: document.id.clone(),
-            page_number: *page_number,
-            text_content: text.clone(),
-            created_at: timestamp.clone(),
-        });
+    let content_id = spec
+        .contents
+        .first()
+        .map(|content| content.content_id.clone())
+        .unwrap_or_default();
+    let (source, engine) = match spec.source_type.as_str() {
+        "epub" => ("epub", "epub-xhtml"),
+        "pdf" => ("extracted", "pdfium"),
+        _ => ("extracted", "export.txt"),
+    };
+    for text in &spec.texts {
+        let mut row = documents::DocumentText::extracted(
+            uuid::Uuid::new_v4().to_string(),
+            document.id.clone(),
+            content_id.clone(),
+            text.ordinal,
+            text.text.clone(),
+            engine,
+            timestamp.clone(),
+        );
+        row.section_title = text.section_title.clone();
+        row.section_href = text.section_href.clone();
+        text_rows.push(row);
+        // 上のコンストラクタは source を `extracted` 固定にするため、
+        // EPUB だけはここで上書きする（章本文であることを AI に伝える）。
+        if source == "epub"
+            && let Some(row) = text_rows.last_mut()
+        {
+            row.source = "epub".to_string();
+        }
     }
     documents::insert_texts_batch(pool, &text_rows)?;
     log::info!("finish_import: texts バッチ挿入完了");
 
     // Token analysis rows (nouns per page).
     let mut token_rows = Vec::new();
-    for (page_number, text) in &spec.texts {
-        for (word, count) in crate::tags::extract_nouns(text, &[&title]) {
+    for text in &spec.texts {
+        for (word, count) in crate::tags::extract_nouns(&text.text, &[&title]) {
             token_rows.push(documents::TokenRow {
                 id: uuid::Uuid::new_v4().to_string(),
                 document_id: document.id.clone(),
-                page_number: *page_number,
+                page_number: text.ordinal,
                 token: word.clone(),
                 pos: "名詞".to_string(),
                 base_form: Some(word.clone()),
@@ -1709,7 +1773,7 @@ fn finish_import(
     );
     // Generated tags (Zenn matching with noun-only fallback).
     let zenn_tags = crate::tags::fetch_zenn_tags().unwrap_or_default();
-    let text_refs: Vec<&str> = spec.texts.iter().map(|(_, text)| text.as_str()).collect();
+    let text_refs: Vec<&str> = spec.texts.iter().map(|text| text.text.as_str()).collect();
     let generated = crate::tags::generate_tags(&text_refs, &[&title], &zenn_tags);
     let tag_pairs: Vec<(&str, &str)> = generated
         .iter()
@@ -1865,7 +1929,7 @@ fn import_pdf_rendered(
     // ページのメタデータ（小さい）だけを集める。バイト列は store が持つ（閾値超で一時ファイル）。
     let mut store = PackEntryStore::new();
     let mut rows: Vec<(i64, i64, i64, String, i64)> = Vec::new(); // 番号, 幅, 高さ, パス, サイズ
-    let mut texts: Vec<(i64, String)> = Vec::new();
+    let mut texts: Vec<TextSpec> = Vec::new();
     // cover はページ 1 と同じバイト列のもう 1 エントリ、thumbnail はそこから作る（どちらも小さい）。
     let mut cover: Option<Vec<u8>> = None;
     let mut thumbnail: Option<Vec<u8>> = None;
@@ -1885,7 +1949,7 @@ fn import_pdf_rendered(
             entry_path.clone(),
             page.data.len() as i64,
         ));
-        texts.push((page_number, page.text));
+        texts.push(TextSpec::page(page_number, page.text));
         // ここで store へ渡す（閾値を超えていれば一時ファイルへ逃げる）。
         store.push(entry_path, page.data, "image/webp".to_string(), false)
     })?;
@@ -1959,6 +2023,29 @@ pub fn import_epub_bytes(
     source: Option<&ImportSource>,
 ) -> Result<ImportedBook, ImportError> {
     let entry_path = file_name.to_string();
+    let mut warnings = Vec::new();
+    let mut texts = Vec::new();
+    match epub::extract(bytes) {
+        Ok(book) if book.drm_protected => {
+            warnings.push("DRM 保護のため本文を抽出できません".to_string());
+        }
+        Ok(book) => {
+            if book.fixed_layout {
+                warnings.push(
+                    "固定レイアウト EPUB（本文抽出は空のことがあります）".to_string(),
+                );
+            }
+            for section in book.sections {
+                texts.push(TextSpec::section(
+                    section.ordinal,
+                    section.text,
+                    section.title,
+                    Some(section.href),
+                ));
+            }
+        }
+        Err(error) => warnings.push(format!("EPUB 本文を抽出できません: {error}")),
+    }
     finish_import(
         pool,
         packs_dir,
@@ -1973,8 +2060,8 @@ pub fn import_epub_bytes(
                 false,
             )]),
             page_rows: Vec::new(),
-            texts: Vec::new(),
-            warnings: Vec::new(),
+            texts,
+            warnings,
             contents: vec![single_content(MediaKind::Epub, "EPUB", 0, None)],
             source_type: "epub".to_string(),
             total_pages: 0,
@@ -2148,7 +2235,7 @@ pub fn analyze_zip_with<R: std::io::Read + std::io::Seek>(
     let primary = choose_primary(&contents);
 
     // `_export.txt` は本文テキストなので解析時に読む（小さく、画像の伸長は伴わない）。
-    let mut export_texts: Vec<(i64, String)> = Vec::new();
+    let mut export_texts: Vec<TextSpec> = Vec::new();
     for meta in metas
         .iter()
         .filter(|meta| classify_entry(&meta.name) == EntryKind::ExportText)
@@ -2156,7 +2243,11 @@ pub fn analyze_zip_with<R: std::io::Read + std::io::Seek>(
         match read_entry(archive, meta) {
             Ok(data) => {
                 let decoded = zip_names::decode_text_bytes(&data);
-                export_texts.extend(export_text::parse_export_text(&decoded));
+                export_texts.extend(
+                    export_text::parse_export_text(&decoded)
+                        .into_iter()
+                        .map(|(number, text)| TextSpec::page(number, text)),
+                );
             }
             Err(error) => warnings.push(format!("{}: {error}", meta.name)),
         }
@@ -2244,6 +2335,7 @@ pub fn commit_zip_with<R: std::io::Read + std::io::Seek>(
     let mut page_rows: Vec<PageRow> = Vec::new();
     let mut warnings = plan.warnings.clone();
     let mut contents_spec: Vec<ContentSpec> = Vec::new();
+    let mut epub_texts: Vec<TextSpec> = Vec::new();
     let mut primary_pages = 0i64;
     let mut primary_thumbnail: Option<Vec<u8>> = None;
     let mut primary_cover: Option<Vec<u8>> = None;
@@ -2376,6 +2468,36 @@ pub fn commit_zip_with<R: std::io::Read + std::io::Seek>(
                     } else {
                         format!("{prefix}/{}", entry_file_name(&meta.name))
                     };
+                    // EPUB は raw を pack に残しつつ、AI / 検索用に章本文を抽出する。
+                    // 抽出に失敗しても取り込み自体は成功させる（raw は残る）。
+                    match epub::extract(&data) {
+                        Ok(book) if book.drm_protected => {
+                            warnings.push(format!(
+                                "{}: DRM 保護のため本文を抽出できません",
+                                meta.name
+                            ));
+                        }
+                        Ok(book) => {
+                            if book.fixed_layout {
+                                warnings.push(format!(
+                                    "{}: 固定レイアウト EPUB（本文抽出は空のことがあります）",
+                                    meta.name
+                                ));
+                            }
+                            for section in book.sections {
+                                epub_texts.push(TextSpec::section(
+                                    section.ordinal,
+                                    section.text,
+                                    section.title,
+                                    Some(section.href),
+                                ));
+                            }
+                        }
+                        Err(error) => warnings.push(format!(
+                            "{}: EPUB 本文を抽出できません: {error}",
+                            meta.name
+                        )),
+                    }
                     pack_entries.push(
                         entry_path,
                         data,
@@ -2448,7 +2570,11 @@ pub fn commit_zip_with<R: std::io::Read + std::io::Seek>(
         PackSpec {
             entries: pack_entries,
             page_rows,
-            texts: plan.export_text.clone(),
+            texts: {
+                let mut texts = plan.export_text.clone();
+                texts.extend(epub_texts);
+                texts
+            },
             warnings,
             contents: contents_spec,
             source_type: source_type.to_string(),
@@ -2746,26 +2872,43 @@ pub fn rebuild_from_pack(
     // ページ本文（[`TEXT_ENTRY`]）。書き込みは取り込みと同じ暗号化列の INSERT 経路を通す。
     let texts = read_texts_entry(reader, pack_key.as_ref());
     if !texts.is_empty() {
+        let content_id = contents::primary_for_book(pool, &document.book_id)?
+            .map(|content| content.content_id)
+            .unwrap_or_default();
         let text_rows: Vec<documents::DocumentText> = texts
             .iter()
-            .map(|(page_number, text)| documents::DocumentText {
-                id: uuid::Uuid::new_v4().to_string(),
-                document_id: document.id.clone(),
-                page_number: *page_number,
-                text_content: text.clone(),
-                created_at: timestamp.clone(),
+            .map(|text| {
+                let mut row = documents::DocumentText::extracted(
+                    uuid::Uuid::new_v4().to_string(),
+                    document.id.clone(),
+                    content_id.clone(),
+                    text.ordinal,
+                    text.text.clone(),
+                    if document.source_type == "epub" {
+                        "epub-xhtml"
+                    } else {
+                        "pdfium"
+                    },
+                    timestamp.clone(),
+                );
+                row.section_title = text.section_title.clone();
+                row.section_href = text.section_href.clone();
+                if document.source_type == "epub" {
+                    row.source = "epub".to_string();
+                }
+                row
             })
             .collect();
         documents::insert_texts_batch(pool, &text_rows)?;
         // トークンは**本文から再生成する**（取り込みと同じ `tags::extract_nouns` 経路。
         // 解析器のバージョン差で取り込み時と結果がずれうるが、本文は pack の値が正）。
         let mut token_rows = Vec::new();
-        for (page_number, text) in &texts {
-            for (word, count) in crate::tags::extract_nouns(text, &[&title]) {
+        for text in &texts {
+            for (word, count) in crate::tags::extract_nouns(&text.text, &[&title]) {
                 token_rows.push(documents::TokenRow {
                     id: uuid::Uuid::new_v4().to_string(),
                     document_id: document.id.clone(),
-                    page_number: *page_number,
+                    page_number: text.ordinal,
                     token: word.clone(),
                     pos: "名詞".to_string(),
                     base_form: Some(word.clone()),
@@ -2826,7 +2969,7 @@ fn restore_source(pool: &SqlitePool, pack_id: &str, metadata: Option<&serde_json
 ///
 /// エントリが無い pack（旧形式・Web 版が書いた pack）は空を返す。エントリはあるが読めない
 /// （鍵違い・壊れた行）ときは、その行だけを飛ばす（本文は副次的なので復元全体を止めない）。
-fn read_texts_entry(reader: &dyn PackRead, key: Option<&nartik::PackKey>) -> Vec<(i64, String)> {
+fn read_texts_entry(reader: &dyn PackRead, key: Option<&nartik::PackKey>) -> Vec<TextSpec> {
     if reader.entry(TEXT_ENTRY).is_none() {
         return Vec::new();
     }
@@ -2846,7 +2989,15 @@ fn read_texts_entry(reader: &dyn PackRead, key: Option<&nartik::PackKey>) -> Vec
         let page_number = value.get("pageNumber").and_then(|value| value.as_i64());
         let text = value.get("text").and_then(|value| value.as_str());
         if let (Some(page_number), Some(text)) = (page_number, text) {
-            texts.push((page_number, text.to_string()));
+            let title = value
+                .get("sectionTitle")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            let href = value
+                .get("sectionHref")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            texts.push(TextSpec::section(page_number, text.to_string(), title, href));
         }
     }
     texts

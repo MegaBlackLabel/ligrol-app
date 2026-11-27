@@ -5,6 +5,7 @@
 //! tasks; sqlx is async-only, so every repository function wraps its work in
 //! [`block_on`] against a process-wide tokio runtime.
 
+pub mod ai_jobs;
 pub mod backup;
 pub mod books;
 pub mod bookshelf;
@@ -55,6 +56,20 @@ pub fn block_on<F: std::future::Future>(fut: F) -> F::Output {
 /// sqlx 0.9 は動的 SQL を型で拒否するため、この関数が唯一の通過点になる。
 pub(crate) fn dynamic_sql(sql: impl Into<String>) -> sqlx::AssertSqlSafe<String> {
     sqlx::AssertSqlSafe(sql.into())
+}
+
+/// AI / MCP 用の接続。**マイグレーションを実行しない**。
+///
+/// アプリが作ったスキーマをそのまま使う。読み取りと `ai_jobs` への enqueue だけを
+/// 想定し、スキーマが古い場合はクエリ側でエラーになる（勝手に ALTER しない）。
+pub fn connect_for_ai(path: &Path) -> Result<SqlitePool, sqlx::Error> {
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(path)
+        .foreign_keys(true)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .create_if_missing(false);
+    block_on(SqlitePool::connect_with(options))
 }
 
 /// Open a pooled connection with foreign keys enabled and apply pending
@@ -838,6 +853,74 @@ pub fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         )
         .execute(&mut *conn)
         .await?;
+        // AI / 抽出用の本文メタデータ。`document_text` は暗号化列だけを持つが、
+        // どの経路で作られた本文か（PDF 抽出 / EPUB / OCR）と章情報を持たせる。
+        // 開発中のため migration は増やさず、PRAGMA で存在確認して追加する。
+        for (column, definition) in [
+            ("source", "source TEXT NOT NULL DEFAULT 'extracted'"),
+            ("engine", "engine TEXT"),
+            ("confidence", "confidence REAL"),
+            ("section_title", "section_title TEXT"),
+            ("section_href", "section_href TEXT"),
+        ] {
+            ensure_column(&mut conn, "document_text", column, definition).await?;
+        }
+        // AI の操作要求（承認キュー）。状態を変える操作は MCP から直接実行せず、
+        // ここに積んで Ligrol 本体が承認・実行する。device-local（Drive 対象外）。
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS ai_jobs (
+                 id TEXT PRIMARY KEY,
+                 client_id TEXT NOT NULL,
+                 action TEXT NOT NULL,
+                 target TEXT NOT NULL,
+                 params_json TEXT NOT NULL,
+                 params_hash TEXT NOT NULL,
+                 status TEXT NOT NULL DEFAULT 'pending_confirmation',
+                 progress REAL NOT NULL DEFAULT 0,
+                 result_json TEXT,
+                 error_code TEXT,
+                 idempotency_key TEXT,
+                 owner_id TEXT NOT NULL DEFAULT '',
+                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                 expires_at TEXT
+             )",
+        )
+        .execute(&mut *conn)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS ai_jobs_status_idx ON ai_jobs(status, created_at)",
+        )
+        .execute(&mut *conn)
+        .await?;
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ai_jobs_idempotency_idx \
+             ON ai_jobs(idempotency_key, owner_id) WHERE idempotency_key IS NOT NULL",
+        )
+        .execute(&mut *conn)
+        .await?;
+        // 監査ログ。本文・URL・トークンは保存しない。
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS ai_audit_log (
+                 id TEXT PRIMARY KEY,
+                 owner_id TEXT NOT NULL DEFAULT '',
+                 client_id TEXT NOT NULL,
+                 action TEXT NOT NULL,
+                 target TEXT NOT NULL,
+                 status TEXT NOT NULL,
+                 error_code TEXT,
+                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+             )",
+        )
+        .execute(&mut *conn)
+        .await?;
+        ensure_column(&mut conn, "ai_audit_log", "owner_id", "owner_id TEXT NOT NULL DEFAULT ''").await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS ai_audit_log_created_idx \
+             ON ai_audit_log(created_at)",
+        )
+        .execute(&mut *conn)
+        .await?;
         // 古い取り込みドキュメントが残っている本を掃除する（冪等）。残すと
         // `images_for_selection` が同じページを複数返し、見開きに同じページが
         // 左右へ出る（実データで 1 ページが 3 行になっていた）。
@@ -883,6 +966,8 @@ pub fn clear_owner_model_if_first_run(
         "bookshelf_items",
         "books",
         "drive_sync_state",
+        "ai_jobs",
+        "ai_audit_log",
         // 表紙バンドルの派生キャッシュ（親を消すので一緒に消す）
         "thumbnail_share",
     ] {

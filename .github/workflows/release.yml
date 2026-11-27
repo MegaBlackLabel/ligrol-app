@@ -94,7 +94,7 @@ jobs:
           LIGROL_GOOGLE_CLIENT_SECRET: ${{ secrets.LIGROL_GOOGLE_CLIENT_SECRET }}
           # 更新フィードの minisign 公開鍵。設定するとアプリは Strict（署名必須）になる。
           LIGROL_UPDATE_MINISIGN_KEY: ${{ vars.LIGROL_UPDATE_MINISIGN_KEY }}
-        run: cargo build --release --locked --target ${{ matrix.target }} -p ligrol
+        run: cargo build --release --locked --target ${{ matrix.target }} -p ligrol -p ligrol-mcp
 
       # PDFium (BSD-3-Clause / Apache-2.0) は mupdf (AGPL-3.0) の代替として
       # macOS でも使う。静的リンクはしない — 実行時に dylib をロードする方式なら
@@ -217,6 +217,8 @@ jobs:
           rm -rf "$APP"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp "target/${{ matrix.target }}/release/ligrol" "$APP/Contents/MacOS/ligrol"
+          cp "target/${{ matrix.target }}/release/ligrol-mcp" "$APP/Contents/MacOS/ligrol-mcp"
+          cp "AI_GUIDE.md" "$APP/Contents/Resources/AI_GUIDE.md"
           cp crates/app/assets/app-icon/icon.icns "$APP/Contents/Resources/icon.icns"
           cat > "$APP/Contents/Info.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
@@ -264,6 +266,8 @@ jobs:
           echo "署名 ID: $IDENTITY"
           codesign --force --options runtime --timestamp \
             --keychain "$KC" --sign "$IDENTITY" "$APP/Contents/Frameworks/libpdfium.dylib"
+          codesign --force --options runtime --timestamp \
+            --keychain "$KC" --sign "$IDENTITY" "$APP/Contents/MacOS/ligrol-mcp"
           codesign --force --options runtime --timestamp \
             --keychain "$KC" --sign "$IDENTITY" "$APP"
           codesign --verify --strict --verbose=2 "$APP"
@@ -332,6 +336,7 @@ jobs:
           # Rust 依存クレートの一覧はアプリ内に埋め込んである（1,000 件超の全文を
           # テキストで置くと配布物が肥大するため、規約上必要な同梱アセットだけを置く）。
           cp LICENSE "$STAGE/"
+          cp AI_GUIDE.md "$STAGE/"
           cp crates/app/assets/third-party/lucide-LICENSE.txt "$STAGE/"
           cp crates/app/assets/third-party/pdfium-LICENSE.txt "$STAGE/"
           # ditto でバンドル構造（権限・リソース）を保ったまま zip 化する
@@ -372,15 +377,29 @@ jobs:
           # 規約上必要な同梱アセットの全文だけをテキストで置く）。
           Compress-Archive -Path @(
             "target/${{ matrix.target }}/release/ligrol.exe",
+            "target/${{ matrix.target }}/release/ligrol-mcp.exe",
             "target/${{ matrix.target }}/release/pdfium.dll",
+            "AI_GUIDE.md",
             "LICENSE",
             "crates/app/assets/third-party/lucide-LICENSE.txt",
             "crates/app/assets/third-party/pdfium-LICENSE.txt"
           ) -DestinationPath "ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip"
 
-          # ライセンス全文を配布ディレクトリにも置く（MSI / MSIX が同梱する）。
+          # MSI / MSIX は **クリーンなステージ** から作る。`release/` には deps / build /
+          # pdb などが残っており、`Files Include="**"` にすると MSI が数 GB になる。
           $releaseDir = "target/${{ matrix.target }}/release"
-          Copy-Item LICENSE, "crates/app/assets/third-party/lucide-LICENSE.txt", "crates/app/assets/third-party/pdfium-LICENSE.txt" $releaseDir
+          $stageDir = Join-Path $releaseDir "package"
+          Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $stageDir | Out-Null
+          Copy-Item @(
+            (Join-Path $releaseDir "ligrol.exe"),
+            (Join-Path $releaseDir "ligrol-mcp.exe"),
+            (Join-Path $releaseDir "pdfium.dll"),
+            "LICENSE",
+            "AI_GUIDE.md",
+            "crates/app/assets/third-party/lucide-LICENSE.txt",
+            "crates/app/assets/third-party/pdfium-LICENSE.txt"
+          ) $stageDir
 
           # 直販用: 署名なしの per-user MSI。更新はアプリ内の gpui-updater が行う。
           $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
@@ -389,7 +408,7 @@ jobs:
             $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
           }
           $msi = "ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-windows.msi"
-          wix build -arch x64 -d Version="${{ steps.ver.outputs.v }}" -d SourceDir="$releaseDir" packaging/windows/Ligrol.wxs -o $msi
+          wix build -arch x64 -d Version="${{ steps.ver.outputs.v }}" -d SourceDir="$stageDir" packaging/windows/Ligrol.wxs -o $msi
           if ($LASTEXITCODE -ne 0) { throw "MSI の作成に失敗しました" }
 
           # Store 用: 署名なしの MSIX（Store が再署名する）。
@@ -400,7 +419,7 @@ jobs:
           $msixArgs = @(
             "-NoProfile", "-File", "packaging/windows/make-msix.ps1",
             "-Version", "${{ steps.ver.outputs.v }}",
-            "-SourceDir", $releaseDir,
+            "-SourceDir", $stageDir,
             "-Output", $msix
           )
           if ($env:MSIX_PUBLISHER) { $msixArgs += @("-Publisher", $env:MSIX_PUBLISHER) }

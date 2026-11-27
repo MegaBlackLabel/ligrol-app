@@ -269,6 +269,11 @@ pub struct Workspace {
     /// `AppState::pack_key_prompt` の要求に追随する（背景タスクが要求を積み、
     /// 監視タスクが気づいてここへ反映する）。
     pack_key_pending: bool,
+    /// AI（MCP）からの操作要求。承認するまで実行しない。
+    ai_job_prompt: Option<ligrol_core::db::ai_jobs::AiJob>,
+    /// 実行中の AI OCR ジョブの中止フラグ（job_id → flag）。
+    ai_ocr_cancels:
+        std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// 解錠ダイアログの入力欄（初回表示時に生成）。
     pack_key_input: Option<Entity<InputState>>,
     /// 入力欄を空にしてフォーカスする要求（ダイアログを出した直後に 1 回だけ）。
@@ -492,6 +497,8 @@ impl Workspace {
             exit_upload_prompt: false,
             exit_uploading: false,
             pack_key_pending: false,
+            ai_job_prompt: None,
+            ai_ocr_cancels: std::collections::HashMap::new(),
             pack_key_input: None,
             pack_key_input_reset: false,
             pack_key_error: None,
@@ -517,6 +524,7 @@ impl Workspace {
             this.start_checklist_poller(cx);
         }
         this.start_login_done_watcher(cx);
+        this.start_ai_job_watcher(cx);
         this
     }
 
@@ -526,6 +534,422 @@ impl Workspace {
     /// ように描画のたびに読むことができない）。
     /// `AuthDialog` から `Workspace` を直接 update すると RefCell 再入問題で固まるため、
     /// AppState のフラグを追ってここで状態をリセットする。
+    /// AI の操作要求を 1 秒ごとに拾う。承認待ちを出し、ダウンロード完了を
+    /// `books` の出現で検出して job を完了にする。
+    fn start_ai_job_watcher(&mut self, cx: &mut Context<Self>) {
+        let handle = cx.weak_entity();
+        let db = AppState::global(cx).db_pool.clone();
+        cx.spawn(async move |_window, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(1))
+                    .await;
+                let _ = ligrol_core::db::ai_jobs::expire_stale(&db);
+                let owner_id = cx.update(|cx| {
+                    AppState::global(cx)
+                        .google_profile
+                        .lock()
+                        .as_ref()
+                        .map(|profile| nartik::derive_owner_id(&profile.sub))
+                        .unwrap_or_default()
+                });
+                let pending = ligrol_core::db::ai_jobs::pending(&db).unwrap_or_default();
+                if let Some(job) = pending.into_iter().find(|job| job.owner_id == owner_id) {
+                    let _ = handle.update(cx, |this, cx| {
+                        let already = this
+                            .ai_job_prompt
+                            .as_ref()
+                            .is_some_and(|current| current.id == job.id);
+                        if !already && this.ai_job_prompt.is_none() {
+                            this.ai_job_prompt = Some(job);
+                            cx.notify();
+                        }
+                    });
+                }
+                // ダウンロードは worker の完了コールバックが無いため、本が DB に
+                // 現れた時点で成功とみなす（失敗はユーザーが UI で確認できる）。
+                if let Ok(active) = ligrol_core::db::ai_jobs::active(&db) {
+                    for job in active {
+                        if job.owner_id != owner_id || job.action != "download" {
+                            continue;
+                        }
+                        let Some((site_id, database_id)) = job.target.split_once(':') else {
+                            continue;
+                        };
+                        let found = books::list(&db).ok().and_then(|books| {
+                            books.into_iter().find(|book| {
+                                book.site_id.as_deref() == Some(site_id)
+                                    && book.tbf_product_id.as_deref() == Some(database_id)
+                            })
+                        });
+                        if let Some(book) = found {
+                            let result = serde_json::json!({ "book_id": book.id }).to_string();
+                            let _ = ligrol_core::db::ai_jobs::finish(
+                                &db,
+                                &job.id,
+                                "succeeded",
+                                Some(&result),
+                                None,
+                            );
+                            let _ = ligrol_core::db::ai_jobs::audit(
+                                &db,
+                                &job.owner_id,
+                                &job.client_id,
+                                &job.action,
+                                &job.target,
+                                "succeeded",
+                                None,
+                            );
+                        }
+                    }
+                }
+                // 実行中の OCR が MCP から cancel されたら worker のフラグを立てる。
+                let _ = handle.update(cx, |this, _cx| {
+                    this.ai_ocr_cancels.retain(|job_id, cancel| {
+                        match ligrol_core::db::ai_jobs::get(&db, job_id) {
+                            Ok(Some(job)) => {
+                                if job.status == "cancelled" {
+                                    cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                                }
+                                !ligrol_core::db::ai_jobs::status::is_terminal(&job.status)
+                            }
+                            _ => false,
+                        }
+                    });
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn approve_ai_job(&mut self, cx: &mut Context<Self>) {
+        let Some(job) = self.ai_job_prompt.take() else {
+            return;
+        };
+        let db = AppState::global(cx).db_pool.clone();
+        let client_id = job.client_id.clone();
+        if !ligrol_core::db::ai_jobs::params_match(&job) {
+            let _ = ligrol_core::db::ai_jobs::finish(
+                &db,
+                &job.id,
+                "failed",
+                None,
+                Some("invalid_request"),
+            );
+            let _ = ligrol_core::db::ai_jobs::audit(
+                &db,
+                &job.owner_id,
+                &client_id,
+                &job.action,
+                &job.target,
+                "failed",
+                Some("invalid_request"),
+            );
+            cx.notify();
+            return;
+        }
+        match job.action.as_str() {
+            "open_book" => {
+                let book_id = job.target.clone();
+                self.open_reader(cx, book_id);
+                let result = serde_json::json!({ "book_id": job.target }).to_string();
+                let _ = ligrol_core::db::ai_jobs::finish(
+                    &db,
+                    &job.id,
+                    "succeeded",
+                    Some(&result),
+                    None,
+                );
+                let _ = ligrol_core::db::ai_jobs::audit(
+                    &db,
+                    &job.owner_id,
+                    &client_id,
+                    &job.action,
+                    &job.target,
+                    "succeeded",
+                    None,
+                );
+            }
+            "download" => {
+                let params: serde_json::Value =
+                    serde_json::from_str(&job.params_json).unwrap_or_default();
+                let site_id = params
+                    .get("site_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let database_id = params
+                    .get("database_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let option_index = params
+                    .get("option_index")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0) as usize;
+                let started = self.bookshelf.update(cx, |bookshelf, cx| {
+                    bookshelf.ai_download(
+                        cx,
+                        &site_id,
+                        &database_id,
+                        option_index,
+                        Some(&job.id),
+                    )
+                });
+                if started {
+                    let _ = ligrol_core::db::ai_jobs::set_status(
+                        &db,
+                        &job.id,
+                        "running",
+                        0.0,
+                        None,
+                    );
+                    let _ = ligrol_core::db::ai_jobs::audit(
+                        &db,
+                        &job.owner_id,
+                        &client_id,
+                        &job.action,
+                        &job.target,
+                        "running",
+                        None,
+                    );
+                } else {
+                    let _ = ligrol_core::db::ai_jobs::finish(
+                        &db,
+                        &job.id,
+                        "failed",
+                        None,
+                        Some("not_started"),
+                    );
+                    let _ = ligrol_core::db::ai_jobs::audit(
+                        &db,
+                        &job.owner_id,
+                        &client_id,
+                        &job.action,
+                        &job.target,
+                        "failed",
+                        Some("not_started"),
+                    );
+                }
+            }
+            "epub_extract" => {
+                let state = AppState::global(cx);
+                let pack_root_key = state.pack_root_key.lock().clone();
+                let packs_dir = state.packs_dir.clone();
+                let db = state.db_pool.clone();
+                let book_id = job.target.clone();
+                let job_id = job.id.clone();
+                let target = job.target.clone();
+                let client_id = client_id.clone();
+                let owner_id = job.owner_id.clone();
+                let _ = ligrol_core::db::ai_jobs::set_status(
+                    &db,
+                    &job_id,
+                    "running",
+                    0.0,
+                    None,
+                );
+                let task = cx.background_executor().spawn(async move {
+                    ligrol_core::import::epub::backfill_from_pack(
+                        &db,
+                        &packs_dir,
+                        pack_root_key.as_ref(),
+                        &book_id,
+                    )
+                });
+                let db = AppState::global(cx).db_pool.clone();
+                cx.spawn(async move |_window, cx| {
+                    let result = task.await;
+                    let (status, result_json, error_code) = match result {
+                        Ok(outcome) => (
+                            "succeeded",
+                            Some(
+                                serde_json::json!({
+                                    "sections": outcome.sections,
+                                    "chars": outcome.chars,
+                                    "drm_protected": outcome.drm_protected,
+                                    "fixed_layout": outcome.fixed_layout,
+                                })
+                                .to_string(),
+                            ),
+                            None,
+                        ),
+                        Err(ligrol_core::import::epub::BackfillError::NotEpub) => {
+                            ("failed", None, Some("not_epub"))
+                        }
+                        Err(ligrol_core::import::epub::BackfillError::NoEntry) => {
+                            ("failed", None, Some("epub_entry_missing"))
+                        }
+                        Err(error) => {
+                            log::warn!("AI EPUB extract failed: {error}");
+                            ("failed", None, Some("epub_extract_failed"))
+                        }
+                    };
+                    let _ = ligrol_core::db::ai_jobs::finish(
+                        &db,
+                        &job_id,
+                        status,
+                        result_json.as_deref(),
+                        error_code,
+                    );
+                    let _ = ligrol_core::db::ai_jobs::audit(
+                        &db,
+                        &owner_id,
+                        &client_id,
+                        "epub_extract",
+                        &target,
+                        status,
+                        error_code,
+                    );
+                    let message = match status {
+                        "succeeded" => "AI の EPUB 本文抽出が完了しました",
+                        _ => "AI の EPUB 本文抽出に失敗しました",
+                    };
+                    let kind = if status == "succeeded" {
+                        crate::app_state::ToastKind::Success
+                    } else {
+                        crate::app_state::ToastKind::Error
+                    };
+                    cx.update(|cx| crate::app_state::set_toast_kind(cx, kind, message));
+                })
+                .detach();
+            }
+            "ocr" => {
+                let state = AppState::global(cx);
+                let pack_root_key = state.pack_root_key.lock().clone();
+                let packs_dir = state.packs_dir.clone();
+                let data_dir = state.data_dir.clone();
+                let db = state.db_pool.clone();
+                let book_id = job.target.clone();
+                let job_id = job.id.clone();
+                let target = job.target.clone();
+                let client_id = client_id.clone();
+                let owner_id = job.owner_id.clone();
+                let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                self.ai_ocr_cancels.insert(job_id.clone(), cancel.clone());
+                let _ = ligrol_core::db::ai_jobs::set_status(
+                    &db,
+                    &job_id,
+                    "running",
+                    0.0,
+                    None,
+                );
+                let task = cx.background_executor().spawn(async move {
+                    let model_dir = ligrol_core::ocr::default_model_dir(&data_dir);
+                    let mut progress = |_| {};
+                    ligrol_core::ocr::ocr_book(
+                        &db,
+                        &packs_dir,
+                        &book_id,
+                        pack_root_key.as_ref(),
+                        &model_dir,
+                        &mut progress,
+                        cancel.as_ref(),
+                    )
+                });
+                let db = AppState::global(cx).db_pool.clone();
+                cx.spawn(async move |_window, cx| {
+                    let result = task.await;
+                    let (status, result_json, error_code) = match result {
+                        Ok(outcome) => (
+                            "succeeded",
+                            Some(
+                                serde_json::json!({
+                                    "pages": outcome.pages,
+                                    "chars": outcome.chars,
+                                    "skipped": outcome.skipped,
+                                })
+                                .to_string(),
+                            ),
+                            None,
+                        ),
+                        Err(ligrol_core::ocr::OcrError::ModelMissing(_)) => {
+                            ("failed", None, Some("ocr_model_missing"))
+                        }
+                        Err(ligrol_core::ocr::OcrError::Cancelled) => {
+                            ("cancelled", None, Some("cancelled"))
+                        }
+                        Err(error) => {
+                            log::warn!("AI OCR failed: {error}");
+                            ("failed", None, Some("ocr_failed"))
+                        }
+                    };
+                    let _ = ligrol_core::db::ai_jobs::finish(
+                        &db,
+                        &job_id,
+                        status,
+                        result_json.as_deref(),
+                        error_code,
+                    );
+                    let _ = ligrol_core::db::ai_jobs::audit(
+                        &db,
+                        &owner_id,
+                        &client_id,
+                        "ocr",
+                        &target,
+                        status,
+                        error_code,
+                    );
+                    let message = match status {
+                        "succeeded" => "AI の OCR が完了しました",
+                        "cancelled" => "AI の OCR を中止しました",
+                        _ => "AI の OCR に失敗しました（モデル未配置の可能性）",
+                    };
+                    let kind = if status == "succeeded" {
+                        crate::app_state::ToastKind::Success
+                    } else {
+                        crate::app_state::ToastKind::Error
+                    };
+                    cx.update(|cx| crate::app_state::set_toast_kind(cx, kind, message));
+                })
+                .detach();
+            }
+            _ => {
+                let _ = ligrol_core::db::ai_jobs::finish(
+                    &db,
+                    &job.id,
+                    "failed",
+                    None,
+                    Some("unsupported"),
+                );
+                let _ = ligrol_core::db::ai_jobs::audit(
+                    &db,
+                    &job.owner_id,
+                    &client_id,
+                    &job.action,
+                    &job.target,
+                    "failed",
+                    Some("unsupported"),
+                );
+            }
+        }
+        cx.notify();
+    }
+
+    fn deny_ai_job(&mut self, cx: &mut Context<Self>) {
+        let Some(job) = self.ai_job_prompt.take() else {
+            return;
+        };
+        let db = AppState::global(cx).db_pool.clone();
+        let _ = ligrol_core::db::ai_jobs::set_status(
+            &db,
+            &job.id,
+            "cancelled",
+            0.0,
+            Some("denied"),
+        );
+        let _ = ligrol_core::db::ai_jobs::audit(
+            &db,
+            &job.owner_id,
+            &job.client_id,
+            &job.action,
+            &job.target,
+            "cancelled",
+            Some("denied"),
+        );
+        cx.notify();
+    }
+
     fn start_login_done_watcher(&mut self, cx: &mut Context<Self>) {
         let handle = cx.weak_entity();
         let flag = AppState::global(cx).google_login_done.clone();
@@ -1452,6 +1876,7 @@ impl Workspace {
             ModalKind::SyncNotice,
             bookshelf_active && bookshelf.has_pending_sync_notice(),
         );
+        set_modal(cx, ModalKind::AiJob, self.ai_job_prompt.is_some());
     }
 
     /// ウィンドウの「閉じる」要求を処理する（true = 閉じてよい）。
@@ -2730,6 +3155,89 @@ impl Render for Workspace {
                     );
                 fade_dialog(window, cx, self.exit_upload_prompt, content).into_any_element()
                 .into_any_element()
+            } else {
+                div().into_any_element()
+            })
+            // AI（MCP）からの操作要求。承認するまで実行しない。
+            .child(if let Some(job) = self.ai_job_prompt.clone() {
+                if modal == Some(crate::app_state::ModalKind::AiJob) {
+                    let handle = cx.entity();
+                    let body = match job.action.as_str() {
+                        "download" => format!(
+                            "AI クライアント「{}」が、購入済みの本（{}）の取り込みを要求しています。\nLigrol がストアからダウンロードして本棚に追加します。",
+                            job.client_id, job.target
+                        ),
+                        "epub_extract" => format!(
+                            "AI クライアント「{}」が、『{}』の EPUB 本文を抽出することを要求しています。既存の EPUB 本文を置き換えます。",
+                            job.client_id, job.target
+                        ),
+                        "ocr" => format!(
+                            "AI クライアント「{}」が、『{}』の空ページを OCR することを要求しています。モデルが無い場合は失敗します。",
+                            job.client_id, job.target
+                        ),
+                        "open_book" => {
+                            let title = books::get(&AppState::global(cx).db_pool, &job.target)
+                                .ok()
+                                .flatten()
+                                .map(|book| book.title)
+                                .unwrap_or_else(|| job.target.clone());
+                            format!(
+                                "AI クライアント「{}」が、『{}』を開くことを要求しています。",
+                                job.client_id, title
+                            )
+                        }
+                        _ => format!(
+                            "AI クライアント「{}」が操作「{}」を要求しています。",
+                            job.client_id, job.action
+                        ),
+                    };
+                    let content = dialog_surface(cx)
+                        .child(
+                            div()
+                                .text_lg()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("AI からの操作要求"),
+                        )
+                        .child(div().text_sm().child(body))
+                        .child(div().text_xs().child(format!(
+                            "この要求は 60 秒で期限切れになります。対象: {}",
+                            job.target
+                        )))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .justify_center()
+                                .gap_2()
+                                .child(
+                                    dialog_button("ai-job-deny", "拒否").on_click({
+                                        let handle = handle.clone();
+                                        move |_, _window, cx| {
+                                            handle.update(cx, |this, cx| {
+                                                this.deny_ai_job(cx)
+                                            });
+                                        }
+                                    }),
+                                )
+                                .child(
+                                    Button::new("ai-job-approve")
+                                        .cursor_pointer()
+                                        .primary()
+                                        .label("許可")
+                                        .on_click({
+                                            let handle = handle.clone();
+                                            move |_, _window, cx| {
+                                                handle.update(cx, |this, cx| {
+                                                    this.approve_ai_job(cx)
+                                                });
+                                            }
+                                        }),
+                                ),
+                        );
+                    fade_dialog(window, cx, true, content).into_any_element()
+                } else {
+                    div().into_any_element()
+                }
             } else {
                 div().into_any_element()
             })

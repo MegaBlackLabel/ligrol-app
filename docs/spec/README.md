@@ -23,8 +23,12 @@
 | 08 | `docs/spec/08-notifications-and-nonfunctional.md` | 通知（送出元一覧）/ 非機能（DB PRAGMA・並列度・メモリ上限・直列化・単一インスタンス）/ ログ / 不明点・推測 | 47KB |
 | 09 | `docs/spec/09-stores.md` | 技術書典 / BOOTH / FANZA / DLsite の同期手順（番号付き）と対象データ | 172KB |
 | 10 | `docs/spec/10-pack-keys.md` | **pack の鍵 v3（乱数ルート鍵 + ラップ）の仕様**（Rust 側は実装済み / Web 版は未対応）/ ラップ形式 / 解決順序 / Web 実装チェックリスト / テストベクタ / §11 バックアップと表紙バンドルの封筒 | 17KB |
+| 11 | `docs/spec/11-ai-mcp-and-extraction.md` | **AI 連携（MCP / 読み取りモデル / 承認キュー）と本文抽出（EPUB / OCR 調査）**。Obsidian MCP から取り込んだ設計、スコープ、`ai_jobs`、`document_text` のメタ列 | 16KB |
 
 > 全章を連結すると 1MB 近くになる（AI のコンテキストに収まらない）。**必要な章だけ読む**前提で分割している。
+
+MCP のユーザー向けインターフェース仕様は `docs/mcp.md`、AI 向けの短いガイドは
+リポジトリ直下の `AI_GUIDE.md`（インストール先にも同梱、`ligrol://guide` で取得可能）。
 
 ## 1. このアプリは何か（30 秒サマリ）
 

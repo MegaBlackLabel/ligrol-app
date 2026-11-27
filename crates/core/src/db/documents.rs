@@ -43,20 +43,62 @@ pub struct DocumentImage {
 
 /// ページ本文の 1 行（`document_text`）。
 ///
-/// テーブルには移行が足した `content_id TEXT NOT NULL DEFAULT ''`（`db/mod.rs:164-178`）が
-/// あるが、ここには持たせず INSERT もしない（[`insert_text`] / [`insert_texts_batch`]）。
-/// 本文は document（= 本 1 冊）単位で書き、読み出しも `document_id` だけ
-/// （[`all_text_for_document`]）で、タグ生成は全コンテンツ分のテキストをまとめて 1 回渡す
-/// （`import/mod.rs:1537-1538`）。**コンテンツ別に本文を引く経路が無い**ため、列は空のまま
-/// 既定値で残す（コンテンツ別検索は未実装）。ページ画像（[`DocumentImage`]）はビューアーが
-/// コンテンツ／レンディション単位で選ぶので `content_id` / `format_id` を持つ。
-#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+/// `source` / `engine` / `confidence` / `section_*` は AI・EPUB・OCR 用のメタデータ。
+/// PDF の抽出本文は `source = "extracted"`、EPUB は `"epub"`、OCR は `"ocr"`。
+/// 既存行は runtime DDL の既定値 `"extracted"` になる。
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct DocumentText {
     pub id: String,
     pub document_id: String,
+    pub content_id: String,
     pub page_number: i64,
     pub text_content: String,
+    pub source: String,
+    pub engine: Option<String>,
+    pub confidence: Option<f64>,
+    pub section_title: Option<String>,
+    pub section_href: Option<String>,
     pub created_at: String,
+}
+
+impl DocumentText {
+    /// PDF / `_export.txt` の抽出本文。
+    pub fn extracted(
+        id: String,
+        document_id: String,
+        content_id: String,
+        page_number: i64,
+        text_content: String,
+        engine: &str,
+        created_at: String,
+    ) -> Self {
+        Self {
+            id,
+            document_id,
+            content_id,
+            page_number,
+            text_content,
+            source: "extracted".to_string(),
+            engine: Some(engine.to_string()),
+            confidence: None,
+            section_title: None,
+            section_href: None,
+            created_at,
+        }
+    }
+}
+
+/// 復号済みの本文 1 行（AI / 検索用）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct DocumentTextRow {
+    pub page_number: i64,
+    pub content_id: String,
+    pub text: Option<String>,
+    pub source: String,
+    pub engine: Option<String>,
+    pub confidence: Option<f64>,
+    pub section_title: Option<String>,
+    pub section_href: Option<String>,
 }
 
 /// 形態素解析の 1 行（`token_analysis`）。`content_id` を書かない理由は
@@ -310,13 +352,20 @@ pub fn insert_text(pool: &SqlitePool, text: &DocumentText) -> Result<(), sqlx::E
     )?;
     crate::db::block_on(async {
         sqlx::query(
-            "INSERT INTO document_text (id, document_id, page_number, text_content, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO document_text (id, document_id, content_id, page_number, text_content, \
+             source, engine, confidence, section_title, section_href, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         )
         .bind(&text.id)
         .bind(&text.document_id)
+        .bind(&text.content_id)
         .bind(text.page_number)
         .bind(&stored)
+        .bind(&text.source)
+        .bind(&text.engine)
+        .bind(text.confidence)
+        .bind(&text.section_title)
+        .bind(&text.section_href)
         .bind(&text.created_at)
         .execute(pool)
         .await?;
@@ -379,12 +428,12 @@ pub fn insert_texts_batch(pool: &SqlitePool, texts: &[DocumentText]) -> Result<(
         let mut tx = pool.begin().await?;
         for chunk in texts.chunks(200) {
             let mut sql = String::from(
-                "INSERT INTO document_text (id, document_id, page_number, text_content, created_at) \
-                 VALUES ",
+                "INSERT INTO document_text (id, document_id, content_id, page_number, text_content, \
+                 source, engine, confidence, section_title, section_href, created_at) VALUES ",
             );
             let mut values = Vec::with_capacity(chunk.len());
             for _ in 0..chunk.len() {
-                values.push("(?, ?, ?, ?, ?)".to_string());
+                values.push("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)".to_string());
             }
             sql.push_str(&values.join(", "));
             let mut q = sqlx::query(dynamic_sql(sql.as_str()));
@@ -397,8 +446,14 @@ pub fn insert_texts_batch(pool: &SqlitePool, texts: &[DocumentText]) -> Result<(
                 q = q
                     .bind(&t.id)
                     .bind(&t.document_id)
+                    .bind(&t.content_id)
                     .bind(t.page_number)
                     .bind(text_content)
+                    .bind(&t.source)
+                    .bind(&t.engine)
+                    .bind(t.confidence)
+                    .bind(&t.section_title)
+                    .bind(&t.section_href)
                     .bind(&t.created_at);
             }
             q.execute(&mut *tx).await?;
@@ -489,6 +544,50 @@ pub fn all_text_for_document(
             } else {
                 log::warn!("document_text {id}: 本文を復号できないため読み飛ばします");
             }
+        }
+        Ok(out)
+    })
+}
+
+/// AI / 検索用: ページ本文をメタデータ付きで復号して返す。
+///
+/// `key` が `None` のときは本文を復号できないため `text = None` を返す
+/// （暗号文は返さない）。ページ番号は 1-indexed。EPUB は章の ordinal。
+pub fn all_text_rows_for_document(
+    pool: &SqlitePool,
+    document_id: &str,
+    key: Option<&[u8; 32]>,
+) -> Result<Vec<DocumentTextRow>, sqlx::Error> {
+    crate::db::block_on(async {
+        let rows = sqlx::query(
+            "SELECT id, content_id, page_number, text_content, source, engine, confidence, \
+             section_title, section_href FROM document_text WHERE document_id = ?1 \
+             ORDER BY page_number ASC",
+        )
+        .bind(document_id)
+        .fetch_all(pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: String = row.get("id");
+            let stored: String = row.get("text_content");
+            let text = match key {
+                Some(key) => {
+                    let aad = column_crypto::aad_document_text(&id, "text_content");
+                    column_crypto::decrypt_str(key, &aad, &stored)?
+                }
+                None => None,
+            };
+            out.push(DocumentTextRow {
+                page_number: row.get("page_number"),
+                content_id: row.get("content_id"),
+                text,
+                source: row.get("source"),
+                engine: row.get("engine"),
+                confidence: row.get("confidence"),
+                section_title: row.get("section_title"),
+                section_href: row.get("section_href"),
+            });
         }
         Ok(out)
     })

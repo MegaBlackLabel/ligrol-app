@@ -101,7 +101,7 @@
 | EPUB（それ以外） | `contents/{c}/r{r}/{元ファイル名}` | `false` | `import/mod.rs:2214-2222` |
 | 表紙 | `cover.webp`（**既定コンテンツが PDF のときだけ**。ZIP 経路では `primary_cover` が立つ場合のみ） | `false` | `import/mod.rs:2258-2265`, `:2203`, `:1797-1798`（単体 PDF） |
 | サムネイル | `thumbnail.webp`（既定コンテンツ第 1 ページの 200px 版） | `false` | `import/mod.rs:2266-2272`, `:1801-1805`（単体 PDF）, `:1335`（DB 行が参照） |
-| ページ本文（PDF の抽出テキスト / `_export.txt`。既定コンテンツ以外のページ本文も含む） | `documents/text.jsonl`（`application/x-ndjson`。1 行 = `{"pageNumber":<int>,"text":"..."}`）。本文が 1 件以上あるときだけ作る | **`true`**（per-entry の deflate。テキストは圧縮が効く） | `import/mod.rs:212`, `:929-941`, `:1316-1333`, `:1365-1369` |
+| ページ本文（PDF の抽出テキスト / `_export.txt`。既定コンテンツ以外のページ本文も含む） | `documents/text.jsonl`（`application/x-ndjson`。1 行 = `{"pageNumber":<int>,"text":"...","sectionTitle":<string|null>,"sectionHref":<string|null>}`）。本文が 1 件以上あるときだけ作る | **`true`**（per-entry の deflate。テキストは圧縮が効く） | `import/mod.rs:212`, `:929-941`, `:1316-1333`, `:1365-1369` |
 | 音声・動画 | エントリを作らない（構造だけ DB に記録） | — | `import/mod.rs:2225-2226` |
 | pack レベル | `PackBuilder::build_to_file_streaming(..., true)` = pack フラグ `COMPRESSED` を常に立てる（**エントリ個別の compress は `documents/text.jsonl` だけ `true`**、他はすべて `false`。鍵を渡したときは `ENCRYPTED` も立つ）。エントリは `PackEntryStore` から**1 件ずつ**供給する（全ページを同時にメモリへ載せない）。**一時ファイルへ直接組み立ててから rename** し、pack 全体の SHA-256 はファイルを順に読んで計算する（`PackFileReader::source_sha256`） | — | `crates/nartik/src/builder.rs`（`write_pack`）, `reader.rs:350`（`PackRead`） |
 
@@ -176,7 +176,7 @@ store へ直接入る。
 | Drive からの再構築 | `rebuild_from_pack`: 既にドキュメント行があれば `false`（何もしない。ただし source の復元はその前に走る = 次行）。`metadata.json` の `contents` を使い、無ければ `infer_contents` で推定（ページエントリがあれば `image`/`pages`、`.epub` なら `epub`、ルート直下の `.pdf` なら `pdf`）。`cover.webp` は行を作らない。主レンディションのページ数が 0 なら `false`。本文エントリ（`documents/text.jsonl`）はページ行の対象外（`metadata.json` と同様にスキップ） | `import/mod.rs:2406-2447`, `:2461-2464`, `:2530-2532`, `:2747-2787` |
 | 取り込み元の記録 | `ImportSource { site_id, product_id }` を `import_*` / `commit_*` 系の末尾引数（`source: Option<&ImportSource>`）で受け取り、`metadata.json` の `source` に書く（`site_id` が空のときは書かない）。アプリは同期で得た site / 商品 id から作り、PDF / EPUB / ZIP / 画像の各経路へ渡す | `import/mod.rs:39-42`, `:874-927`, `crates/app/src/views/bookshelf.rs:4570-4573`, `:4579-4588`, `:4640-4648`, `:4672-4682`, `:4688-4696` |
 | pack からの source 復元 | `metadata.json` の `source`（`siteId` / `productId`）を `books.site_id` / `books.tbf_product_id` へ戻す（`restore_source`）。**ドキュメント行が既にある早期 return でも実行**する。端末が知らないサイト id のときは site_id を入れず product_id も入れない（片方だけにしない）。失敗しても復元は続ける | `import/mod.rs:2421-2429`, `:2631-2661`, `db/books.rs:531`, `:226` |
-| pack からの本文復元 | `documents/text.jsonl` を `read_texts_entry` で読み、`document_text` へ既存の INSERT 経路（`documents::insert_texts_batch`、暗号化列）で入れる。`token_analysis` は本文から `tags::extract_nouns` で**再生成**する（解析器のバージョン差で取り込み時とずれうる = 仕様として許容）。エントリの無い pack は本文無し（後方互換）、壊れた行はその行だけ飛ばす | `import/mod.rs:2584-2621`, `:2663-2691`, `db/documents.rs:324`, `:366` |
+| pack からの本文復元 | `documents/text.jsonl` を `read_texts_entry` で読み、`document_text` へ既存の INSERT 経路（`documents::insert_texts_batch`、暗号化列）で入れる。EPUB の `sectionTitle` / `sectionHref` も復元する。`token_analysis` は本文から `tags::extract_nouns` で**再生成**する（解析器のバージョン差で取り込み時とずれうる = 仕様として許容）。エントリの無い pack は本文無し（後方互換）、壊れた行はその行だけ飛ばす | `import/mod.rs:2584-2621`, `:2663-2691`, `db/documents.rs:324`, `:366` |
 | 復元時の寸法 | 画素デコードせず `image::ImageReader::into_dimensions()` でヘッダのみ読む | `import/mod.rs:2807-2816` |
 | ページ番号の復元 | パス末尾の `page_NNNN` から数値化（`page_` + 数字） | `import/mod.rs:2800-2805` |
 | コンテンツ名の改名 | DB（`book_contents.display_name`、最大 60 文字、空白畳み込み）と pack の `metadata.json` の両方に書く。pack は全エントリを読み直して再構築（`created_at` と pack フラグ・エントリの compress フラグを維持するので、本文エントリもそのまま残る） | `db/contents.rs:175-213`, `import/mod.rs:951-1003` |
@@ -381,7 +381,7 @@ index の `size` / `compressed_size` / `entry_count` は攻撃者が自由に書
 | ZIP 内の EPUB | `metadata.json`, `<元ファイル名>.epub`（既定レンディション）または `contents/{c}/r{r}/<元ファイル名>.epub` | `import/mod.rs:2211-2222` |
 | 画像 1 枚 | `metadata.json`, `pages/page_0001.webp`, `thumbnail.webp` | `import/mod.rs:2875-2888` |
 | 音声/動画のみを含む ZIP | 当該コンテンツはエントリを作らない（`page_count = 0`）。主コンテンツなら `NotAReadableWork` | `import/mod.rs:2225-2226`, `:2251-2255` |
-| ページ本文エントリ | 本文が 1 件以上あるときだけ `documents/text.jsonl`（`application/x-ndjson`、1 行 = `{"pageNumber":<int>,"text":"..."}`）を入れる。`metadata.json` を太らせずに本文を運ぶためのもの | `import/mod.rs:212`, `:929-941`, `:1316-1333` |
+| ページ本文エントリ | 本文が 1 件以上あるときだけ `documents/text.jsonl`（`application/x-ndjson`、1 行 = `{"pageNumber":<int>,"text":"...","sectionTitle":<string|null>,"sectionHref":<string|null>}`）を入れる。EPUB は spine の ordinal を `pageNumber` に使い、章メタを付ける。`metadata.json` を太らせずに本文を運ぶためのもの | `import/mod.rs:212`, `:929-941`, `:1316-1333` |
 | pack レベルフラグ | 常に `pack_flags::COMPRESSED`（`build_to_file_streaming(..., true, ...)`）、鍵があるとき（＝ログイン中の取り込み）のみ `ENCRYPTED`（**全エントリ**） | `import/mod.rs:1355-1360`, `builder.rs:278-290` |
 | エントリの compress | **`documents/text.jsonl` だけ `true`**（per-entry deflate）。他はすべて `false`（metadata.json / ページ / 表紙 / サムネ / EPUB 生データ） | `import/mod.rs:1327-1333`, `:1313`, `:1774`, `:1797-1805`, `:2217-2222`, `:2258-2272`, `:2875-2888` |
 | 暗号化の伝播 | `rename_content_in_pack` は元 pack の `ENCRYPTED` フラグを見て `pack_key` の有無を決め、エントリごとの `COMPRESSED` フラグも維持して再構築する | `import/mod.rs:986-1002` |
