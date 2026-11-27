@@ -43,15 +43,16 @@ if ($version -match '^\d+\.\d+\.\d+\.(?!0+$)\d+$') {
 }
 
 $exe = Join-Path $SourceDir 'ligrol.exe'
+$mcp = Join-Path $SourceDir 'ligrol-mcp.exe'
 $dll = Join-Path $SourceDir 'pdfium.dll'
-foreach ($required in @($exe, $dll)) {
+foreach ($required in @($exe, $mcp, $dll)) {
     if (-not (Test-Path $required)) { throw "必須ファイルが無い: $required" }
 }
 
 $stage = Join-Path $env:TEMP ("ligrol-msix-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path (Join-Path $stage 'Assets') -Force | Out-Null
 try {
-    Copy-Item $exe, $dll $stage
+    Copy-Item $exe, $mcp, $dll $stage
     Copy-Item (Join-Path $here 'Assets\*.png') (Join-Path $stage 'Assets')
     foreach ($name in @('AI_GUIDE.md', 'LICENSE', 'lucide-LICENSE.txt', 'pdfium-LICENSE.txt', 'はじめにお読みください.txt')) {
         $candidate = Join-Path $SourceDir $name

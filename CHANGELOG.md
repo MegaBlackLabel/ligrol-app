@@ -35,6 +35,9 @@
 - `ligrol_search_text` は `book_ids` 省略時に見える本を最大 50 冊まで簡易スキャンできる。
 - タグの書き込みツール（`ligrol_add_tag` / `ligrol_remove_tag`）を追加した。
   `LIGROL_AI_WRITE_TAGS=1` と `LIGROL_AI_READ_ONLY=0` のときだけ有効。
+- Windows の MSI / MSIX はクリーンなステージから作り、`ligrol-mcp.exe` と
+  `AI_GUIDE.md` を同梱するようにした。MSI / MSIX / zip の内容を実ビルドで確認済み
+  （dmg は macOS ランナーでの確認が必要）。
 - `document_text` に `source` / `engine` / `confidence` / `section_title` / `section_href`
   を追加し、`content_id` を INSERT に含める。既存行は `source='extracted'`。
 - AI 読み取り用に `db::connect_for_ai` を追加（マイグレーションを実行しない）。

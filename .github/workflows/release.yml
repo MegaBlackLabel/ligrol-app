@@ -385,9 +385,21 @@ jobs:
             "crates/app/assets/third-party/pdfium-LICENSE.txt"
           ) -DestinationPath "ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-${{ matrix.os_name }}.zip"
 
-          # ライセンス全文を配布ディレクトリにも置く（MSI / MSIX が同梱する）。
+          # MSI / MSIX は **クリーンなステージ** から作る。`release/` には deps / build /
+          # pdb などが残っており、`Files Include="**"` にすると MSI が数 GB になる。
           $releaseDir = "target/${{ matrix.target }}/release"
-          Copy-Item LICENSE, "AI_GUIDE.md", "crates/app/assets/third-party/lucide-LICENSE.txt", "crates/app/assets/third-party/pdfium-LICENSE.txt" $releaseDir
+          $stageDir = Join-Path $releaseDir "package"
+          Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $stageDir | Out-Null
+          Copy-Item @(
+            (Join-Path $releaseDir "ligrol.exe"),
+            (Join-Path $releaseDir "ligrol-mcp.exe"),
+            (Join-Path $releaseDir "pdfium.dll"),
+            "LICENSE",
+            "AI_GUIDE.md",
+            "crates/app/assets/third-party/lucide-LICENSE.txt",
+            "crates/app/assets/third-party/pdfium-LICENSE.txt"
+          ) $stageDir
 
           # 直販用: 署名なしの per-user MSI。更新はアプリ内の gpui-updater が行う。
           $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
@@ -396,7 +408,7 @@ jobs:
             $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
           }
           $msi = "ligrol-${{ steps.ver.outputs.v }}-${{ matrix.arch }}-windows.msi"
-          wix build -arch x64 -d Version="${{ steps.ver.outputs.v }}" -d SourceDir="$releaseDir" packaging/windows/Ligrol.wxs -o $msi
+          wix build -arch x64 -d Version="${{ steps.ver.outputs.v }}" -d SourceDir="$stageDir" packaging/windows/Ligrol.wxs -o $msi
           if ($LASTEXITCODE -ne 0) { throw "MSI の作成に失敗しました" }
 
           # Store 用: 署名なしの MSIX（Store が再署名する）。
@@ -407,7 +419,7 @@ jobs:
           $msixArgs = @(
             "-NoProfile", "-File", "packaging/windows/make-msix.ps1",
             "-Version", "${{ steps.ver.outputs.v }}",
-            "-SourceDir", $releaseDir,
+            "-SourceDir", $stageDir,
             "-Output", $msix
           )
           if ($env:MSIX_PUBLISHER) { $msixArgs += @("-Publisher", $env:MSIX_PUBLISHER) }
