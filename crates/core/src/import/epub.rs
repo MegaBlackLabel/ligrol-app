@@ -138,7 +138,7 @@ fn parse_container(xml: &[u8]) -> Result<String, EpubError> {
                 if event.local_name().as_ref() == b"rootfile" {
                     for attr in event.attributes().flatten() {
                         if attr.key.local_name().as_ref() == b"full-path" {
-                            let value = attr.unescape_value().unwrap_or_default();
+                            let value = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or_default();
                             return Ok(value.into_owned());
                         }
                     }
@@ -184,7 +184,7 @@ fn parse_opf(xml: &[u8]) -> Result<Opf, EpubError> {
                             .attributes()
                             .flatten()
                             .find(|attr| attr.key.local_name().as_ref() == b"property")
-                            .and_then(|attr| attr.unescape_value().ok())
+                            .and_then(|attr| attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).ok())
                             .map(|value| value.into_owned());
                         if property.as_deref() == Some("rendition:layout") {
                             capture = Some("layout");
@@ -198,7 +198,7 @@ fn parse_opf(xml: &[u8]) -> Result<Opf, EpubError> {
                         let mut properties = String::new();
                         for attr in event.attributes().flatten() {
                             let key = attr.key.local_name();
-                            let value = attr.unescape_value().unwrap_or_default().into_owned();
+                            let value = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or_default().into_owned();
                             match key.as_ref() {
                                 b"id" => id = value,
                                 b"href" => href = value,
@@ -221,7 +221,7 @@ fn parse_opf(xml: &[u8]) -> Result<Opf, EpubError> {
                         let mut linear = true;
                         for attr in event.attributes().flatten() {
                             let key = attr.key.local_name();
-                            let value = attr.unescape_value().unwrap_or_default().into_owned();
+                            let value = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or_default().into_owned();
                             match key.as_ref() {
                                 b"idref" => idref = value,
                                 b"linear" => linear = value != "no",
@@ -242,7 +242,7 @@ fn parse_opf(xml: &[u8]) -> Result<Opf, EpubError> {
                     let mut linear = true;
                     for attr in event.attributes().flatten() {
                         let key = attr.key.local_name();
-                        let value = attr.unescape_value().unwrap_or_default().into_owned();
+                        let value = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or_default().into_owned();
                         match key.as_ref() {
                             b"idref" => idref = value,
                             b"linear" => linear = value != "no",
@@ -257,7 +257,7 @@ fn parse_opf(xml: &[u8]) -> Result<Opf, EpubError> {
                         .attributes()
                         .flatten()
                         .find(|attr| attr.key.local_name().as_ref() == b"property")
-                        .and_then(|attr| attr.unescape_value().ok())
+                        .and_then(|attr| attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).ok())
                         .map(|value| value.into_owned());
                     if property.as_deref() == Some("rendition:layout") {
                         // 値は属性ではなく本文なので、この形は稀。何もしない。
@@ -270,7 +270,7 @@ fn parse_opf(xml: &[u8]) -> Result<Opf, EpubError> {
                     let mut properties = String::new();
                     for attr in event.attributes().flatten() {
                         let key = attr.key.local_name();
-                        let value = attr.unescape_value().unwrap_or_default().into_owned();
+                        let value = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or_default().into_owned();
                         match key.as_ref() {
                             b"id" => id = value,
                             b"href" => href = value,
@@ -364,7 +364,7 @@ fn parse_nav(xml: &[u8]) -> Vec<(String, String)> {
                     anchor_text.clear();
                     for attr in event.attributes().flatten() {
                         if attr.key.local_name().as_ref() == b"href" {
-                            anchor_href = attr.unescape_value().unwrap_or_default().into_owned();
+                            anchor_href = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or_default().into_owned();
                         }
                     }
                 }
@@ -374,7 +374,7 @@ fn parse_nav(xml: &[u8]) -> Vec<(String, String)> {
                     let mut href = String::new();
                     for attr in event.attributes().flatten() {
                         if attr.key.local_name().as_ref() == b"href" {
-                            href = attr.unescape_value().unwrap_or_default().into_owned();
+                            href = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or_default().into_owned();
                         }
                     }
                     if !href.is_empty() {
@@ -425,7 +425,7 @@ fn parse_ncx(xml: &[u8]) -> Vec<(String, String)> {
                 b"content" => {
                     for attr in event.attributes().flatten() {
                         if attr.key.local_name().as_ref() == b"src" {
-                            let src = attr.unescape_value().unwrap_or_default().into_owned();
+                            let src = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or_default().into_owned();
                             if !src.is_empty() {
                                 out.push((src, last_text.clone()));
                             }
@@ -438,7 +438,7 @@ fn parse_ncx(xml: &[u8]) -> Vec<(String, String)> {
                 if event.local_name().as_ref() == b"content" {
                     for attr in event.attributes().flatten() {
                         if attr.key.local_name().as_ref() == b"src" {
-                            let src = attr.unescape_value().unwrap_or_default().into_owned();
+                            let src = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0).unwrap_or_default().into_owned();
                             if !src.is_empty() {
                                 out.push((src, last_text.clone()));
                             }
@@ -569,7 +569,7 @@ fn extract_xhtml(xml: &[u8]) -> Result<(String, Option<String>), EpubError> {
                         b"img" => {
                             for attr in event.attributes().flatten() {
                                 if attr.key.local_name().as_ref() == b"alt"
-                                    && let Ok(value) = attr.unescape_value()
+                                    && let Ok(value) = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0)
                                 {
                                     let value = value.trim();
                                     if !value.is_empty() {

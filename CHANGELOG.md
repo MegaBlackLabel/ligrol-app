@@ -18,6 +18,11 @@
   `document_text` に `source='ocr'` / `engine` / `confidence` を保存する。
   モデルは `<data_dir>/models/ocr/ppocrv6-small/` に置く（未配置なら安全に失敗）。
 
+### Security
+
+- `quick-xml` を 0.38 から 0.41 へ更新（RUSTSEC-2026-0194 / RUSTSEC-2026-0195）。
+  EPUB の XHTML / OPF / NCX パースで使う。0.41 の `Attribute::normalized_value` に追従。
+
 ### Changed
 
 - MCP の本棚検索に `sort` を追加し、`description` / `theme` / `series_name` も検索対象にした。
