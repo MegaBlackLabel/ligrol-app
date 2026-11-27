@@ -23,6 +23,10 @@ APP="target/$PROFILE/Ligrol.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/ligrol"
+# 配布物を小さくする strip はここで最終バイナリにだけ当てる（Apple の strip は整列を保つ）。
+# cargo 側の strip は rustc の LLVM ベースの strip を通り、proc-macro の dylib の
+# `__LINKEDIT` を壊すため無効にしてある（Cargo.toml の [profile.release] 参照）。
+strip -x "$APP/Contents/MacOS/ligrol"
 cp crates/app/assets/app-icon/icon.icns "$APP/Contents/Resources/icon.icns"
 
 # PDFium の動的ライブラリを同梱する。PDF レンダリングは実行時ロードで、

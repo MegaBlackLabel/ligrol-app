@@ -49,6 +49,17 @@
 - AI 読み取り用に `db::connect_for_ai` を追加（マイグレーションを実行しない）。
   MCP は既存 DB を読み、`ai_jobs` への enqueue だけを行う。
 
+### Fixed
+
+- **macOS 27 でリリースビルドが dyld に拒否されていた**: `[profile.release]` は `debug = false` の
+  とき cargo が既定で `-C strip=debuginfo` を渡す（キーを消しても効かない）。rustc の LLVM ベースの
+  strip は `__LINKEDIT` の文字列プールを 8 バイト境界に整列させないため、macOS 27 で厳しくなった
+  dyld が `mis-aligned LINKEDIT string pool` としてロードを拒否し、proc-macro の dylib
+  （`libsqlx_macros-*.dylib`）が読めずに `cargo build --release` が落ちていた。`strip = "none"` を
+  明示して回避し、配布物の縮小は .app を作るときに最終バイナリ（`ligrol` と `ligrol-mcp`）へ
+  `strip -x`（Apple の strip は整列を保つ）で行うようにした（`Cargo.toml`、
+  `scripts/make-app-bundle.sh`、`.github/workflows/release.yml`）。
+
 ## [0.3.9] - 2026-11-26
 
 ### Security
