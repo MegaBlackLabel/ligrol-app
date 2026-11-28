@@ -49,6 +49,19 @@ Ligrol はローカルの MCP サーバー `ligrol-mcp` を同梱しています
 Cursor などの MCP クライアントから、本棚・タグ・本文・読書統計・技術書典の
 チェックリストを読めます。ダウンロードや OCR は Ligrol の画面で承認するまで実行しません。
 
+**設定のコピー**: アプリの 設定 →「AI / MCP」→「設定をコピー」を使うと、いま使っている
+配布物（Microsoft Store / MSIX / MSI / ZIP）に合った `command` を取得できます。
+手で書く場合の場所は次のとおりです。
+
+| 配布物 | `ligrol-mcp` の場所 |
+|---|---|
+| Microsoft Store / MSIX | `%LOCALAPPDATA%\Microsoft\WindowsApps\<PFN>\ligrol-mcp.exe` |
+| MSI | `%LOCALAPPDATA%\Ligrol\ligrol-mcp.exe` |
+| ZIP（ポータブル） | 展開先の `ligrol-mcp.exe` |
+
+MSIX 版では `C:\Program Files\WindowsApps\...` を直接指定しないでください（起動できません）。
+管理者権限で起動した IDE からは MSIX 版を起動できないことがあります。その場合は MSI / ZIP 版を使います。
+
 - AI 向けの使い方: [AI_GUIDE.md](AI_GUIDE.md)（インストール先にも同梱）
 - MCP の仕様: [docs/mcp.md](docs/mcp.md)
 - 設計: [docs/spec/11-ai-mcp-and-extraction.md](docs/spec/11-ai-mcp-and-extraction.md)

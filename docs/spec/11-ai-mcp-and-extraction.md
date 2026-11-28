@@ -88,7 +88,13 @@ Claude Desktop / Cursor の設定例:
 ```
 
 macOS は `/Applications/Ligrol.app/Contents/MacOS/ligrol-mcp`。配布 zip / MSI /
-.dmg に同梱される（開発時は `cargo build -p ligrol-mcp`）。
+MSIX / dmg に同梱される（開発時は `cargo build -p ligrol-mcp`）。
+
+Windows の MSIX（Store / サイドロード）は `WindowsApps` 直下の exe を外部プロセスから
+起動できない。`AppxManifest.xml.in` で App Execution Alias を宣言し、
+`%LOCALAPPDATA%\Microsoft\WindowsApps\<PFN>\ligrol-mcp.exe`（設定の影響を受けない固定パス）
+を案内する。アプリの設定画面「AI / MCP」→「設定をコピー」が、実行中の配布経路に合った
+`command` を出す（`crates/app/src/mcp_config.rs`）。
 
 `LIGROL_AI_TEXT` / `LIGROL_AI_NOTES` は既定 OFF。`LIGROL_AI_ACTIONS=1` かつ
 `LIGROL_AI_READ_ONLY=0` のときだけ操作ツールが `tools/list` に出る。

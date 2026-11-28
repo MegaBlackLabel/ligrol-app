@@ -9,9 +9,9 @@ use gpui_kit::component::dialog::Dialog;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    App, AppContext as _, Context, Entity, Focusable as _, FontWeight, InteractiveElement as _,
-    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement as _,
-    Subscription, Window, div, img, px, relative,
+    App, AppContext as _, ClipboardItem, Context, Entity, Focusable as _, FontWeight,
+    InteractiveElement as _, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement as _, Subscription, Window, div, img, px, relative,
 };
 use gpui_kit::{ReadGlobal as _, Styled as _};
 
@@ -2643,6 +2643,67 @@ impl SettingsView {
         )
         .into_any_element()
     }
+
+    /// MCP クライアント（Claude Desktop / Cursor など）に貼る設定を出す。
+    ///
+    /// パスは配布経路で変わる。MSIX 版は `WindowsApps` 直下を起動できないため、
+    /// マニフェストで宣言した App Execution Alias の PFN 固定パスを案内する
+    /// （`crate::mcp_config`）。
+    fn mcp_settings_card(&self, cx: &Context<Self>) -> gpui_kit::AnyElement {
+        let muted = cx.theme().muted;
+        let muted_fg = cx.theme().muted_foreground;
+        let border = cx.theme().border;
+        let snippet = crate::mcp_config::config_snippet();
+        let copied = snippet.clone();
+        let handle = cx.weak_entity();
+        self.settings_card(
+            cx,
+            "AI / MCP",
+            Some("Claude Desktop / Cursor などに貼る MCP サーバー設定"),
+            Icon::new(IconName::Bot)
+                .size(px(16.0))
+                .text_color(muted_fg),
+            div()
+                .p_5()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted_fg)
+                        .child("この JSON を MCP クライアントの設定に追加します。本文・付箋・操作は既定で無効です（docs/mcp.md）。"),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "settings-mcp-snippet".into())
+                        .rounded_md()
+                        .border_1()
+                        .border_color(border)
+                        .bg(muted.opacity(0.25))
+                        .p_3()
+                        .font_family("monospace")
+                        .text_xs()
+                        .child(snippet),
+                )
+                .child(
+                    div().flex().flex_row().justify_end().child(
+                        Button::new("mcp-copy")
+                            .cursor_pointer()
+                            .label("設定をコピー")
+                            .on_click(move |_, _window, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()));
+                                handle
+                                    .update(cx, |this, cx| {
+                                        this.show_toast("MCP 設定をコピーしました", cx)
+                                    })
+                                    .ok();
+                            }),
+                    ),
+                ),
+        )
+        .into_any_element()
+    }
 }
 
 /// ディレクトリを再帰的にコピーする（別ボリュームへの移動フォールバック用）。
@@ -3577,6 +3638,8 @@ impl Render for SettingsView {
             div().p_5().child(updates),
         );
 
+        let mcp_settings = self.mcp_settings_card(cx);
+
         let account_settings = self.account_settings_card(
             cx,
             google_profile,
@@ -3658,6 +3721,11 @@ impl Render for SettingsView {
                         div()
                             .debug_selector(|| "settings-updates".into())
                             .child(update_settings),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "settings-mcp".into())
+                            .child(mcp_settings),
                     )
                     // 外観
                     .child(
@@ -4687,6 +4755,20 @@ mod tests {
         assert!(
             visual.debug_bounds("settings-updates").is_some(),
             "アップデートカードが描画されていない"
+        );
+    }
+
+    /// 設定画面に AI / MCP の節とコピー用スニペットが出る。
+    #[gpui_kit::test]
+    async fn mcp_card_is_rendered(cx: &mut TestAppContext) {
+        let (visual, _view) = open_settings(cx);
+        assert!(
+            visual.debug_bounds("settings-mcp").is_some(),
+            "AI / MCP カードが描画されていない"
+        );
+        assert!(
+            visual.debug_bounds("settings-mcp-snippet").is_some(),
+            "MCP 設定スニペットが描画されていない"
         );
     }
 
