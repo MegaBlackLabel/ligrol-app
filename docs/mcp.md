@@ -90,6 +90,10 @@ DB は `<data_dir>/ligrol.db`。**マイグレーションは実行しない**�
 スコープ OFF のツールは `tools/list` に出ない。`LIGROL_AI_READ_ONLY=1` のときは
 操作ツールが一切登録されない。
 
+付箋 / タグの**書き込み**ツールまで含めて全ツールを出すには、
+`LIGROL_AI_WRITE_NOTES=1` と `LIGROL_AI_WRITE_TAGS=1` も必要。
+`LIGROL_AI_NOTES=1` は付箋の**読み取り**だけを有効にする。
+
 ## 5. プロトコル
 
 - Transport: stdio（改行区切りの JSON-RPC 2.0）
@@ -436,7 +440,9 @@ DB は `<data_dir>/ligrol.db`。**マイグレーションは実行しない**�
 - `ligrol-mcp` は Ligrol と同じ OS ユーザーで、Ligrol が一度起動してスキーマを
   作っている必要がある
 - loopback HTTP / Bearer は未実装（v1 は DB + `ai_jobs`）
-- 付箋 / タグの書き込みツールは未実装（読み取りのみ）
+- 付箋 / タグの書き込み（`ligrol_add_note` / `ligrol_remove_note` / `ligrol_add_tag` /
+  `ligrol_remove_tag`）は実装済み。`LIGROL_AI_WRITE_NOTES` / `LIGROL_AI_WRITE_TAGS` と
+  `LIGROL_AI_READ_ONLY=0` のときだけ有効
 - 設定 UI でのスコープ切替は未実装（環境変数）
 - 本文検索は 1〜5 冊のメモリ内走査（opaque cursor でページング）。全体 FTS は未実装
 - EPUB の固定レイアウト / DRM / 画像だけの本は本文なし
