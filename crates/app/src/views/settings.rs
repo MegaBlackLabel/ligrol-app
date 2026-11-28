@@ -4216,7 +4216,8 @@ mod tests {
             let purge = crate::app_state::clear_tbf_session(cx);
             let marker = crate::app_state::purge_marker(state);
             let pending = marker.pending();
-            // 後続のテストへ印を持ち越さない（データディレクトリはテスト間で共有）
+            // データディレクトリはこのテスト専用（`init_test` は呼び出しごとに分離）だが、
+            // 念のため印は消しておく。
             marker.clear(StoreSession::Techbookfest.label());
             (purge, pending)
         });

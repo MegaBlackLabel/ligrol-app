@@ -669,8 +669,16 @@ impl AppState {
     }
 
     /// Test-only initialization: in-memory DB, no keyring.
+    ///
+    /// データディレクトリは**呼び出しごとに一意**にする。全テストで共有すると、
+    /// `session-purge.pending` のような read-modify-write するファイルが並列テスト間で
+    /// 競合する（macOS CI で実際に落ちた）。ファイル操作はどの OS でも同じ条件なので、
+    /// 特定プラットフォームのための分岐は入れない。
     pub fn init_test(cx: &mut App) {
-        Self::init_in_memory(cx, std::env::temp_dir().join("ligrol-test"), false);
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("ligrol-test-{}-{seq}", std::process::id()));
+        Self::init_in_memory(cx, dir, false);
     }
 
     /// サンプル（デモ）モードで起動する: メモリ DB + 一時ディレクトリ + メモリ keyring。
@@ -1867,6 +1875,27 @@ mod tests {
             assert!(state.google_profile.lock().is_none());
             assert!(db::books::list(&state.db_pool).unwrap().is_empty());
         });
+    }
+
+    /// `init_test` は呼び出しごとに別のデータディレクトリを使う。
+    ///
+    /// 共有すると `session-purge.pending` のような read-modify-write するファイルが
+    /// 並列テスト間で競合する。実際に macOS CI で
+    /// `views::settings::tests::tbf_logout_failure_marks_the_session_for_the_next_start`
+    /// が「次回起動用の印が残っていない」で落ち、同じコミットの再実行では通った。
+    #[gpui_kit::test]
+    async fn init_test_uses_a_separate_data_dir_per_app(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_kit::component::init);
+        cx.update(AppState::init_test);
+        let first = cx.update(|cx| AppState::global(cx).data_dir.clone());
+        cx.update(AppState::init_test);
+        let second = cx.update(|cx| AppState::global(cx).data_dir.clone());
+        assert_ne!(
+            first,
+            second,
+            "init_test が同じデータディレクトリを共有している: {}",
+            first.display()
+        );
     }
 
     /// 保護期限は 5 秒（自動消滅と同じ）。
