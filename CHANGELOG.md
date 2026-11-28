@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-11-28
+
 ### Added
 
 - **AI（MCP）連携**: `ligrol-mcp`（stdio）が本棚・タグ・本文・統計・付箋・購入一覧・
