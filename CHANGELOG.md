@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.3.12] - 2026-11-29
+
 ### Added
 
 - リリースワークフローが、タグのリリース成功後に `MegaBlackLabel/homebrew-tap` の
