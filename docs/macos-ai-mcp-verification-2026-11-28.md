@@ -144,3 +144,58 @@ CI（macos-latest）では拾いにくい実機依存を確認した記録。検
   macOS / Linux / Windows 併記に修正。
 - `scripts/make-app-bundle.sh`: ローカル `.app` に `ligrol-mcp` と
   `AI_GUIDE.md` を同梱し、sidecar も `strip -x` するように修正。
+
+## v0.3.10 追記（2026-11-28）
+
+対象: `v0.3.10`（`ligrol-0.3.10-aarch64-macos.dmg`）/ macOS 27.2.1 (arm64)。
+実データは触らず、隔離データディレクトリで確認した。
+
+### P0. 配布物
+
+- ✅ `SHA256SUMS` と dmg の SHA-256 が一致
+- ✅ `codesign --verify --deep --strict` / `spctl`（Notarized Developer ID, Team `98246DV5S4`）/
+  `xcrun stapler validate`
+- ✅ `Contents/MacOS/ligrol` / `ligrol-mcp` / `Resources/AI_GUIDE.md` /
+  `Frameworks/libpdfium.dylib` が存在。`ligrol-mcp` も同じ Team ID で署名
+- ✅ `com.apple.quarantine` を付けて `spctl accepted`、起動して隔離DBの migration まで確認
+- ✅ About 画面で **バージョン 0.3.10** を目視確認
+- ⚠️ ライセンス画面は開いて 1129 件を確認。`quick-xml 0.41.0` は `licenses.json` で確認したが、
+  仮想化リストを q 行までスクロールしての目視は未完了（0.38.4 はデータ上なし）
+
+### P1. MCP
+
+- ✅ default 9 / `TEXT+NOTES+ACTIONS` 18 / `WRITE_NOTES+WRITE_TAGS` 込み 22 / read-only 12
+- ✅ `protocolVersion: 2026-07-28`、`ligrol://guide` は `AI_GUIDE.md` と byte 一致、stderr 0
+- ✅ 未知ツールは `isError:true`、不正 URI は JSON-RPC `-32602`
+- ⚠️ Claude Desktop の設定ファイルは未設定
+
+### P2. Keychain（未達）
+
+- ✅ 隔離DBの migration、`ligrol_status` の `version: "0.3.10"`、アプリ本体の
+  `google profile: 起動時復元 = あり`
+- ❌ **署名済み `ligrol-mcp` でも Keychain パスワードプロンプトが出た**。
+  `com.megablacklabel.ligrol` の機密情報に対して「常に許可 / 拒否 / 許可」を聞かれ、
+  MCP の status 取得はプロンプト待ちでタイムアウトした。
+  → 「Keychain プロンプト無しで DB 鍵を読む」の条件は **未達**。
+- ❌ `owner: "authenticated"` / 自分の本だけ / hidden 除外は、MCP の Keychain 許可が
+  入らず未実施
+- ❌ アプリでログアウト → MCP が `signed_out` の確認は、グローバル Keychain を
+  変更するため未実施
+
+### P3 / P4 / P5 / P6
+
+- P3 承認成功（`ligrol_request_download` → 許可 → `succeeded`）: MCP の Keychain が
+  許可されず未実施
+- P4 EPUB 遡及抽出 / OCR: 同上（加えて OCR モデルと対象本の準備が必要）
+- P5 更新パス: 未実施（次回リリース前でも可）
+- P6: ライセンス画面のスクロールは動作。信号機は目視確認したが自動クリックが当たらず、
+  タイトルバードラッグ / アップロード中の終了無効 / ナチュラルスクロールは未実施
+
+### 判定
+
+- **リリース合格ライン（P0 全部 + P1 + P2 Keychain無言）は未達**。
+  P0 は About/ライセンスの目視が一部、P2 は Keychain プロンプトで不合格。
+- 最優先の修正候補: `ligrol-mcp` を Keychain アイテムの ACL に含める、または
+  共有アクセスグループ等でアプリと MCP が同じ鍵をプロンプト無しで読めるようにする。
+  `ligrol-mcp` の署名 Team ID はアプリと同じだが、Keychain の ACL は実行ファイル単位で
+  判定されるため、現状は MCP だけが毎回プロンプトになる。
