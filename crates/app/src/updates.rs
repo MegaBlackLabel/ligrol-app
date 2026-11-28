@@ -295,8 +295,59 @@ pub fn engine_config() -> EngineConfig {
 pub fn ownership_now() -> Ownership {
     let hints = OwnershipHints::new().explanation(option_env!("LIGROL_UPDATE_EXPLANATION"));
     current_install_root().map_or(Ownership::SelfUpdate, |root| {
-        install::ownership(&root, &hints)
+        let detected = install::ownership(&root, &hints);
+        #[cfg(target_os = "macos")]
+        if detected.is_self_update()
+            && let Some(token) = homebrew_cask_token(&root, &homebrew_prefixes())
+        {
+            // `/Applications` が Caskroom への symlink でなくても、receipts があれば
+            // Homebrew 管理。自己更新させず `brew upgrade` を案内する。
+            return Ownership::managed(PackageManager::Homebrew, Some(token));
+        }
+        detected
     })
+}
+
+/// Caskroom の receipts から、この `.app` を収めている cask（token）を探す。
+///
+/// `gpui-updater` の判定は `/Applications` からの symlink を要求する。dmg インストールや
+/// アプリ内更新で実ディレクトリに置き換わると Homebrew 管理を見失い、自己更新が通って
+/// しまう（実測: brew は 0.3.0、アプリは 0.3.10、`/Applications` は実ディレクトリ）。
+/// Caskroom の版ディレクトリに同じ名前の `.app` があるかで補う。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn homebrew_cask_token(
+    root: &std::path::Path,
+    prefixes: &[std::path::PathBuf],
+) -> Option<String> {
+    let app = root.file_name()?;
+    for prefix in prefixes {
+        let Ok(tokens) = std::fs::read_dir(prefix.join("Caskroom")) else {
+            continue;
+        };
+        for token in tokens.flatten() {
+            let Ok(versions) = std::fs::read_dir(token.path()) else {
+                continue;
+            };
+            for version in versions.flatten() {
+                if version.path().join(app).exists() {
+                    return Some(token.file_name().to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Homebrew の導入先（`HOMEBREW_PREFIX` → Apple Silicon / Intel の既定）。
+#[cfg(target_os = "macos")]
+fn homebrew_prefixes() -> Vec<std::path::PathBuf> {
+    let mut prefixes = Vec::new();
+    if let Some(prefix) = std::env::var_os("HOMEBREW_PREFIX").filter(|value| !value.is_empty()) {
+        prefixes.push(std::path::PathBuf::from(prefix));
+    }
+    prefixes.push(std::path::PathBuf::from("/opt/homebrew"));
+    prefixes.push(std::path::PathBuf::from("/usr/local"));
+    prefixes
 }
 
 fn now_unix() -> i64 {
@@ -625,6 +676,59 @@ mod tests {
         );
         assert_eq!(UpdateAction::Cancel.label(), "中止");
         assert_eq!(UpdateAction::Restart.label(), "再起動して更新");
+    }
+
+    /// Caskroom に `.app` の実体があれば、`/Applications` が symlink でなくても
+    /// Homebrew 管理と判定できる（dmg やアプリ内更新で実体に置き換わった場合）。
+    #[test]
+    fn homebrew_cask_is_found_from_caskroom_receipts() {
+        let dir = temp_dir("brew-receipts");
+        let prefix = dir.join("homebrew");
+        let app = dir.join("Applications").join("Ligrol.app");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::create_dir_all(prefix.join("Caskroom").join("ligrol").join("0.3.11").join("Ligrol.app"))
+            .unwrap();
+
+        assert_eq!(
+            homebrew_cask_token(&app, std::slice::from_ref(&prefix)),
+            Some("ligrol".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn homebrew_cask_requires_the_same_app_name() {
+        let dir = temp_dir("brew-other-app");
+        let prefix = dir.join("homebrew");
+        let app = dir.join("Applications").join("Ligrol.app");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::create_dir_all(prefix.join("Caskroom").join("other").join("1.0").join("Other.app"))
+            .unwrap();
+
+        assert_eq!(homebrew_cask_token(&app, &[prefix]), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn homebrew_cask_ignores_prefixes_without_caskroom() {
+        let dir = temp_dir("brew-no-caskroom");
+        let app = dir.join("Ligrol.app");
+        std::fs::create_dir_all(&app).unwrap();
+
+        assert_eq!(homebrew_cask_token(&app, &[dir.join("homebrew")]), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        // `std::env::temp_dir()` はこの環境で WinAPI に NUL 扱いされることがあるため、
+        // リポジトリの target/（gitignore 済み）を使う。
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-tmp")
+            .join(format!("updates-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]

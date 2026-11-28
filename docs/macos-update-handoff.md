@@ -131,8 +131,25 @@ macOS では「インストール済み `.app` が署名済みのとき、更新
 ### 5.4 Homebrew
 
 - `ownership()` が `Ownership::Packager`（Caskroom の symlink）を返したら、自己更新 UI を出さない
+- `/Applications/Ligrol.app` が Caskroom への symlink でなく**実ディレクトリ**でも、
+  Caskroom の receipts（`<prefix>/Caskroom/<token>/<version>/Ligrol.app`）があれば
+  Homebrew 管理と判定する（`crates/app/src/updates.rs` の `homebrew_cask_token`）。
+  dmg やアプリ内更新で実体が置き換わり、brew とアプリの版がズレた実例への対策
 - 代わりに `brew upgrade ligrol` を案内する
 - cask 側は `auto_updates` を付けない（アプリが brew 管理下で黙る前提）
+
+### 5.5 cask 更新の自動化
+
+`release.yml` の `homebrew-tap` ジョブが、タグのリリース成功後に
+`MegaBlackLabel/homebrew-tap` の `Casks/ligrol.rb` を更新する PR を自動作成する。
+
+- 必要な secret: `TAP_GITHUB_TOKEN`（tap の Contents / Pull requests を書ける PAT）。
+  未設定なら警告してスキップし、リリース自体は止めない
+- `version` と `sha256`（arm64 / x86_64）だけを書き換える。sha256 はリリースの
+  `SHA256SUMS` から取るので、配布物と必ず一致する
+- cask の version が既に同じなら何もしない（手動更新済みでも安全）
+- 0.3.11 は手動で反映済み。自動化は次のタグから動く
+- 反映は PR 経由。tap の CI（`brew audit --cask --online` / `brew style`）を通して手動マージする
 
 ## 6. リリースパスの検証（Mac 実機 / VM）
 

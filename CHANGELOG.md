@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- リリースワークフローが、タグのリリース成功後に `MegaBlackLabel/homebrew-tap` の
+  cask 更新 PR（`version` と `sha256` のみ）を自動作成するようにした。
+  `TAP_GITHUB_TOKEN` が未設定なら警告してスキップする。
+
+### Fixed
+
+- Homebrew で入れた Ligrol の `/Applications/Ligrol.app` が dmg やアプリ内更新で
+  実ディレクトリに置き換わると、brew 管理と判定されず自己更新してしまう問題を直した。
+  Caskroom の receipts でも Homebrew 管理を判定する。
+
 ## [0.3.11] - 2026-11-28
 
 ### Added
