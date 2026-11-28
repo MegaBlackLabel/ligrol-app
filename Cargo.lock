@@ -5200,7 +5200,7 @@ dependencies = [
 
 [[package]]
 name = "ligrol"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -5236,7 +5236,7 @@ dependencies = [
 
 [[package]]
 name = "ligrol-core"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",
@@ -5274,7 +5274,7 @@ dependencies = [
 
 [[package]]
 name = "ligrol-mcp"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "dirs 7.0.0",
  "ligrol-core",
@@ -5901,7 +5901,7 @@ dependencies = [
 
 [[package]]
 name = "nartik"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",
