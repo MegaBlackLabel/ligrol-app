@@ -27,6 +27,16 @@ cp "$BIN" "$APP/Contents/MacOS/ligrol"
 # cargo 側の strip は rustc の LLVM ベースの strip を通り、proc-macro の dylib の
 # `__LINKEDIT` を壊すため無効にしてある（Cargo.toml の [profile.release] 参照）。
 strip -x "$APP/Contents/MacOS/ligrol"
+# MCP サーバー（ligrol-mcp）と AI ガイドはリリース .app と同じ構成で同梱する。
+# sidecar が無い debug ビルドでも失敗しないように、存在するときだけコピーする。
+MCP_BIN="target/$PROFILE/ligrol-mcp"
+if [ -x "$MCP_BIN" ]; then
+  cp "$MCP_BIN" "$APP/Contents/MacOS/ligrol-mcp"
+  strip -x "$APP/Contents/MacOS/ligrol-mcp"
+fi
+if [ -f AI_GUIDE.md ]; then
+  cp AI_GUIDE.md "$APP/Contents/Resources/AI_GUIDE.md"
+fi
 cp crates/app/assets/app-icon/icon.icns "$APP/Contents/Resources/icon.icns"
 
 # PDFium の動的ライブラリを同梱する。PDF レンダリングは実行時ロードで、

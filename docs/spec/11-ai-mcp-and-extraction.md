@@ -241,7 +241,9 @@ macOS は `/Applications/Ligrol.app/Contents/MacOS/ligrol-mcp`。配布 zip / MS
 `ocr_model_missing` でジョブが失敗し、本には影響しない。
 
 ```bash
-DEST="${LIGROL_DATA_DIR:-$HOME/.local/share/ligrol}/models/ocr/ppocrv6-small"
+# 既定のデータディレクトリは OS で異なる（macOS: ~/Library/Application Support/ligrol、
+# Linux: $HOME/.local/share/ligrol、Windows: %APPDATA%\ligrol）。
+DEST="${LIGROL_DATA_DIR:-$HOME/Library/Application Support/ligrol}/models/ocr/ppocrv6-small"
 mkdir -p "$DEST/det" "$DEST/rec"
 for kind in det rec; do
   for f in inference.onnx inference.yml; do
