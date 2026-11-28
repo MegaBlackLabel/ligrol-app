@@ -715,3 +715,105 @@ jobs:
             artifacts/**/*.cdx.json
             SHA256SUMS
           generate_release_notes: true
+
+  # リリースに合わせて Homebrew tap（MegaBlackLabel/homebrew-tap）の cask を更新する。
+  #
+  # tap は別リポジトリなので `GITHUB_TOKEN` では書けない。Contents / Pull requests を
+  # 書ける PAT を `TAP_GITHUB_TOKEN` に入れる。未設定なら警告してスキップする
+  # （Store 提出と同じく、リリース自体は止めない）。
+  #
+  # 反映は PR 経由にして、tap 側の `brew audit --cask --online` / `brew style` を
+  # 必ず通す。マージはこれまでどおり手動。
+  homebrew-tap:
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') && needs.release.result == 'success'
+    steps:
+      - name: Check tap token
+        id: token
+        shell: bash
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_GITHUB_TOKEN:-}" ]; then
+            echo "::warning::TAP_GITHUB_TOKEN が未設定のため homebrew-tap の更新をスキップします"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # sha256 はリリース済みアセットの SHA256SUMS から取る（手元の再計算より、
+      # 実際に配布したファイルと一致することが確実）。
+      - name: Read dmg checksums from the release
+        if: steps.token.outputs.configured == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          gh release download "v${version}" --repo "$GITHUB_REPOSITORY" \
+            --pattern SHA256SUMS --dir "$RUNNER_TEMP" --clobber
+          arm="$(awk -v f="ligrol-${version}-aarch64-macos.dmg" '$2 == f { print $1 }' "$RUNNER_TEMP/SHA256SUMS")"
+          intel="$(awk -v f="ligrol-${version}-x86_64-macos.dmg" '$2 == f { print $1 }' "$RUNNER_TEMP/SHA256SUMS")"
+          test -n "$arm"
+          test -n "$intel"
+          {
+            echo "version=${version}"
+            echo "arm=${arm}"
+            echo "intel=${intel}"
+          } >> "$GITHUB_OUTPUT"
+        id: checksums
+
+      - name: Open a cask update PR
+        if: steps.token.outputs.configured == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          TAP_REPO: MegaBlackLabel/homebrew-tap
+          VERSION: ${{ steps.checksums.outputs.version }}
+          ARM_SHA: ${{ steps.checksums.outputs.arm }}
+          INTEL_SHA: ${{ steps.checksums.outputs.intel }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/homebrew-tap"
+          rm -rf "$work"
+          # トークンはログでマスクされる（GitHub の secret マスク）
+          git clone --depth 1 "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/${TAP_REPO}.git" "$work"
+          cd "$work"
+          git config user.name "ligrol-release-bot"
+          git config user.email "ligrol-release-bot@users.noreply.github.com"
+
+          cask=Casks/ligrol.rb
+          current="$(sed -n 's/^  version "\([^"]*\)".*$/\1/p' "$cask" | head -1)"
+          if [ "$current" = "$VERSION" ]; then
+            echo "cask は既に ${VERSION}。更新は不要"
+            exit 0
+          fi
+
+          # 書き換えるのは version と sha256 の 2 行だけ。他の stanza は触らない。
+          # （行末の CR は無視する。CI は LF だが、手元の Windows チェックアウトでも動くように）
+          sed -i -E "s|^  version \".*\"|  version \"${VERSION}\"|" "$cask"
+          sed -i -E "s|^(  sha256 arm:   )\"[0-9a-f]{64}\",.*$|\1\"${ARM_SHA}\",|" "$cask"
+          sed -i -E "s|^(         intel: )\"[0-9a-f]{64}\".*$|\1\"${INTEL_SHA}\"|" "$cask"
+          grep -q "\"${VERSION}\"" "$cask" || { echo "::error::version を書き換えられませんでした"; exit 1; }
+          grep -q "\"${ARM_SHA}\"" "$cask" || { echo "::error::sha256 (arm) を書き換えられませんでした"; exit 1; }
+          grep -q "\"${INTEL_SHA}\"" "$cask" || { echo "::error::sha256 (intel) を書き換えられませんでした"; exit 1; }
+
+          git switch -c "chore/ligrol-${VERSION}"
+          git add "$cask"
+          git commit -m "chore: bump ligrol to ${VERSION}"
+          # 前回の失敗などで同名ブランチが残っていても、内容は毎回リリースから作り直す
+          git push --force origin "chore/ligrol-${VERSION}"
+
+          existing="$(gh pr list --repo "$TAP_REPO" --head "chore/ligrol-${VERSION}" --state open --json number --jq '.[].number')"
+          if [ -n "$existing" ]; then
+            echo "既存の PR #${existing} を更新した"
+            exit 0
+          fi
+          gh pr create --repo "$TAP_REPO" \
+            --base master --head "chore/ligrol-${VERSION}" \
+            --title "chore: bump ligrol to ${VERSION}" \
+            --body "Ligrol v${VERSION} のリリースに合わせて cask を更新する。sha256 はリリースの SHA256SUMS から取得。"
