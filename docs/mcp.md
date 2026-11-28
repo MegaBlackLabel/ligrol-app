@@ -24,12 +24,27 @@ Bearer + Origin 検証へ移す（将来）。
 
 ## 2. インストールと起動
 
-配布物には `ligrol-mcp` が同梱される。
+配布物には `ligrol-mcp` が同梱される。置き場所は配布経路で違うので、
+**アプリの設定 →「AI / MCP」→「設定をコピー」**で、実行中のビルドに合った
+`command` を取得するのが確実（`crates/app/src/mcp_config.rs`）。
 
-| OS | 場所 |
+| 配布物 | 場所 |
 |---|---|
-| Windows | `%LOCALAPPDATA%\Ligrol\ligrol-mcp.exe`（zip / MSI） |
+| Microsoft Store / MSIX | `%LOCALAPPDATA%\Microsoft\WindowsApps\<PFN>\ligrol-mcp.exe`（App Execution Alias の固定パス） |
+| MSIX（PATH 版） | `%LOCALAPPDATA%\Microsoft\WindowsApps\ligrol-mcp.exe`（Settings の「アプリ実行エイリアス」で無効化できる） |
+| MSI | `%LOCALAPPDATA%\Ligrol\ligrol-mcp.exe` |
+| ZIP（ポータブル） | 展開先の `ligrol-mcp.exe` |
 | macOS | `/Applications/Ligrol.app/Contents/MacOS/ligrol-mcp` |
+
+**MSIX 版で `C:\Program Files\WindowsApps\...` を直接指してはいけない。**
+パッケージ配下の exe は外部プロセスから起動できず `EPERM` / アクセス拒否になる。
+エイリアスは実体のコピーではなく 0 バイトの再解析ポイントで、署名と
+パッケージ整合性の検証は維持される。`<PFN>` は例えば
+`63355MegaBlackLabel.Ligrol_n2f6xz8p4tfny`。
+
+> 管理者権限で起動した IDE / ターミナルからは、MSIX 版の MCP サーバーを
+> 起動できないことがある（Windows のパッケージ起動の制約）。その場合は
+> MSI 版 / ZIP 版を使う。
 
 開発時:
 
@@ -37,7 +52,7 @@ Bearer + Origin 検証へ移す（将来）。
 cargo build -p ligrol-mcp
 ```
 
-Claude Desktop / Cursor の設定例:
+Claude Desktop / Cursor の設定例（MSI 版）:
 
 ```json
 {
@@ -443,17 +458,22 @@ DB は `<data_dir>/ligrol.db`。**マイグレーションは実行しない**�
 - 付箋 / タグの書き込み（`ligrol_add_note` / `ligrol_remove_note` / `ligrol_add_tag` /
   `ligrol_remove_tag`）は実装済み。`LIGROL_AI_WRITE_NOTES` / `LIGROL_AI_WRITE_TAGS` と
   `LIGROL_AI_READ_ONLY=0` のときだけ有効
-- 設定 UI でのスコープ切替は未実装（環境変数）
+- 設定 UI でのスコープ切替は未実装（環境変数）。設定画面の「AI / MCP」は
+  `command` のスニペットを出すだけで、スコープは `env` で指定する
 - 本文検索は 1〜5 冊のメモリ内走査（opaque cursor でページング）。全体 FTS は未実装
 - EPUB の固定レイアウト / DRM / 画像だけの本は本文なし
 - OCR はモデル配置が必要
 - ダウンロードの完了・失敗・キャンセルは `ai_jobs` に反映される（本の出現でも成功を検出）
+- MSIX 版は App Execution Alias 経由で起動する。管理者権限で起動したクライアントからの
+  起動はサポートしない（MSI / ZIP 版を使う）
 
 ## 11. トラブルシューティング
 
 | 症状 | 原因 / 対処 |
 |---|---|
-| サーバーが起動しない | `ligrol-mcp` のパスを確認。Windows は `%LOCALAPPDATA%\Ligrol\ligrol-mcp.exe` |
+| サーバーが起動しない | `ligrol-mcp` のパスを確認。設定 →「AI / MCP」→「設定をコピー」の `command` を使う。MSIX 版は `WindowsApps` 直下ではなくエイリアスの PFN 固定パス |
+| MSIX 版で `EPERM` / アクセス拒否 | `C:\Program Files\WindowsApps\...` を直接指している。エイリアス（`%LOCALAPPDATA%\Microsoft\WindowsApps\<PFN>\ligrol-mcp.exe`）に直す |
+| 管理者権限の IDE から起動できない | MSIX の制約。MSI 版 / ZIP 版を使う |
 | ツールが少ない | スコープ OFF。`LIGROL_AI_TEXT` / `LIGROL_AI_ACTIONS` を確認 |
 | `owner_unknown` | Ligrol にログインし、プロフィールが保存されているか確認 |
 | `text_unavailable` | 画像だけの本 / スキャン PDF / DRM / スコープ OFF |

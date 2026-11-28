@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- 設定 →「AI / MCP」に、MCP クライアントへ貼る設定スニペットと「設定をコピー」を追加した。
+  実行中の配布物（Microsoft Store / MSIX / MSI / ZIP / macOS）に合った `ligrol-mcp` の
+  `command` を出す。MSIX 版は App Execution Alias の PFN 固定パスを案内する。
+- Microsoft Store / MSIX 版の `AppxManifest.xml` に App Execution Alias
+  （`ligrol-mcp.exe`）を追加した。パッケージ配下の exe を外部プロセスから起動できない
+  Windows でも、MCP クライアントから `ligrol-mcp` を起動できる。
+
+### Changed
+
+- MCP のドキュメントを配布経路ごとに修正した（`docs/mcp.md` / `README.md`）。
+  ZIP のポータブル配置先と MSIX のエイリアスパスを明記し、`WindowsApps` 直下を
+  指定すると起動できないことを書いた。
+
 ## [0.3.10] - 2026-11-28
 
 ### Added
