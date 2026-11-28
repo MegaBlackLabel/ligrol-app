@@ -544,8 +544,11 @@ jobs:
   store-submit:
     needs: build
     # macOS の公証失敗など、他プラットフォームの失敗で Windows Store 提出まで
-    # 止めない。Windows の artifact が無い場合はダウンロードで失敗する。
-    if: always() && startsWith(github.ref, 'refs/tags/')
+    # 止めない。ただし checks が失敗して build 自体が走らなかった場合は MSIX が
+    # 存在しないので提出しない（以前は「MSIX が見つかりません」で落ちていた）。
+    # build は走ったが Windows の成果物だけが無い場合は、従来どおりダウンロードで
+    # 失敗させる（黙って通さない）。
+    if: always() && startsWith(github.ref, 'refs/tags/') && needs.build.result != 'skipped'
     runs-on: windows-latest
     steps:
       - name: Check Store configuration
